@@ -1,6 +1,7 @@
 import os
 import aiofiles
 from .base import BaseTool, ToolResult
+from .path_guard import enforce_allowed_path
 
 
 class FileEditTool(BaseTool):
@@ -30,7 +31,10 @@ class FileEditTool(BaseTool):
     }
 
     async def execute(self, path: str, old_str: str, new_str: str, **kwargs) -> ToolResult:
-        path = os.path.expanduser(path)
+        try:
+            path = enforce_allowed_path(path)
+        except ValueError as e:
+            return ToolResult(success=False, output="", error=str(e))
 
         if not os.path.exists(path):
             return ToolResult(success=False, output="", error=f"File not found: {path}")

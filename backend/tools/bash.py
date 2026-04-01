@@ -2,6 +2,7 @@ import asyncio
 import os
 import re
 from .base import BaseTool, ToolResult
+from .path_guard import enforce_allowed_path
 
 DANGEROUS_PATTERNS = [
     r"rm\s+-rf\s+/",
@@ -69,7 +70,13 @@ class BashTool(BaseTool):
 
     async def execute(self, command: str, timeout: int = 30, cwd: str | None = None, **kwargs) -> ToolResult:
         timeout = min(timeout, 120)
-        effective_cwd = cwd or os.getcwd()
+        try:
+            effective_cwd = enforce_allowed_path(cwd or os.getcwd())
+        except ValueError as e:
+            return ToolResult(success=False, output="", error=str(e))
+
+        if not os.path.isdir(effective_cwd):
+            return ToolResult(success=False, output="", error=f"Working directory not found: {effective_cwd}")
 
         try:
             proc = await asyncio.create_subprocess_shell(

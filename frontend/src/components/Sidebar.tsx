@@ -1,13 +1,27 @@
-import { useEffect } from 'react'
+import { useEffect, useState } from 'react'
 import { Plus, Trash2, MessageSquare, Cpu } from 'lucide-react'
 import { useChat } from '../hooks/useChat'
 import { Session } from '../store/chatStore'
+import { clearApiAuthToken, getApiAuthToken, setApiAuthToken } from '../lib/api'
 
 export function Sidebar() {
-  const { sessions, sessionId, loadSessions, loadSession, newSession, deleteSession } = useChat()
+  const {
+    sessions,
+    sessionId,
+    loadSessions,
+    loadSession,
+    newSession,
+    deleteSession,
+    loadUsage,
+    usageSummary,
+  } = useChat()
+  const [tokenDraft, setTokenDraft] = useState('')
+  const [tokenSaved, setTokenSaved] = useState(false)
 
   useEffect(() => {
     loadSessions()
+    loadUsage()
+    setTokenDraft(getApiAuthToken())
   }, [])
 
   const handleNew = async () => {
@@ -19,6 +33,23 @@ export function Sidebar() {
     const d = new Date(iso)
     return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
   }
+
+  const saveToken = () => {
+    setApiAuthToken(tokenDraft)
+    setTokenSaved(true)
+    window.setTimeout(() => setTokenSaved(false), 1500)
+    loadSessions()
+  }
+
+  const clearToken = () => {
+    clearApiAuthToken()
+    setTokenDraft('')
+    loadSessions()
+  }
+
+  const usageCost = usageSummary?.totals.estimated_cost_usd ?? 0
+  const usageInput = usageSummary?.totals.input_tokens ?? 0
+  const usageOutput = usageSummary?.totals.output_tokens ?? 0
 
   return (
     <aside style={{
@@ -119,12 +150,86 @@ export function Sidebar() {
       <div style={{
         padding: '12px 16px',
         borderTop: '1px solid var(--border)',
-        fontSize: 10,
-        color: 'var(--text-2)',
-        letterSpacing: '0.05em',
+        display: 'grid',
+        gap: 10,
       }}>
-        <div>POWERED BY CLAUDE API</div>
-        <div style={{ marginTop: 2, color: 'var(--accent)', opacity: 0.6 }}>v1.0.0</div>
+        <div>
+          <div style={{ fontSize: 10, color: 'var(--text-2)', letterSpacing: '0.05em', marginBottom: 6 }}>
+            API AUTH TOKEN
+          </div>
+          <input
+            type="password"
+            value={tokenDraft}
+            onChange={(e) => setTokenDraft(e.target.value)}
+            placeholder="optional bearer token"
+            style={{
+              width: '100%',
+              background: 'var(--bg-0)',
+              border: '1px solid var(--border)',
+              color: 'var(--text-0)',
+              borderRadius: 'var(--radius)',
+              padding: '6px 8px',
+              fontSize: 11,
+              fontFamily: 'var(--font-mono)',
+              outline: 'none',
+            }}
+          />
+          <div style={{ display: 'flex', gap: 6, marginTop: 6 }}>
+            <button
+              onClick={saveToken}
+              style={{
+                flex: 1,
+                background: 'var(--accent-dim)',
+                border: '1px solid var(--accent)',
+                color: 'var(--accent)',
+                borderRadius: 'var(--radius)',
+                cursor: 'pointer',
+                padding: '5px 8px',
+                fontSize: 10,
+                fontFamily: 'var(--font-mono)',
+              }}
+            >
+              {tokenSaved ? 'SAVED' : 'SAVE'}
+            </button>
+            <button
+              onClick={clearToken}
+              style={{
+                flex: 1,
+                background: 'var(--bg-2)',
+                border: '1px solid var(--border)',
+                color: 'var(--text-1)',
+                borderRadius: 'var(--radius)',
+                cursor: 'pointer',
+                padding: '5px 8px',
+                fontSize: 10,
+                fontFamily: 'var(--font-mono)',
+              }}
+            >
+              CLEAR
+            </button>
+          </div>
+        </div>
+
+        <div style={{
+          border: '1px solid var(--border)',
+          borderRadius: 'var(--radius)',
+          padding: '8px 10px',
+          background: 'var(--bg-2)',
+          fontSize: 10,
+          color: 'var(--text-2)',
+          letterSpacing: '0.03em',
+          lineHeight: 1.5,
+        }}>
+          <div style={{ color: 'var(--text-1)', marginBottom: 4 }}>USAGE (7D)</div>
+          <div>Cost: ${usageCost.toFixed(4)}</div>
+          <div>In: {usageInput.toLocaleString()} tok</div>
+          <div>Out: {usageOutput.toLocaleString()} tok</div>
+        </div>
+
+        <div style={{ fontSize: 10, color: 'var(--text-2)', letterSpacing: '0.05em' }}>
+          <div>POWERED BY CLAUDE API</div>
+          <div style={{ marginTop: 2, color: 'var(--accent)', opacity: 0.6 }}>v1.2.0</div>
+        </div>
       </div>
     </aside>
   )

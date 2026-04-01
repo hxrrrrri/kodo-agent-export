@@ -1,7 +1,10 @@
 import os
 import re
 from enum import Enum
-from typing import Callable, Awaitable
+from typing import Callable, Awaitable, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from tools.base import BaseTool
 
 
 class PermissionMode(str, Enum):
@@ -65,8 +68,8 @@ class PermissionChecker:
 
         # Need user approval
         if self._approval_callback is None:
-            # No callback set — default deny dangerous in non-YOLO
-            return True, "no callback, allowing (set callback for interactive mode)"
+            # Fail closed for dangerous operations unless a callback is configured.
+            return False, "dangerous operation requires interactive approval callback"
 
         preview = self._build_preview(tool.name, kwargs)
         approved = await self._approval_callback(tool.name, preview, tool.description)

@@ -18,6 +18,8 @@
 - **Multi-step autonomous task loops** (tool-call → execute → feed result → repeat)
 - **Persistent memory** via `MEMORY.md` files
 - **Full conversation history** with session management
+- **Request IDs + structured audit logs** in `~/.kodo/audit/events.jsonl`
+- **Usage + estimated cost tracking** in `~/.kodo/usage/events.jsonl`
 - **Beautiful web UI** with real-time streaming
 
 ---
@@ -176,17 +178,56 @@ kodo-agent/
 
 ```env
 ANTHROPIC_API_KEY=sk-ant-...
+OPENAI_API_KEY=sk-proj-...                # optional fallback provider
+PRIMARY_PROVIDER=anthropic                # anthropic | openai
 MODEL=claude-sonnet-4-6
+# OPENAI_FALLBACK_MODEL=gpt-4o
+# ANTHROPIC_FALLBACK_MODEL=claude-sonnet-4-6
+
+# Optional API protection for all /api/chat routes
+# API_AUTH_TOKEN=replace_with_a_long_random_token
+
+# Optional CORS override
+# ALLOWED_ORIGINS=http://localhost:5173,http://localhost:3000
+
 MAX_TOKENS=8192
 PERMISSION_MODE=ask       # ask | auto | yolo
-ALLOWED_DIRS=~,/tmp       # comma-separated safe directories
+ALLOWED_DIRS=~,.
+MAX_FILE_SIZE_KB=500
+
+# Per-IP limits
+RATE_LIMIT_SEND_PER_MINUTE=30
+RATE_LIMIT_SESSION_PER_MINUTE=20
+RATE_LIMIT_MEMORY_PER_MINUTE=10
+
+# Optional pricing overrides (USD per 1M tokens)
+# COST_CLAUDE_INPUT_PER_M=3.0
+# COST_CLAUDE_OUTPUT_PER_M=15.0
+# COST_OPENAI_INPUT_PER_M=5.0
+# COST_OPENAI_OUTPUT_PER_M=15.0
 ```
+
+Frontend token support (optional) in `frontend/.env.local`:
+
+```env
+VITE_API_AUTH_TOKEN=replace_with_same_backend_token
+```
+
+Usage API:
+
+- `GET /api/chat/usage?days=7&limit=100` (protected by optional bearer auth)
+
+Audit + request IDs:
+
+- Every HTTP response includes `X-Request-ID`
+- Security and chat events are persisted as JSON lines in `~/.kodo/audit/events.jsonl`
 
 ---
 
 ## Built With
 
 - **Claude API** (Anthropic) — The brain
+- **OpenAI API** — Provider fallback support
 - **FastAPI** — Backend framework
 - **Server-Sent Events** — Real-time streaming
 - **React 18** — Frontend

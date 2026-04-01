@@ -27,6 +27,24 @@ export interface Session {
   message_count: number
 }
 
+export interface UsageSummary {
+  window_days: number
+  events_count: number
+  totals: {
+    input_tokens: number
+    output_tokens: number
+    estimated_cost_usd: number
+  }
+  by_model: Record<
+    string,
+    {
+      input_tokens: number
+      output_tokens: number
+      estimated_cost_usd: number
+    }
+  >
+}
+
 interface ChatState {
   sessionId: string | null
   sessions: Session[]
@@ -34,8 +52,9 @@ interface ChatState {
   isLoading: boolean
   error: string | null
   projectDir: string
+  usageSummary: UsageSummary | null
 
-  setSessionId: (id: string) => void
+  setSessionId: (id: string | null) => void
   setSessions: (sessions: Session[]) => void
   setMessages: (messages: Message[]) => void
   addMessage: (message: Message) => void
@@ -43,6 +62,7 @@ interface ChatState {
   setLoading: (loading: boolean) => void
   setError: (error: string | null) => void
   setProjectDir: (dir: string) => void
+  setUsageSummary: (summary: UsageSummary | null) => void
   clearMessages: () => void
 }
 
@@ -53,6 +73,7 @@ export const useChatStore = create<ChatState>((set) => ({
   isLoading: false,
   error: null,
   projectDir: '',
+  usageSummary: null,
 
   setSessionId: (id) => set({ sessionId: id }),
   setSessions: (sessions) => set({ sessions }),
@@ -68,5 +89,6 @@ export const useChatStore = create<ChatState>((set) => ({
   setLoading: (isLoading) => set({ isLoading }),
   setError: (error) => set({ error }),
   setProjectDir: (projectDir) => set({ projectDir }),
+  setUsageSummary: (usageSummary) => set({ usageSummary }),
   clearMessages: () => set({ messages: [] }),
 }))

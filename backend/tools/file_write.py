@@ -1,6 +1,7 @@
 import os
 import aiofiles
 from .base import BaseTool, ToolResult
+from .path_guard import enforce_allowed_path
 
 
 class FileWriteTool(BaseTool):
@@ -25,12 +26,24 @@ class FileWriteTool(BaseTool):
     }
 
     def is_dangerous(self, path: str = "", **kwargs) -> bool:
-        dangerous_paths = ["/etc/", "/usr/", "/bin/", "/sbin/", "/boot/"]
-        path = os.path.expanduser(path)
-        return any(path.startswith(p) for p in dangerous_paths)
+        dangerous_paths = [
+            "/etc/",
+            "/usr/",
+            "/bin/",
+            "/sbin/",
+            "/boot/",
+            "C:\\Windows\\",
+            "C:\\Program Files\\",
+            "C:\\Program Files (x86)\\",
+        ]
+        normalized = os.path.normcase(os.path.abspath(os.path.expanduser(path)))
+        return any(normalized.startswith(os.path.normcase(p)) for p in dangerous_paths)
 
     async def execute(self, path: str, content: str, **kwargs) -> ToolResult:
-        path = os.path.expanduser(path)
+        try:
+            path = enforce_allowed_path(path)
+        except ValueError as e:
+            return ToolResult(success=False, output="", error=str(e))
 
         try:
             os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
