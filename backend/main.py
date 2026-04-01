@@ -1,6 +1,6 @@
 import os
 from dotenv import load_dotenv
-load_dotenv()
+load_dotenv(override=True)
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -30,10 +30,21 @@ async def root():
 
 @app.get("/health")
 async def health():
-    api_key_set = bool(os.getenv("ANTHROPIC_API_KEY"))
+    openai_key_set = bool(os.getenv("OPENAI_API_KEY"))
+    anthropic_key_set = bool(os.getenv("ANTHROPIC_API_KEY"))
+    configured_model = os.getenv("MODEL", "").strip().lower()
+    primary_provider = os.getenv("PRIMARY_PROVIDER", "anthropic").strip().lower()
+    if openai_key_set and anthropic_key_set:
+        provider = "openai" if primary_provider == "openai" else "anthropic"
+    else:
+        provider = "openai" if openai_key_set else ("anthropic" if anthropic_key_set else None)
+    default_model = "claude-sonnet-4-6" if provider == "anthropic" else "gpt-4o"
     return {
         "status": "ok",
-        "api_key_configured": api_key_set,
-        "model": os.getenv("MODEL", "claude-sonnet-4-6"),
+        "api_key_configured": openai_key_set or anthropic_key_set,
+        "openai_key_configured": openai_key_set,
+        "anthropic_key_configured": anthropic_key_set,
+        "provider": provider,
+        "model": os.getenv("MODEL", default_model),
         "permission_mode": os.getenv("PERMISSION_MODE", "ask"),
     }

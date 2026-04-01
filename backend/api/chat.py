@@ -27,13 +27,17 @@ async def send_message(req: ChatRequest):
     # Load existing history
     history = await memory_manager.load_session(session_id)
 
-    agent = AgentLoop(session_id=session_id, project_dir=req.project_dir)
-
     async def event_stream():
         new_messages = list(history)
         new_messages.append({"role": "user", "content": req.message})
         assistant_parts = []
         tool_result_buffer = []
+
+        try:
+            agent = AgentLoop(session_id=session_id, project_dir=req.project_dir)
+        except Exception as e:
+            yield f"data: {json.dumps({'type': 'error', 'message': str(e)})}\n\n"
+            return
 
         try:
             async for event in agent.run(req.message, history):
