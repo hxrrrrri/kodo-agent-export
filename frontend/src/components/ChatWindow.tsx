@@ -28,11 +28,28 @@ const EXAMPLE_PROMPTS = [
   'Run the tests and show me the results',
 ]
 
-const FALLBACK_COMMANDS: CommandDefinition[] = [
+const KNOWN_ROOT_COMMANDS: CommandDefinition[] = [
   { name: '/help', description: 'Show available commands' },
-  { name: '/cost [days]', description: 'Show token and estimated cost usage' },
-  { name: '/search <query>', description: 'Search the web and return top results' },
-  { name: '/git <subcommand>', description: 'Run safe, read-only git command' },
+  { name: '/cost', description: 'Show token and estimated cost usage' },
+  { name: '/session', description: 'Inspect or manage sessions' },
+  { name: '/memory', description: 'Read or write memory notes' },
+  { name: '/mode', description: 'Inspect or set session mode' },
+  { name: '/provider', description: 'Show or switch provider profiles' },
+  { name: '/doctor', description: 'Run runtime health checks' },
+  { name: '/router', description: 'Inspect or set routing strategy' },
+  { name: '/model', description: 'Inspect or override model' },
+  { name: '/privacy', description: 'Show telemetry/privacy status' },
+  { name: '/tasks', description: 'Manage background tasks' },
+  { name: '/mcp', description: 'Manage MCP servers and tool calls' },
+  { name: '/agents', description: 'Spawn and inspect sub-agents' },
+  { name: '/skills', description: 'List and run bundled skills' },
+  { name: '/search', description: 'Search the web with provider fallback' },
+  { name: '/git', description: 'Run safe, read-only git command' },
+  { name: '/checkpoint', description: 'Create/list/restore checkpoints' },
+]
+
+const FALLBACK_COMMANDS: CommandDefinition[] = [
+  ...KNOWN_ROOT_COMMANDS,
   { name: '/session', description: 'List recent sessions' },
   { name: '/session current', description: 'Show current session id' },
   { name: '/memory <text>', description: 'Append note to global memory' },
@@ -148,6 +165,16 @@ function buildCommandSuggestions(input: string, commands: CommandDefinition[]): 
   return ranked.slice(0, 8).map((item) => item.command)
 }
 
+function filterPaletteCommands(query: string, commands: CommandDefinition[]): CommandDefinition[] {
+  const normalized = query.trim().toLowerCase()
+  if (!normalized) return commands
+  return commands.filter((command) => {
+    const name = command.name.toLowerCase()
+    const description = (command.description || '').toLowerCase()
+    return name.includes(normalized) || description.includes(normalized)
+  })
+}
+
 function approximateTokens(value: string): number {
   if (!value.trim()) return 0
   return Math.max(1, Math.ceil(value.length / 4))
@@ -156,6 +183,7 @@ function approximateTokens(value: string): number {
 export function ChatWindow() {
   const {
     messages,
+    filteredMessages,
     isLoading,
     error,
     commands,
@@ -170,19 +198,25 @@ export function ChatWindow() {
     setSessionMode,
     permissionChallenges,
     respondPermission,
-    searchQuery,
-    setSearchQuery,
+    messageSearchQuery,
+    setMessageSearchQuery,
   } = useChat()
   const [input, setInput] = useState('')
   const [showProjectInput, setShowProjectInput] = useState(false)
   const [permissionSubmitting, setPermissionSubmitting] = useState(false)
   const [activeCommandIndex, setActiveCommandIndex] = useState(0)
+  const [commandPaletteOpen, setCommandPaletteOpen] = useState(false)
+  const [paletteQuery, setPaletteQuery] = useState('')
+  const [paletteIndex, setPaletteIndex] = useState(0)
   const [pendingImage, setPendingImage] = useState<PendingImage | null>(null)
   const messageListRef = useRef<HTMLDivElement>(null)
   const bottomRef = useRef<HTMLDivElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
+  const paletteRef = useRef<HTMLDivElement>(null)
+  const paletteInputRef = useRef<HTMLInputElement>(null)
   const imageInputRef = useRef<HTMLInputElement>(null)
   const shouldAutoScrollRef = useRef(true)
+  const previousMessageSearchRef = useRef('')
   const commandsRequestedRef = useRef(false)
 
   const activePermission = permissionChallenges.length > 0 ? permissionChallenges[0] : null
@@ -200,24 +234,80 @@ export function ChatWindow() {
 
   const commandCatalog = commands.length > 0 ? commands : FALLBACK_COMMANDS
   const commandSuggestions = useMemo(() => buildCommandSuggestions(input, commandCatalog), [input, commandCatalog])
-  const showCommandSuggestions = commandSuggestions.length > 0 && input.trimStart().startsWith('/')
+  const showCommandSuggestions = commandSuggestions.length > 0 && input.trimStart().startsWith('/') && !commandPaletteOpen
+  const paletteCommands = useMemo(
+    () => filterPaletteCommands(paletteQuery, commands.length > 0 ? commands : KNOWN_ROOT_COMMANDS),
+    [paletteQuery, commands],
+  )
 
   useEffect(() => {
     setActiveCommandIndex(0)
   }, [input, showCommandSuggestions])
 
   useEffect(() => {
+    setPaletteIndex(0)
+  }, [paletteQuery, commandPaletteOpen])
+
+  useEffect(() => {
     setInput('')
     setPendingImage(null)
+    setMessageSearchQuery('')
+    setCommandPaletteOpen(false)
+    setPaletteQuery('')
     if (textareaRef.current) {
       textareaRef.current.style.height = 'auto'
     }
-  }, [sessionId])
+  }, [sessionId, setMessageSearchQuery])
+
+  useEffect(() => {
+    if (!commandPaletteOpen) return
+    requestAnimationFrame(() => {
+      paletteInputRef.current?.focus()
+    })
+  }, [commandPaletteOpen])
+
+  useEffect(() => {
+    if (!commandPaletteOpen) return
+
+    const onDocumentMouseDown = (event: MouseEvent) => {
+      if (!paletteRef.current) return
+      if (paletteRef.current.contains(event.target as Node)) return
+      setCommandPaletteOpen(false)
+      setPaletteQuery('')
+    }
+
+    window.addEventListener('mousedown', onDocumentMouseDown)
+    return () => window.removeEventListener('mousedown', onDocumentMouseDown)
+  }, [commandPaletteOpen])
+
+  useEffect(() => {
+    const previous = previousMessageSearchRef.current
+    if (previous.trim() && !messageSearchQuery.trim()) {
+      bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
+    }
+    previousMessageSearchRef.current = messageSearchQuery
+  }, [messageSearchQuery])
 
   const applyCommandSuggestion = (name: string) => {
     const next = `${name}${name.includes('<') ? '' : ' '}`
     setInput(next)
     setActiveCommandIndex(0)
+    requestAnimationFrame(() => {
+      if (!textareaRef.current) return
+      textareaRef.current.style.height = 'auto'
+      textareaRef.current.style.height = Math.min(textareaRef.current.scrollHeight, 200) + 'px'
+      textareaRef.current.focus()
+      textareaRef.current.selectionStart = textareaRef.current.value.length
+      textareaRef.current.selectionEnd = textareaRef.current.value.length
+    })
+  }
+
+  const applyPaletteCommand = (name: string) => {
+    const next = `${name}${name.includes('<') ? '' : ' '}`
+    setInput(next)
+    setCommandPaletteOpen(false)
+    setPaletteQuery('')
+    setPaletteIndex(0)
     requestAnimationFrame(() => {
       if (!textareaRef.current) return
       textareaRef.current.style.height = 'auto'
@@ -249,11 +339,34 @@ export function ChatWindow() {
       const isMeta = event.ctrlKey || event.metaKey
       if (isMeta && event.key.toLowerCase() === 'k') {
         event.preventDefault()
-        textareaRef.current?.focus()
+        if (commandPaletteOpen) {
+          setCommandPaletteOpen(false)
+          setPaletteQuery('')
+          return
+        }
+
+        const textareaFocused = document.activeElement === textareaRef.current
+        if (!textareaFocused) {
+          textareaRef.current?.focus()
+          return
+        }
+
+        if (!input.trim()) {
+          setCommandPaletteOpen(true)
+          setPaletteQuery('')
+          setPaletteIndex(0)
+        }
+        return
       }
-      if (isMeta && event.key === 'Enter') {
+      if (isMeta && event.key === 'Enter' && !commandPaletteOpen) {
         event.preventDefault()
         handleSend()
+      }
+      if (event.key === 'Escape' && commandPaletteOpen) {
+        event.preventDefault()
+        setCommandPaletteOpen(false)
+        setPaletteQuery('')
+        return
       }
       if (event.key === 'Escape' && isLoading) {
         event.preventDefault()
@@ -262,7 +375,7 @@ export function ChatWindow() {
     }
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
-  }, [isLoading, stopGeneration, handleSend])
+  }, [commandPaletteOpen, handleSend, input, isLoading, stopGeneration])
 
   const handleMessagesScroll = () => {
     const container = messageListRef.current
@@ -290,6 +403,38 @@ export function ChatWindow() {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault()
       handleSend()
+    }
+  }
+
+  const handlePaletteKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
+    if (event.key === 'ArrowDown') {
+      event.preventDefault()
+      if (paletteCommands.length === 0) return
+      setPaletteIndex((prev) => (prev + 1) % paletteCommands.length)
+      return
+    }
+
+    if (event.key === 'ArrowUp') {
+      event.preventDefault()
+      if (paletteCommands.length === 0) return
+      setPaletteIndex((prev) => (prev - 1 + paletteCommands.length) % paletteCommands.length)
+      return
+    }
+
+    if (event.key === 'Enter') {
+      event.preventDefault()
+      const selected = paletteCommands[paletteIndex]
+      if (selected) {
+        applyPaletteCommand(selected.name)
+      }
+      return
+    }
+
+    if (event.key === 'Escape') {
+      event.preventDefault()
+      setCommandPaletteOpen(false)
+      setPaletteQuery('')
+      requestAnimationFrame(() => textareaRef.current?.focus())
     }
   }
 
@@ -330,24 +475,28 @@ export function ChatWindow() {
   }
 
   const isEmpty = messages.length === 0
-  const filteredMessages = useMemo(() => {
-    const query = searchQuery.trim().toLowerCase()
-    if (!query) return messages
-    return messages.filter((msg) => {
-      const inContent = msg.content.toLowerCase().includes(query)
-      const inTools = (msg.toolCalls || []).some((tc) => {
-        const output = typeof tc.output === 'string' ? tc.output.toLowerCase() : ''
-        return output.includes(query) || tc.tool.toLowerCase().includes(query)
-      })
-      return inContent || inTools
-    })
-  }, [messages, searchQuery])
+  const isMessageFilteringActive = messageSearchQuery.trim().length > 0
 
   const contextTokens = useMemo(() => {
     const messageTokens = messages.reduce((total, message) => total + approximateTokens(message.content), 0)
     return messageTokens
   }, [messages])
   const contextPercent = Math.min(100, Math.round((contextTokens / CONTEXT_TOKEN_BUDGET) * 100))
+  const totalCacheReadTokens = useMemo(
+    () => messages.reduce((total, message) => total + (message.usage?.input_cache_read_tokens || 0), 0),
+    [messages],
+  )
+  const latestUsageModel = useMemo(() => {
+    for (let idx = messages.length - 1; idx >= 0; idx -= 1) {
+      const model = messages[idx].usage?.model
+      if (typeof model === 'string' && model.trim()) {
+        return model
+      }
+    }
+    return ''
+  }, [messages])
+  const showCacheSavings = totalCacheReadTokens > 0 && latestUsageModel.toLowerCase().includes('claude')
+  const estimatedCacheSavings = (totalCacheReadTokens * (3.0 * 0.9)) / 1_000_000
 
   const modes = availableModes.length > 0
     ? availableModes
@@ -389,36 +538,6 @@ export function ChatWindow() {
               <span style={{ color: 'var(--green)' }}>● READY</span>
             )}
           </span>
-        </div>
-
-        <div style={{
-          display: 'flex',
-          alignItems: 'center',
-          gap: 6,
-          border: '1px solid var(--border)',
-          borderRadius: 'var(--radius)',
-          background: 'var(--bg-2)',
-          padding: '4px 8px',
-          minWidth: 210,
-          flex: 1,
-          maxWidth: 320,
-        }}>
-          <Search size={12} color="var(--text-2)" />
-          <input
-            type="text"
-            value={searchQuery}
-            onChange={(event) => setSearchQuery(event.target.value)}
-            placeholder="Search messages"
-            style={{
-              width: '100%',
-              background: 'transparent',
-              border: 'none',
-              outline: 'none',
-              color: 'var(--text-0)',
-              fontFamily: 'var(--font-mono)',
-              fontSize: 11,
-            }}
-          />
         </div>
 
         <button
@@ -532,12 +651,21 @@ export function ChatWindow() {
         <div style={{
           display: 'flex',
           justifyContent: 'space-between',
+          alignItems: 'center',
+          gap: 10,
           fontSize: 10,
           color: 'var(--text-2)',
           letterSpacing: '0.06em',
         }}>
           <span>CONTEXT WINDOW</span>
-          <span>{contextTokens.toLocaleString()} / {CONTEXT_TOKEN_BUDGET.toLocaleString()} TOK</span>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginLeft: 'auto' }}>
+            {showCacheSavings && (
+              <span style={{ color: 'var(--text-2)' }}>
+                Cache: saved ~${estimatedCacheSavings.toFixed(4)}
+              </span>
+            )}
+            <span>{contextTokens.toLocaleString()} / {CONTEXT_TOKEN_BUDGET.toLocaleString()} TOK</span>
+          </div>
         </div>
         <div style={{
           height: 6,
@@ -600,6 +728,147 @@ export function ChatWindow() {
           >
             SET
           </button>
+        </div>
+      )}
+
+      {messages.length > 0 && (
+        <div style={{
+          padding: '10px 24px',
+          borderBottom: '1px solid var(--border)',
+          background: 'var(--bg-1)',
+          display: 'grid',
+          gap: 6,
+        }}>
+          <div style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 8,
+            border: '1px solid var(--border)',
+            borderRadius: 'var(--radius)',
+            background: 'var(--bg-2)',
+            padding: '6px 8px',
+          }}>
+            <Search size={13} color="var(--text-2)" />
+            <input
+              type="text"
+              placeholder="Search messages..."
+              value={messageSearchQuery}
+              onChange={(event) => setMessageSearchQuery(event.target.value)}
+              style={{
+                flex: 1,
+                background: 'transparent',
+                border: 'none',
+                outline: 'none',
+                color: 'var(--text-0)',
+                fontFamily: 'var(--font-mono)',
+                fontSize: 12,
+              }}
+            />
+            {messageSearchQuery.trim() && (
+              <button
+                type="button"
+                onClick={() => setMessageSearchQuery('')}
+                style={{
+                  border: 'none',
+                  background: 'transparent',
+                  color: 'var(--text-2)',
+                  cursor: 'pointer',
+                  fontSize: 14,
+                  lineHeight: 1,
+                  padding: 0,
+                }}
+                aria-label="Clear message search"
+              >
+                ×
+              </button>
+            )}
+          </div>
+
+          {isMessageFilteringActive && (
+            <div style={{ fontSize: 11, color: 'var(--text-2)' }}>
+              {filteredMessages.length} of {messages.length} messages match
+            </div>
+          )}
+        </div>
+      )}
+
+      {commandPaletteOpen && (
+        <div style={{ position: 'relative', minHeight: 300, zIndex: 100 }}>
+          <div
+            ref={paletteRef}
+            style={{
+              position: 'absolute',
+              top: '20%',
+              left: '50%',
+              transform: 'translateX(-50%)',
+              zIndex: 100,
+              width: 'min(520px, 90vw)',
+              background: 'var(--bg-1)',
+              border: '1px solid var(--border-bright)',
+              borderRadius: 'var(--radius)',
+              boxShadow: '0 12px 32px rgba(0, 0, 0, 0.35)',
+              overflow: 'hidden',
+            }}
+          >
+            <div style={{ padding: 10, borderBottom: '1px solid var(--border)' }}>
+              <input
+                ref={paletteInputRef}
+                type="text"
+                value={paletteQuery}
+                onChange={(event) => setPaletteQuery(event.target.value)}
+                onKeyDown={handlePaletteKeyDown}
+                placeholder="> type a command or /..."
+                style={{
+                  width: '100%',
+                  background: 'var(--bg-2)',
+                  border: '1px solid var(--border)',
+                  borderRadius: 'var(--radius)',
+                  color: 'var(--text-0)',
+                  outline: 'none',
+                  padding: '8px 10px',
+                  fontFamily: 'var(--font-mono)',
+                  fontSize: 12,
+                }}
+              />
+            </div>
+
+            <div style={{ maxHeight: 320, overflowY: 'auto' }}>
+              {paletteCommands.length === 0 && (
+                <div style={{ padding: '10px 12px', color: 'var(--text-2)', fontSize: 11 }}>
+                  No matching commands.
+                </div>
+              )}
+
+              {paletteCommands.map((command, idx) => {
+                const selected = idx === paletteIndex
+                return (
+                  <button
+                    key={`${command.name}-${idx}`}
+                    type="button"
+                    onMouseEnter={() => setPaletteIndex(idx)}
+                    onMouseDown={(event) => {
+                      event.preventDefault()
+                      applyPaletteCommand(command.name)
+                    }}
+                    style={{
+                      width: '100%',
+                      border: 'none',
+                      borderBottom: idx === paletteCommands.length - 1 ? 'none' : '1px solid var(--border)',
+                      background: selected ? 'var(--bg-3)' : 'transparent',
+                      textAlign: 'left',
+                      cursor: 'pointer',
+                      padding: '8px 12px',
+                      display: 'grid',
+                      gap: 2,
+                    }}
+                  >
+                    <span style={{ fontFamily: 'var(--font-mono)', fontSize: 12, color: 'var(--accent)' }}>{command.name}</span>
+                    <span style={{ fontSize: 11, color: 'var(--text-2)' }}>{command.description}</span>
+                  </button>
+                )
+              })}
+            </div>
+          </div>
         </div>
       )}
 
@@ -685,10 +954,10 @@ export function ChatWindow() {
         )}
 
         {filteredMessages.map((msg) => (
-          <MessageBubble key={msg.id} message={msg} searchQuery={searchQuery} />
+          <MessageBubble key={msg.id} message={msg} searchQuery={messageSearchQuery} />
         ))}
 
-        {searchQuery.trim() && filteredMessages.length === 0 && (
+        {isMessageFilteringActive && filteredMessages.length === 0 && (
           <div style={{
             border: '1px dashed var(--border-bright)',
             borderRadius: 'var(--radius)',
@@ -697,7 +966,7 @@ export function ChatWindow() {
             fontSize: 12,
             marginBottom: 14,
           }}>
-            No message matches for "{searchQuery.trim()}" in this session.
+            No message matches for "{messageSearchQuery.trim()}" in this session.
           </div>
         )}
 
@@ -905,7 +1174,7 @@ export function ChatWindow() {
         </div>
         </div>
         <div style={{ fontSize: 10, color: 'var(--text-2)', marginTop: 6, textAlign: 'center' }}>
-          Enter send · Shift+Enter newline · Tab autocomplete · Ctrl/Cmd+K focus · Esc stop generation
+          Enter send · Shift+Enter newline · Tab autocomplete · Ctrl/Cmd+K command palette · Esc stop generation
         </div>
       </div>
 

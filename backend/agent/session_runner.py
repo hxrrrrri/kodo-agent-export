@@ -1,11 +1,21 @@
 from __future__ import annotations
 
 import asyncio
+import logging
+import os
+import re
 from dataclasses import dataclass
 from typing import Any, AsyncGenerator, Awaitable, Callable
 
-from agent.loop import AgentLoop
+from anthropic import AsyncAnthropic
+from openai import AsyncOpenAI
+
+from agent.loop import AgentLoop, RuntimeConfig, _resolve_provider_config
 from memory.manager import memory_manager
+from privacy import feature_enabled
+
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -104,6 +114,173 @@ def _title_from_content(content: Any) -> str:
     return "Untitled"
 
 
+def _auto_title_enabled() -> bool:
+    return feature_enabled("AUTO_TITLE")
+
+
+def _content_excerpt(content: Any, limit: int = 200) -> str:
+    if isinstance(content, str):
+        text = content.strip()
+        return text[:limit]
+
+    if isinstance(content, list):
+        chunks: list[str] = []
+        for block in content:
+            if not isinstance(block, dict):
+                continue
+            if str(block.get("type", "")).lower() != "text":
+                continue
+            value = block.get("text")
+            if isinstance(value, str) and value.strip():
+                chunks.append(value.strip())
+        joined = "\n".join(chunks).strip()
+        return joined[:limit]
+
+    if content is None:
+        return ""
+    return str(content).strip()[:limit]
+
+
+def _default_session_title(messages: list[dict[str, Any]]) -> str:
+    for message in messages:
+        if str(message.get("role", "")).lower() == "user":
+            return _title_from_content(message.get("content", ""))
+    if messages:
+        return _title_from_content(messages[0].get("content", ""))
+    return "Untitled"
+
+
+def _title_is_raw_default(current_title: str, default_title: str) -> bool:
+    current = current_title.strip().lower()
+    baseline = default_title.strip().lower()
+    return (not current) or current == baseline
+
+
+def _normalize_smart_title(raw_title: str, fallback_title: str) -> str:
+    normalized = re.sub(r"\s+", " ", (raw_title or "").strip())
+    normalized = normalized.strip("\"'`")
+    normalized = normalized.rstrip(".,;:!?")
+
+    words = [part for part in normalized.split(" ") if part]
+    if len(words) > 8:
+        normalized = " ".join(words[:8])
+
+    return normalized or fallback_title
+
+
+def _summary_runtime_config() -> RuntimeConfig:
+    # Prefer a lightweight provider for title generation when available.
+    openai_key = os.getenv("OPENAI_API_KEY", "").strip()
+    anthropic_key = os.getenv("ANTHROPIC_API_KEY", "").strip()
+
+    if openai_key:
+        model = os.getenv("OPENAI_TITLE_MODEL", "").strip() or "gpt-4o-mini"
+        return RuntimeConfig(
+            provider="openai",
+            model=model,
+            api_key=openai_key,
+            base_url=os.getenv("OPENAI_BASE_URL", "").strip() or None,
+        )
+
+    if anthropic_key:
+        model = os.getenv("ANTHROPIC_TITLE_MODEL", "").strip() or "claude-3-5-haiku-latest"
+        return RuntimeConfig(
+            provider="anthropic",
+            model=model,
+            api_key=anthropic_key,
+            base_url=os.getenv("ANTHROPIC_BASE_URL", "").strip() or None,
+        )
+
+    return _resolve_provider_config()
+
+
+async def _call_title_model(summary_prompt: str) -> str:
+    runtime = _summary_runtime_config()
+
+    if runtime.provider == "anthropic":
+        kwargs: dict[str, Any] = {"api_key": runtime.api_key}
+        if runtime.base_url:
+            kwargs["base_url"] = runtime.base_url
+        anthropic_client = AsyncAnthropic(**kwargs)
+        anthropic_response = await anthropic_client.messages.create(
+            model=runtime.model,
+            max_tokens=20,
+            temperature=0,
+            messages=[
+                {
+                    "role": "user",
+                    "content": summary_prompt,
+                }
+            ],
+        )
+
+        chunks: list[str] = []
+        for block in anthropic_response.content:
+            if getattr(block, "type", "") != "text":
+                continue
+            text = getattr(block, "text", "")
+            if text:
+                chunks.append(str(text))
+        return " ".join(chunks).strip()
+
+    openai_client = AsyncOpenAI(
+        api_key=runtime.api_key or "local",
+        base_url=runtime.base_url,
+    )
+    openai_response = await openai_client.chat.completions.create(
+        model=runtime.model,
+        max_tokens=20,
+        temperature=0,
+        messages=[
+            {
+                "role": "user",
+                "content": summary_prompt,
+            }
+        ],
+    )
+
+    if not openai_response.choices:
+        return ""
+    payload = openai_response.choices[0].message
+    return str(getattr(payload, "content", "") or "").strip()
+
+
+async def _generate_smart_title(messages: list[dict[str, Any]]) -> str:
+    fallback_title = _default_session_title(messages)
+    summary_prompt = (
+        "In 8 words or fewer, summarise what this conversation accomplished. "
+        "Reply with only the summary, no punctuation at the end.\n\n"
+        + "\n".join(
+            f"{str(m.get('role', 'user')).upper()}: {_content_excerpt(m.get('content', ''))[:200]}"
+            for m in messages[-6:]
+        )
+    )
+
+    try:
+        generated = await _call_title_model(summary_prompt)
+    except Exception as exc:
+        logger.warning("Auto-title model call failed: %s", exc)
+        return fallback_title
+
+    return _normalize_smart_title(generated, fallback_title)
+
+
+async def _apply_auto_title(session_id: str, messages: list[dict[str, Any]], current_title: str) -> None:
+    try:
+        generated_title = await _generate_smart_title(messages)
+        if not generated_title.strip():
+            return
+        if generated_title.strip() == current_title.strip():
+            return
+        await memory_manager.save_session(
+            session_id,
+            messages,
+            metadata={"title": generated_title},
+        )
+    except Exception as exc:
+        logger.warning("Auto-title update failed for session %s: %s", session_id, exc)
+
+
 class SessionRunner:
     """
     Manages one agent session lifecycle with streaming, cancellation, and persistence.
@@ -167,16 +344,31 @@ class SessionRunner:
         assistant_text = "".join(assistant_parts)
         updated_history = list(messages)
         updated_history.append({"role": "assistant", "content": assistant_text})
-        title = _title_from_content(latest.get("content", ""))
+
+        existing_payload = await memory_manager.load_session_payload(session_id)
+        existing_metadata = existing_payload.get("metadata", {}) if isinstance(existing_payload, dict) else {}
+        if not isinstance(existing_metadata, dict):
+            existing_metadata = {}
+
+        default_title = _default_session_title(updated_history)
+        current_title = str(existing_metadata.get("title", "")).strip() or default_title
+
         await memory_manager.save_session(
             session_id,
             updated_history,
             metadata={
-                "title": title,
+                "title": current_title,
                 "mode": mode,
                 "model_override": model_override,
             },
         )
+
+        if (
+            _auto_title_enabled()
+            and len(updated_history) >= 4
+            and _title_is_raw_default(current_title, default_title)
+        ):
+            asyncio.create_task(_apply_auto_title(session_id, updated_history, current_title))
 
         self._last_result = SessionResult(
             session_id=session_id,

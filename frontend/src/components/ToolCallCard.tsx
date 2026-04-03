@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Terminal, FileText, Search, Globe, ChevronDown, ChevronRight, CheckCircle, XCircle, Loader } from 'lucide-react'
 import { ToolCall } from '../store/chatStore'
 
@@ -128,6 +128,7 @@ function renderDiff(diffText: string): JSX.Element | null {
 
 export function ToolCallCard({ tc, isLast, searchQuery }: { tc: ToolCall; isLast: boolean; searchQuery?: string }) {
   const [expanded, setExpanded] = useState(false)
+  const liveOutputRef = useRef<HTMLDivElement>(null)
   const color = TOOL_COLORS[tc.tool] || 'var(--text-1)'
   const icon = TOOL_ICONS[tc.tool] || <Terminal size={13} />
   const preview = getInputPreview(tc.tool, tc.input)
@@ -141,6 +142,12 @@ export function ToolCallCard({ tc, isLast, searchQuery }: { tc: ToolCall; isLast
   )
   const hasResult = tc.output !== undefined
   const isRunning = !hasResult && isLast
+  const showLiveOutput = isRunning && Boolean(tc.streamLines && tc.streamLines.length > 0)
+
+  useEffect(() => {
+    if (!showLiveOutput || !liveOutputRef.current) return
+    liveOutputRef.current.scrollTop = liveOutputRef.current.scrollHeight
+  }, [showLiveOutput, tc.streamLines?.length])
 
   return (
     <div
@@ -264,6 +271,31 @@ export function ToolCallCard({ tc, isLast, searchQuery }: { tc: ToolCall; isLast
               {renderDiff(diffText)}
             </div>
           )}
+        </div>
+      )}
+
+      {showLiveOutput && (
+        <div style={{ padding: '0 10px 10px' }}>
+          <div
+            ref={liveOutputRef}
+            style={{
+              fontFamily: 'var(--font-mono)',
+              fontSize: 11,
+              background: 'var(--bg-0)',
+              color: 'var(--text-1)',
+              padding: 8,
+              borderRadius: 'var(--radius)',
+              maxHeight: 200,
+              overflowY: 'auto',
+              whiteSpace: 'pre-wrap',
+              wordBreak: 'break-word',
+            }}
+          >
+            <div>&gt; {preview}</div>
+            {tc.streamLines?.map((line, idx) => (
+              <div key={`${line}-${idx}`}>{line}</div>
+            ))}
+          </div>
         </div>
       )}
     </div>

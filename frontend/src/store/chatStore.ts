@@ -5,7 +5,9 @@ export type MessageRole = 'user' | 'assistant' | 'system'
 export interface ToolCall {
   tool: string
   input: Record<string, unknown>
+  tool_use_id?: string
   output?: string
+  streamLines?: string[]
   success?: boolean
   approved?: boolean
   metadata?: Record<string, unknown>
@@ -48,6 +50,8 @@ export interface UsageSummary {
   totals: {
     input_tokens: number
     output_tokens: number
+    input_cache_read_tokens?: number
+    input_cache_write_tokens?: number
     cost_usd_total?: number
     estimated_cost_usd: number
   }
@@ -56,6 +60,8 @@ export interface UsageSummary {
     {
       input_tokens: number
       output_tokens: number
+      input_cache_read_tokens?: number
+      input_cache_write_tokens?: number
       cost_usd_total?: number
       estimated_cost_usd: number
     }
@@ -107,6 +113,7 @@ interface ChatState {
   commands: CommandDefinition[]
   theme: 'dark' | 'light'
   searchQuery: string
+  messageSearchQuery: string
 
   setSessionId: (id: string | null) => void
   setSessions: (sessions: Session[]) => void
@@ -125,6 +132,7 @@ interface ChatState {
   setCommands: (commands: CommandDefinition[]) => void
   setTheme: (theme: 'dark' | 'light') => void
   setSearchQuery: (query: string) => void
+  setMessageSearchQuery: (query: string) => void
   clearMessages: () => void
 }
 
@@ -143,6 +151,7 @@ export const useChatStore = create<ChatState>((set) => ({
   commands: [],
   theme: 'dark',
   searchQuery: '',
+  messageSearchQuery: '',
 
   setSessionId: (id) => set({ sessionId: id }),
   setSessions: (sessions) => set({ sessions }),
@@ -175,5 +184,6 @@ export const useChatStore = create<ChatState>((set) => ({
   setCommands: (commands) => set({ commands }),
   setTheme: (theme) => set({ theme }),
   setSearchQuery: (searchQuery) => set({ searchQuery }),
+  setMessageSearchQuery: (messageSearchQuery) => set({ messageSearchQuery }),
   clearMessages: () => set({ messages: [] }),
 }))

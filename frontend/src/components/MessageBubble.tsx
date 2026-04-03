@@ -1,3 +1,4 @@
+import { useState } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter'
@@ -5,38 +6,46 @@ import { vscDarkPlus } from 'react-syntax-highlighter/dist/esm/styles/prism'
 import { Message } from '../store/chatStore'
 import { ToolCallCard } from './ToolCallCard'
 
-function escapeRegExp(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-}
-
 function renderHighlightedText(text: string, query: string): JSX.Element {
   const trimmed = query.trim()
   if (!trimmed) {
     return <>{text}</>
   }
 
-  const pattern = new RegExp(`(${escapeRegExp(trimmed)})`, 'ig')
-  const parts = text.split(pattern)
+  const pattern = new RegExp(trimmed.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi')
+  const parts: Array<string | JSX.Element> = []
+  let lastIndex = 0
+  let match: RegExpExecArray | null
+
+  while ((match = pattern.exec(text)) !== null) {
+    const start = match.index
+    const end = start + match[0].length
+    if (start > lastIndex) {
+      parts.push(text.slice(lastIndex, start))
+    }
+    parts.push(
+      <mark
+        key={`${match[0]}-${start}`}
+        style={{
+          background: 'var(--accent-dim)',
+          color: 'var(--text-0)',
+          padding: '0 1px',
+          borderRadius: 2,
+        }}
+      >
+        {match[0]}
+      </mark>,
+    )
+    lastIndex = end
+  }
+
+  if (lastIndex < text.length) {
+    parts.push(text.slice(lastIndex))
+  }
+
   return (
     <>
-      {parts.map((part, idx) => {
-        if (part.toLowerCase() === trimmed.toLowerCase()) {
-          return (
-            <mark
-              key={`${part}-${idx}`}
-              style={{
-                background: 'var(--yellow-dim)',
-                color: 'var(--yellow)',
-                padding: '0 1px',
-                borderRadius: 2,
-              }}
-            >
-              {part}
-            </mark>
-          )
-        }
-        return <span key={`${part}-${idx}`}>{part}</span>
-      })}
+      {parts.map((part, idx) => (typeof part === 'string' ? <span key={`${part}-${idx}`}>{part}</span> : part))}
     </>
   )
 }
@@ -55,10 +64,12 @@ function CursorBlink() {
 }
 
 export function MessageBubble({ message, searchQuery }: { message: Message; searchQuery?: string }) {
+  const [copiedIndex, setCopiedIndex] = useState<number | null>(null)
   const isUser = message.role === 'user'
   const normalizedSearch = (searchQuery || '').trim()
   const hasSearch = normalizedSearch.length > 0
   const contentMatch = hasSearch && message.content.toLowerCase().includes(normalizedSearch.toLowerCase())
+  let codeBlockIndex = -1
   const imageSrc = (() => {
     if (!message.imageAttachment) return ''
     if (message.imageAttachment.url) return message.imageAttachment.url
@@ -190,6 +201,8 @@ export function MessageBubble({ message, searchQuery }: { message: Message; sear
                       </code>
                     )
                   }
+                  codeBlockIndex += 1
+                  const blockIndex = codeBlockIndex
                   return (
                     <div style={{ margin: '12px 0', borderRadius: 'var(--radius)', overflow: 'hidden', border: '1px solid var(--border)' }}>
                       <div style={{
@@ -208,12 +221,17 @@ export function MessageBubble({ message, searchQuery }: { message: Message; sear
                           type="button"
                           onClick={() => {
                             const rawCode = String(children).replace(/\n$/, '')
-                            void navigator.clipboard.writeText(rawCode)
+                            void navigator.clipboard.writeText(rawCode).then(() => {
+                              setCopiedIndex(blockIndex)
+                              window.setTimeout(() => {
+                                setCopiedIndex((prev) => (prev === blockIndex ? null : prev))
+                              }, 2000)
+                            })
                           }}
                           style={{
                             border: '1px solid var(--border)',
                             background: 'var(--bg-2)',
-                            color: 'var(--text-1)',
+                            color: copiedIndex === blockIndex ? 'var(--green)' : 'var(--text-1)',
                             borderRadius: 3,
                             cursor: 'pointer',
                             fontSize: 9,
@@ -222,7 +240,7 @@ export function MessageBubble({ message, searchQuery }: { message: Message; sear
                             letterSpacing: '0.08em',
                           }}
                         >
-                          COPY
+                          {copiedIndex === blockIndex ? 'COPIED' : 'COPY'}
                         </button>
                       </div>
                       <SyntaxHighlighter

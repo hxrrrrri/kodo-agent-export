@@ -1,9 +1,13 @@
 import { useEffect, useMemo, useState } from 'react'
-import { Plus, Trash2, MessageSquare, Cpu, Save, RotateCcw, Sun, Moon } from 'lucide-react'
+import { Plus, Trash2, MessageSquare, Cpu, Save, RotateCcw, Sun, Moon, PanelLeftClose } from 'lucide-react'
 import { useChat } from '../hooks/useChat'
 import { Session } from '../store/chatStore'
 import { clearApiAuthToken, getApiAuthToken, setApiAuthToken } from '../lib/api'
 import { ProviderPanel } from './ProviderPanel'
+
+type SidebarProps = {
+  onToggleCollapse?: () => void
+}
 
 function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
@@ -41,7 +45,7 @@ function renderHighlightedText(text: string, query: string): JSX.Element {
   )
 }
 
-export function Sidebar() {
+export function Sidebar({ onToggleCollapse }: SidebarProps) {
   const {
     sessions,
     sessionId,
@@ -60,12 +64,13 @@ export function Sidebar() {
     theme,
     setTheme,
     searchQuery,
+    setSearchQuery,
   } = useChat()
   const [tokenDraft, setTokenDraft] = useState('')
   const [tokenSaved, setTokenSaved] = useState(false)
   const [checkpointLabel, setCheckpointLabel] = useState('')
   const [checkpointBusy, setCheckpointBusy] = useState(false)
-  const [activeTab, setActiveTab] = useState<'sessions' | 'providers'>('sessions')
+  const [activeTab, setActiveTab] = useState<'sessions' | 'providers' | 'usage'>('sessions')
 
   useEffect(() => {
     loadModes()
@@ -138,7 +143,12 @@ export function Sidebar() {
   const usageCost = usageSummary?.totals.cost_usd_total ?? usageSummary?.totals.estimated_cost_usd ?? 0
   const usageInput = usageSummary?.totals.input_tokens ?? 0
   const usageOutput = usageSummary?.totals.output_tokens ?? 0
+  const usageTotalTokens = usageInput + usageOutput
+  const usageCacheRead = usageSummary?.totals.input_cache_read_tokens ?? 0
+  const usageCacheWrite = usageSummary?.totals.input_cache_write_tokens ?? 0
+  const usageCacheSavings = (usageCacheRead * (3.0 * 0.9)) / 1_000_000
   const normalizedSearch = searchQuery.trim().toLowerCase()
+  const usageByModelRows = Object.entries(usageSummary?.by_model || {})
 
   const visibleSessions = useMemo(() => {
     if (!normalizedSearch) return sessions
@@ -166,24 +176,59 @@ export function Sidebar() {
         borderBottom: '1px solid var(--border)',
         display: 'flex',
         alignItems: 'center',
+        justifyContent: 'space-between',
         gap: 10,
       }}>
-        <div style={{
-          width: 32, height: 32,
-          background: 'var(--accent)',
-          display: 'flex', alignItems: 'center', justifyContent: 'center',
-          borderRadius: 2,
-        }}>
-          <Cpu size={18} color="#0a0a0b" strokeWidth={2.5} />
-        </div>
-        <div>
-          <div style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 18, letterSpacing: '-0.5px' }}>
-            KŌDO
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}>
+          <div style={{
+            width: 32, height: 32,
+            background: 'var(--accent)',
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            borderRadius: 2,
+            flexShrink: 0,
+          }}>
+            <Cpu size={18} color="#0a0a0b" strokeWidth={2.5} />
           </div>
-          <div style={{ fontSize: 10, color: 'var(--text-2)', letterSpacing: '0.15em' }}>
-            AUTONOMOUS AGENT
+          <div>
+            <div style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 18, letterSpacing: '-0.5px' }}>
+              KŌDO
+            </div>
+            <div style={{ fontSize: 10, color: 'var(--text-2)', letterSpacing: '0.15em' }}>
+              AUTONOMOUS AGENT
+            </div>
           </div>
         </div>
+
+        <button
+          type="button"
+          onClick={onToggleCollapse}
+          aria-label="Collapse sidebar"
+          title="Collapse sidebar"
+          style={{
+            border: '1px solid var(--border)',
+            background: 'var(--bg-2)',
+            color: 'var(--text-1)',
+            borderRadius: 'var(--radius)',
+            width: 28,
+            height: 28,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            cursor: 'pointer',
+            flexShrink: 0,
+            transition: 'all 150ms ease',
+          }}
+          onMouseEnter={(event) => {
+            event.currentTarget.style.borderColor = 'var(--accent)'
+            event.currentTarget.style.color = 'var(--accent)'
+          }}
+          onMouseLeave={(event) => {
+            event.currentTarget.style.borderColor = 'var(--border)'
+            event.currentTarget.style.color = 'var(--text-1)'
+          }}
+        >
+          <PanelLeftClose size={14} />
+        </button>
       </div>
 
       {/* New chat button */}
@@ -256,6 +301,23 @@ export function Sidebar() {
         >
           PROVIDERS
         </button>
+        <button
+          onClick={() => setActiveTab('usage')}
+          style={{
+            flex: 1,
+            background: activeTab === 'usage' ? 'var(--bg-3)' : 'var(--bg-2)',
+            border: `1px solid ${activeTab === 'usage' ? 'var(--border-bright)' : 'var(--border)'}`,
+            color: activeTab === 'usage' ? 'var(--text-0)' : 'var(--text-1)',
+            borderRadius: 'var(--radius)',
+            cursor: 'pointer',
+            padding: '6px 8px',
+            fontSize: 10,
+            fontFamily: 'var(--font-mono)',
+            letterSpacing: '0.08em',
+          }}
+        >
+          USAGE
+        </button>
       </div>
 
       {/* Sessions list */}
@@ -266,6 +328,26 @@ export function Sidebar() {
       }}>
         {activeTab === 'sessions' && (
           <>
+            <div style={{ padding: '0 4px 8px' }}>
+              <input
+                type="text"
+                value={searchQuery}
+                onChange={(event) => setSearchQuery(event.target.value)}
+                placeholder="Search sessions..."
+                style={{
+                  width: '100%',
+                  background: 'var(--bg-2)',
+                  border: '1px solid var(--border)',
+                  color: 'var(--text-0)',
+                  borderRadius: 'var(--radius)',
+                  padding: '6px 8px',
+                  fontSize: 11,
+                  fontFamily: 'var(--font-mono)',
+                  outline: 'none',
+                }}
+              />
+            </div>
+
             {sessions.length === 0 && (
               <div style={{ padding: '16px 8px', color: 'var(--text-2)', fontSize: 12, textAlign: 'center' }}>
                 No sessions yet.<br />Start a conversation.
@@ -393,6 +475,150 @@ export function Sidebar() {
         )}
 
         {activeTab === 'providers' && <ProviderPanel />}
+
+        {activeTab === 'usage' && (
+          <div style={{ padding: '6px 8px', display: 'grid', gap: 10 }}>
+            {!usageSummary ? (
+              <div style={{
+                padding: '12px 10px',
+                border: '1px dashed var(--border-bright)',
+                borderRadius: 'var(--radius)',
+                color: 'var(--text-2)',
+                fontSize: 11,
+              }}>
+                No usage data yet. Start a conversation to see cost tracking.
+              </div>
+            ) : (
+              <>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(120px, 1fr))', gap: 8 }}>
+                  <div style={{
+                    border: '1px solid var(--border)',
+                    borderRadius: 'var(--radius)',
+                    background: 'var(--bg-2)',
+                    padding: '8px 10px',
+                    display: 'grid',
+                    gap: 4,
+                  }}>
+                    <div style={{ fontSize: 10, color: 'var(--text-2)', letterSpacing: '0.05em' }}>TOTAL TOKENS (7D)</div>
+                    <div style={{ fontSize: 13, color: 'var(--text-0)', fontFamily: 'var(--font-mono)' }}>
+                      {usageTotalTokens.toLocaleString()}
+                    </div>
+                  </div>
+
+                  <div style={{
+                    border: '1px solid var(--border)',
+                    borderRadius: 'var(--radius)',
+                    background: 'var(--bg-2)',
+                    padding: '8px 10px',
+                    display: 'grid',
+                    gap: 4,
+                  }}>
+                    <div style={{ fontSize: 10, color: 'var(--text-2)', letterSpacing: '0.05em' }}>ESTIMATED COST</div>
+                    <div style={{ fontSize: 13, color: 'var(--text-0)', fontFamily: 'var(--font-mono)' }}>
+                      ${usageCost.toFixed(4)}
+                    </div>
+                  </div>
+                </div>
+
+                <div style={{
+                  border: '1px solid var(--border)',
+                  borderRadius: 'var(--radius)',
+                  background: 'var(--bg-2)',
+                  padding: 8,
+                }}>
+                  <div style={{ overflowX: 'auto' }}>
+                    <table style={{ fontSize: 11, borderCollapse: 'collapse', width: '100%', tableLayout: 'fixed' }}>
+                      <thead>
+                        <tr>
+                          <th style={{ width: '34%', textAlign: 'left', padding: '4px 8px', borderBottom: '0.5px solid var(--border)', color: 'var(--text-2)' }}>Model</th>
+                          <th style={{ width: '22%', textAlign: 'right', padding: '4px 8px', borderBottom: '0.5px solid var(--border)', color: 'var(--text-2)' }}>Input</th>
+                          <th style={{ width: '22%', textAlign: 'right', padding: '4px 8px', borderBottom: '0.5px solid var(--border)', color: 'var(--text-2)' }}>Output</th>
+                          <th style={{ width: '22%', textAlign: 'right', padding: '4px 8px', borderBottom: '0.5px solid var(--border)', color: 'var(--text-2)' }}>Est. cost</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {usageByModelRows.length === 0 && (
+                          <tr>
+                            <td colSpan={4} style={{ padding: '8px', color: 'var(--text-2)', fontSize: 11 }}>
+                              No model usage events yet.
+                            </td>
+                          </tr>
+                        )}
+                        {usageByModelRows.map(([model, row]) => {
+                          const rowCost = row.cost_usd_total ?? row.estimated_cost_usd ?? 0
+                          return (
+                            <tr key={model}>
+                              <td
+                                style={{
+                                  padding: '4px 8px',
+                                  borderBottom: '0.5px solid var(--border)',
+                                  color: 'var(--text-1)',
+                                  overflowWrap: 'anywhere',
+                                }}
+                              >
+                                {model}
+                              </td>
+                              <td
+                                style={{
+                                  padding: '4px 8px',
+                                  borderBottom: '0.5px solid var(--border)',
+                                  textAlign: 'right',
+                                  color: 'var(--text-1)',
+                                  whiteSpace: 'nowrap',
+                                  fontVariantNumeric: 'tabular-nums',
+                                }}
+                              >
+                                {row.input_tokens.toLocaleString()}
+                              </td>
+                              <td
+                                style={{
+                                  padding: '4px 8px',
+                                  borderBottom: '0.5px solid var(--border)',
+                                  textAlign: 'right',
+                                  color: 'var(--text-1)',
+                                  whiteSpace: 'nowrap',
+                                  fontVariantNumeric: 'tabular-nums',
+                                }}
+                              >
+                                {row.output_tokens.toLocaleString()}
+                              </td>
+                              <td
+                                style={{
+                                  padding: '4px 8px',
+                                  borderBottom: '0.5px solid var(--border)',
+                                  textAlign: 'right',
+                                  color: 'var(--text-1)',
+                                  whiteSpace: 'nowrap',
+                                  fontVariantNumeric: 'tabular-nums',
+                                }}
+                              >
+                                ${rowCost.toFixed(4)}
+                              </td>
+                            </tr>
+                          )
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+
+                {(usageCacheRead > 0 || usageCacheWrite > 0) && (
+                  <div style={{
+                    border: '1px solid var(--border)',
+                    borderRadius: 'var(--radius)',
+                    background: 'var(--bg-2)',
+                    color: 'var(--text-2)',
+                    padding: '8px 10px',
+                    fontSize: 11,
+                    fontFamily: 'var(--font-mono)',
+                  }}>
+                    Cache reads: {usageCacheRead.toLocaleString()} tokens · Saved ~${usageCacheSavings.toFixed(4)}
+                  </div>
+                )}
+              </>
+            )}
+          </div>
+        )}
       </div>
 
       {/* Footer */}

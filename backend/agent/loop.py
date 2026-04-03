@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import time
@@ -38,6 +39,10 @@ def _env_int(name: str, default: int, minimum: int) -> int:
 MAX_CONTEXT_MESSAGES = _env_int("MAX_CONTEXT_MESSAGES", 50, 1)
 ENABLE_PROMPT_CACHE = os.getenv("KODO_ENABLE_PROMPT_CACHE", "0").strip().lower() in {"1", "true", "yes", "on"}
 N_CACHE_MESSAGES = _env_int("N_CACHE_MESSAGES", 4, 1)
+
+
+def _streaming_tools_enabled() -> bool:
+    return feature_enabled("STREAMING_TOOLS")
 
 
 @dataclass
@@ -773,26 +778,67 @@ class AgentLoop:
             for tc in tool_calls:
                 tool_name = tc["name"]
                 tool_input = tc["input"]
+                tool_use_id = str(tc.get("id") or f"tool-{int(time.time() * 1000)}")
                 tool = TOOL_MAP.get(tool_name)
 
                 if not tool:
                     result = ToolResult(success=False, output="", error=f"Unknown tool: {tool_name}")
-                    yield {"type": "tool_result", "tool": tool_name, "output": result.error, "success": False}
+                    yield {
+                        "type": "tool_result",
+                        "tool": tool_name,
+                        "tool_use_id": tool_use_id,
+                        "output": result.error,
+                        "success": False,
+                    }
                 else:
                     approved, reason = await self.permission_checker.check(tool, **tool_input)
-                    yield {"type": "tool_start", "tool": tool_name, "input": tool_input, "approved": approved}
+                    yield {
+                        "type": "tool_start",
+                        "tool": tool_name,
+                        "tool_use_id": tool_use_id,
+                        "input": tool_input,
+                        "approved": approved,
+                    }
 
                     if not approved:
                         result = ToolResult(success=False, output="", error=f"Operation denied: {reason}")
                     else:
                         try:
-                            result = await tool.execute(**tool_input)
+                            if tool_name == "bash" and _streaming_tools_enabled():
+                                line_queue: asyncio.Queue[str | None] = asyncio.Queue()
+
+                                async def _on_bash_output(line: str) -> None:
+                                    await line_queue.put(line)
+
+                                async def _run_streaming_bash() -> ToolResult:
+                                    try:
+                                        return await tool.execute(**tool_input, on_output=_on_bash_output)
+                                    except TypeError:
+                                        # Streaming callback unsupported: fallback to batch mode.
+                                        return await tool.execute(**tool_input)
+                                    finally:
+                                        await line_queue.put(None)
+
+                                bash_task = asyncio.create_task(_run_streaming_bash())
+                                while True:
+                                    streamed_line = await line_queue.get()
+                                    if streamed_line is None:
+                                        break
+                                    yield {
+                                        "type": "tool_output",
+                                        "tool_use_id": tool_use_id,
+                                        "line": streamed_line,
+                                    }
+                                result = await bash_task
+                            else:
+                                result = await tool.execute(**tool_input)
                         except Exception as exc:
                             result = ToolResult(success=False, output="", error=f"Tool error: {exc}")
 
                     yield {
                         "type": "tool_result",
                         "tool": tool_name,
+                        "tool_use_id": tool_use_id,
                         "output": result.output if result.success else result.error,
                         "success": result.success,
                         "metadata": result.metadata,
@@ -801,7 +847,7 @@ class AgentLoop:
                 messages.append(
                     {
                         "role": "tool",
-                        "tool_call_id": tc["id"],
+                        "tool_call_id": tool_use_id,
                         "content": result.output if result.success else f"Error: {result.error}",
                     }
                 )
@@ -884,26 +930,67 @@ class AgentLoop:
             for tc in tool_calls:
                 tool_name = tc["name"]
                 tool_input = tc["input"]
+                tool_use_id = str(tc.get("id") or f"tool-{int(time.time() * 1000)}")
                 tool = TOOL_MAP.get(tool_name)
 
                 if not tool:
                     result = ToolResult(success=False, output="", error=f"Unknown tool: {tool_name}")
-                    yield {"type": "tool_result", "tool": tool_name, "output": result.error, "success": False}
+                    yield {
+                        "type": "tool_result",
+                        "tool": tool_name,
+                        "tool_use_id": tool_use_id,
+                        "output": result.error,
+                        "success": False,
+                    }
                 else:
                     approved, reason = await self.permission_checker.check(tool, **tool_input)
-                    yield {"type": "tool_start", "tool": tool_name, "input": tool_input, "approved": approved}
+                    yield {
+                        "type": "tool_start",
+                        "tool": tool_name,
+                        "tool_use_id": tool_use_id,
+                        "input": tool_input,
+                        "approved": approved,
+                    }
 
                     if not approved:
                         result = ToolResult(success=False, output="", error=f"Operation denied: {reason}")
                     else:
                         try:
-                            result = await tool.execute(**tool_input)
+                            if tool_name == "bash" and _streaming_tools_enabled():
+                                line_queue: asyncio.Queue[str | None] = asyncio.Queue()
+
+                                async def _on_bash_output(line: str) -> None:
+                                    await line_queue.put(line)
+
+                                async def _run_streaming_bash() -> ToolResult:
+                                    try:
+                                        return await tool.execute(**tool_input, on_output=_on_bash_output)
+                                    except TypeError:
+                                        # Streaming callback unsupported: fallback to batch mode.
+                                        return await tool.execute(**tool_input)
+                                    finally:
+                                        await line_queue.put(None)
+
+                                bash_task = asyncio.create_task(_run_streaming_bash())
+                                while True:
+                                    streamed_line = await line_queue.get()
+                                    if streamed_line is None:
+                                        break
+                                    yield {
+                                        "type": "tool_output",
+                                        "tool_use_id": tool_use_id,
+                                        "line": streamed_line,
+                                    }
+                                result = await bash_task
+                            else:
+                                result = await tool.execute(**tool_input)
                         except Exception as exc:
                             result = ToolResult(success=False, output="", error=f"Tool error: {exc}")
 
                     yield {
                         "type": "tool_result",
                         "tool": tool_name,
+                        "tool_use_id": tool_use_id,
                         "output": result.output if result.success else result.error,
                         "success": result.success,
                         "metadata": result.metadata,
@@ -912,7 +999,7 @@ class AgentLoop:
                 tool_result_blocks.append(
                     {
                         "type": "tool_result",
-                        "tool_use_id": tc["id"],
+                        "tool_use_id": tool_use_id,
                         "content": result.output if result.success else f"Error: {result.error}",
                         "is_error": not result.success,
                     }

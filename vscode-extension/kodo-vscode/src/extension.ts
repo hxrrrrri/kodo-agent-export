@@ -38,6 +38,18 @@ function postPanelStatus(text: string): void {
   void panel.webview.postMessage({ type: 'status', text })
 }
 
+function resolveTheme(theme: vscode.ColorTheme): 'dark' | 'light' {
+  return theme.kind !== vscode.ColorThemeKind.Light ? 'dark' : 'light'
+}
+
+function postPanelTheme(targetPanel: vscode.WebviewPanel | null): void {
+  if (!targetPanel) return
+  const initialTheme = resolveTheme(vscode.window.activeColorTheme)
+  setTimeout(() => {
+    void targetPanel.webview.postMessage({ type: 'set-theme', theme: initialTheme })
+  }, 0)
+}
+
 function buildPanelHtml(serverUrl: string): string {
   return `<!DOCTYPE html>
 <html lang="en">
@@ -139,6 +151,15 @@ function buildPanelHtml(serverUrl: string): string {
         if (!message || typeof message !== 'object') return;
         if (message.type === 'status' && typeof message.text === 'string') {
           statusEl.textContent = message.text;
+          return;
+        }
+        if (message.type === 'set-theme' && typeof message.theme === 'string') {
+          document.documentElement.setAttribute('data-theme', message.theme);
+          try { localStorage.setItem('kodo_theme', message.theme); } catch (_) {}
+          const frame = document.getElementById('kodo-frame');
+          if (frame && frame.contentWindow) {
+            frame.contentWindow.postMessage({ type: 'set-theme', theme: message.theme }, '*');
+          }
         }
       });
     </script>
@@ -151,6 +172,7 @@ function ensurePanel(context: vscode.ExtensionContext, output: vscode.OutputChan
   if (panel) {
     panel.reveal(vscode.ViewColumn.One)
     panel.webview.html = buildPanelHtml(config.serverUrl)
+    postPanelTheme(panel)
     return panel
   }
 
@@ -165,6 +187,7 @@ function ensurePanel(context: vscode.ExtensionContext, output: vscode.OutputChan
   )
 
   panel.webview.html = buildPanelHtml(config.serverUrl)
+  postPanelTheme(panel)
   panel.onDidDispose(() => {
     panel = null
   })
@@ -344,7 +367,11 @@ export function activate(context: vscode.ExtensionContext): void {
       if (!event.affectsConfiguration('kodo')) return
       if (!panel) return
       panel.webview.html = buildPanelHtml(getConfig().serverUrl)
+      postPanelTheme(panel)
       postPanelStatus('KODO settings updated')
+    }),
+    vscode.window.onDidChangeActiveColorTheme(() => {
+      postPanelTheme(panel)
     }),
   )
 

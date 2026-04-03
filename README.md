@@ -13,16 +13,32 @@ KODO is a self-hosted autonomous coding agent with a FastAPI backend, tool-capab
 
 ## Feature Comparison
 
-| Area | KODO | OpenClaude | Claude Code |
+| Area | KŌDO v3 | OpenClaude | Claude Code |
 |---|---|---|---|
-| Primary UX | Web UI + API | Terminal-first CLI | Terminal-first CLI |
-| Multi-provider routing | Yes (`fixed` + `smart`) | Yes | Partial/provider-dependent |
-| Local provider discovery | Yes (Ollama, Atomic Chat) | Yes | Limited |
-| Built-in task + sub-agent APIs | Yes | Yes | Yes |
-| MCP management and calls | Yes | Yes | Yes |
-| Interactive permission hub | Yes (ask/auto/yolo + pending approvals) | Yes | Yes |
-| Browser dashboard for providers/doctor/profiles | Yes | No (CLI-centric) | No (CLI-centric) |
-| No-telemetry local mode | Yes | Build/plugin-oriented | Policy dependent |
+| Interface | Web UI + REST API | Terminal CLI | Terminal CLI |
+| Provider count | 9 (incl. DeepSeek, Groq, OpenRouter) | 7 | Anthropic only |
+| Smart routing strategies | 4 (latency/cost/balanced/quality) | 3 | None |
+| Prompt caching (Anthropic) | Yes - cache_control + savings tracked | No | Partial |
+| Context truncation | Yes (configurable) | No | Implicit |
+| Checkpoint & rollback | Yes (unique) | No | No |
+| Git tools (read-only) | Yes (whitelisted) | No | No |
+| Web search providers | 4 (Firecrawl/Tavily/SerpAPI/DDG) | 1 (Firecrawl) | No |
+| Persistent REPL (Python + Node) | Yes | No | No |
+| Diff preview for file edits | Yes (UI) | No | No |
+| Context usage bar | Yes (UI) | No | No |
+| Cache savings display | Yes (UI) | No | No |
+| Image upload in chat | Yes (base64, 4MB) | URL only | No |
+| Usage cost dashboard | Yes (by-model chart) | No | No |
+| Streaming tool output | Yes (bash live lines) | No | Partial |
+| Auto session titles | Yes | No | No |
+| VS Code extension | Yes (5 commands + theme sync) | Yes (2 commands) | Yes |
+| Slash commands | 17 commands | ~8 commands | ~15 commands |
+| Fuzzy slash suggestions | Yes (Levenshtein) | No | No |
+| Session checkpoints | Yes | No | No |
+| Security (path guard + rate limit) | Yes | No | Partial |
+| Audit logs | Yes (JSONL) | No | No |
+| Docker Compose | Yes | No | No |
+| Test suite | 13 files | Minimal | Unknown |
 
 ## Architecture
 

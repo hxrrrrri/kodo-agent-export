@@ -1,4 +1,4 @@
-import { useCallback, useRef } from 'react'
+import { useCallback, useMemo, useRef } from 'react'
 import {
   useChatStore,
   Checkpoint,
@@ -93,6 +93,24 @@ export function useChat() {
   const store = useChatStore()
   const abortRef = useRef<AbortController | null>(null)
   const activeAssistantIdRef = useRef<string | null>(null)
+
+  const filteredMessages = useMemo(() => {
+    const q = store.messageSearchQuery.trim().toLowerCase()
+    if (!q) return store.messages
+    return store.messages.filter((msg) => {
+      const inContent = msg.content.toLowerCase().includes(q)
+      const inTools = (msg.toolCalls || []).some((tc) => {
+        let inputText = ''
+        try {
+          inputText = JSON.stringify(tc.input).toLowerCase()
+        } catch {
+          inputText = ''
+        }
+        return inputText.includes(q) || String(tc.output || '').toLowerCase().includes(q)
+      })
+      return inContent || inTools
+    })
+  }, [store.messages, store.messageSearchQuery])
 
   const loadModes = useCallback(async () => {
     try {
@@ -556,6 +574,16 @@ export function useChat() {
   }, [loadCheckpoints, loadPendingPermissions, loadSessions, loadUsage, store])
 
   function handleEvent(event: Record<string, unknown>, assistantId: string) {
+    const toolUseId = typeof event.tool_use_id === 'string' ? event.tool_use_id : ''
+
+    const resolveToolCallIndex = (toolCalls: ToolCall[]): number => {
+      if (toolUseId) {
+        const idx = toolCalls.findIndex((tc) => tc.tool_use_id === toolUseId)
+        if (idx >= 0) return idx
+      }
+      return toolCalls.length - 1
+    }
+
     switch (event.type) {
       case 'text':
         store.updateMessageById(assistantId, (msg) => ({
@@ -569,6 +597,8 @@ export function useChat() {
           tool: event.tool as string,
           input: event.input as Record<string, unknown>,
           approved: event.approved as boolean,
+          tool_use_id: toolUseId || undefined,
+          streamLines: [],
         }
         store.updateMessageById(assistantId, (msg) => ({
           ...msg,
@@ -577,15 +607,32 @@ export function useChat() {
         break
       }
 
+      case 'tool_output': {
+        const line = String(event.line || '')
+        if (!line) break
+        store.updateMessageById(assistantId, (msg) => {
+          const tcs = [...(msg.toolCalls || [])]
+          const idx = resolveToolCallIndex(tcs)
+          if (idx < 0) return msg
+          const target = tcs[idx]
+          tcs[idx] = {
+            ...target,
+            streamLines: [...(target.streamLines || []), line],
+          }
+          return { ...msg, toolCalls: tcs }
+        })
+        break
+      }
+
       case 'tool_result': {
         store.updateMessageById(assistantId, (msg) => {
           const tcs = [...(msg.toolCalls || [])]
-          // Update the last tool call with result
-          const lastIdx = tcs.length - 1
-          if (lastIdx >= 0) {
-            tcs[lastIdx] = {
-              ...tcs[lastIdx],
-              output: event.output as string,
+          const idx = resolveToolCallIndex(tcs)
+          if (idx >= 0) {
+            tcs[idx] = {
+              ...tcs[idx],
+              tool_use_id: tcs[idx].tool_use_id || toolUseId || undefined,
+              output: String(event.output || ''),
               success: event.success as boolean,
               metadata: (event.metadata as Record<string, unknown>) || undefined,
             }
@@ -639,6 +686,9 @@ export function useChat() {
 
   return {
     ...store,
+    filteredMessages,
+    messageSearchQuery: store.messageSearchQuery,
+    setMessageSearchQuery: store.setMessageSearchQuery,
     sendMessage,
     loadCommands,
     loadModes,
