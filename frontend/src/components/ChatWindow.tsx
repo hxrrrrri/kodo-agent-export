@@ -1,27 +1,187 @@
-import { useEffect, useRef, useState, KeyboardEvent } from 'react'
+import { useEffect, useMemo, useRef, useState, KeyboardEvent } from 'react'
 import { Send, Square, FolderOpen, Zap } from 'lucide-react'
 import { useChat } from '../hooks/useChat'
 import { MessageBubble } from './MessageBubble'
+import { CommandDefinition } from '../store/chatStore'
 
 const EXAMPLE_PROMPTS = [
+  '/help',
+  '/cost 7',
+  '/session',
+  '/memory show',
+  '/mode',
+  '/tasks',
+  '/agents',
+  '/skills',
+  '/mcp list',
   'List all Python files in the current directory',
   'Read the contents of README.md',
   'Run the tests and show me the results',
-  'Find all TODO comments in this codebase',
-  'What is my current git status?',
-  'Fetch the latest FastAPI docs from fastapi.tiangolo.com',
 ]
 
+const FALLBACK_COMMANDS: CommandDefinition[] = [
+  { name: '/help', description: 'Show available commands' },
+  { name: '/cost [days]', description: 'Show token and estimated cost usage' },
+  { name: '/session', description: 'List recent sessions' },
+  { name: '/session current', description: 'Show current session id' },
+  { name: '/memory <text>', description: 'Append note to global memory' },
+  { name: '/memory show', description: 'Show loaded memory context' },
+  { name: '/mode', description: 'Show current session mode' },
+  { name: '/mode list', description: 'List available execution modes' },
+  { name: '/mode set <name>', description: 'Set session execution mode' },
+  { name: '/mode reset', description: 'Reset mode to default' },
+  { name: '/tasks', description: 'List recent tasks' },
+  { name: '/tasks create <prompt>', description: 'Create a background task' },
+  { name: '/tasks get <task_id>', description: 'Show task status' },
+  { name: '/tasks stop <task_id>', description: 'Stop a running task' },
+  { name: '/mcp list', description: 'List MCP server entries' },
+  { name: '/mcp add <name> <command> [args...]', description: 'Add MCP server entry' },
+  { name: '/mcp remove <name>', description: 'Remove MCP server entry' },
+  { name: '/mcp tools <name>', description: 'Show discovered/configured tools' },
+  { name: '/mcp call <name> <tool> [json_args]', description: 'Execute MCP tool' },
+  { name: '/agents', description: 'List spawned sub-agents' },
+  { name: '/agents spawn <goal>', description: 'Spawn sub-agent' },
+  { name: '/agents get <agent_id>', description: 'Show sub-agent details' },
+  { name: '/agents stop <agent_id>', description: 'Stop sub-agent' },
+  { name: '/skills', description: 'List bundled skills' },
+  { name: '/skills show <name>', description: 'Show skill content' },
+]
+
+function leadingCommandToken(value: string): string {
+  const trimmed = value.trimStart()
+  if (!trimmed.startsWith('/')) return ''
+  const first = trimmed.split(/\s+/, 1)[0]
+  return first.toLowerCase()
+}
+
+function isSubsequence(needle: string, haystack: string): boolean {
+  let i = 0
+  let j = 0
+  while (i < needle.length && j < haystack.length) {
+    if (needle[i] === haystack[j]) i += 1
+    j += 1
+  }
+  return i === needle.length
+}
+
+function levenshteinDistance(a: string, b: string, maxDistance = 3): number {
+  if (Math.abs(a.length - b.length) > maxDistance) return maxDistance + 1
+  const rows = a.length + 1
+  const cols = b.length + 1
+  const dp = Array.from({ length: rows }, () => Array<number>(cols).fill(0))
+
+  for (let i = 0; i < rows; i += 1) dp[i][0] = i
+  for (let j = 0; j < cols; j += 1) dp[0][j] = j
+
+  for (let i = 1; i < rows; i += 1) {
+    let rowMin = maxDistance + 1
+    for (let j = 1; j < cols; j += 1) {
+      const cost = a[i - 1] === b[j - 1] ? 0 : 1
+      dp[i][j] = Math.min(
+        dp[i - 1][j] + 1,
+        dp[i][j - 1] + 1,
+        dp[i - 1][j - 1] + cost,
+      )
+      rowMin = Math.min(rowMin, dp[i][j])
+    }
+    if (rowMin > maxDistance) return maxDistance + 1
+  }
+
+  return dp[rows - 1][cols - 1]
+}
+
+function commandScore(query: string, commandName: string): number {
+  if (!query.startsWith('/')) return -1
+  const queryLower = query.toLowerCase()
+  const nameLower = commandName.toLowerCase()
+  const root = nameLower.split(/\s+/, 1)[0]
+
+  if (queryLower === nameLower || queryLower === root) return 300
+  if (root.startsWith(queryLower)) return 220 - (root.length - queryLower.length)
+  if (nameLower.startsWith(queryLower)) return 200 - (nameLower.length - queryLower.length)
+  if (root.includes(queryLower)) return 160
+  if (isSubsequence(queryLower, root)) return 130
+
+  const dist = levenshteinDistance(queryLower, root, 2)
+  if (dist <= 2) return 120 - dist * 10
+
+  return -1
+}
+
+function buildCommandSuggestions(input: string, commands: CommandDefinition[]): CommandDefinition[] {
+  const token = leadingCommandToken(input)
+  if (!token) return []
+
+  const ranked = commands
+    .map((command) => ({ command, score: commandScore(token, command.name) }))
+    .filter((item) => item.score >= 0)
+    .sort((a, b) => {
+      if (b.score !== a.score) return b.score - a.score
+      return a.command.name.localeCompare(b.command.name)
+    })
+
+  return ranked.slice(0, 8).map((item) => item.command)
+}
+
 export function ChatWindow() {
-  const { messages, isLoading, error, sendMessage, stopGeneration, projectDir, setProjectDir } = useChat()
+  const {
+    messages,
+    isLoading,
+    error,
+    commands,
+    loadCommands,
+    sendMessage,
+    stopGeneration,
+    projectDir,
+    setProjectDir,
+    sessionId,
+    sessionMode,
+    availableModes,
+    setSessionMode,
+    permissionChallenges,
+    respondPermission,
+  } = useChat()
   const [input, setInput] = useState('')
   const [showProjectInput, setShowProjectInput] = useState(false)
+  const [permissionSubmitting, setPermissionSubmitting] = useState(false)
+  const [activeCommandIndex, setActiveCommandIndex] = useState(0)
   const bottomRef = useRef<HTMLDivElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
+  const commandsRequestedRef = useRef(false)
+
+  const activePermission = permissionChallenges.length > 0 ? permissionChallenges[0] : null
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [messages])
+
+  useEffect(() => {
+    if (commandsRequestedRef.current) return
+    commandsRequestedRef.current = true
+    void loadCommands()
+  }, [loadCommands])
+
+  const commandCatalog = commands.length > 0 ? commands : FALLBACK_COMMANDS
+  const commandSuggestions = useMemo(() => buildCommandSuggestions(input, commandCatalog), [input, commandCatalog])
+  const showCommandSuggestions = commandSuggestions.length > 0 && input.trimStart().startsWith('/')
+
+  useEffect(() => {
+    setActiveCommandIndex(0)
+  }, [input, showCommandSuggestions])
+
+  const applyCommandSuggestion = (name: string) => {
+    const next = `${name}${name.includes('<') ? '' : ' '}`
+    setInput(next)
+    setActiveCommandIndex(0)
+    requestAnimationFrame(() => {
+      if (!textareaRef.current) return
+      textareaRef.current.style.height = 'auto'
+      textareaRef.current.style.height = Math.min(textareaRef.current.scrollHeight, 200) + 'px'
+      textareaRef.current.focus()
+      textareaRef.current.selectionStart = textareaRef.current.value.length
+      textareaRef.current.selectionEnd = textareaRef.current.value.length
+    })
+  }
 
   const handleSend = () => {
     const msg = input.trim()
@@ -32,6 +192,21 @@ export function ChatWindow() {
   }
 
   const handleKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
+    if (showCommandSuggestions && (e.key === 'ArrowDown' || e.key === 'ArrowUp')) {
+      e.preventDefault()
+      const delta = e.key === 'ArrowDown' ? 1 : -1
+      const total = commandSuggestions.length
+      setActiveCommandIndex((prev) => (prev + delta + total) % total)
+      return
+    }
+
+    if (showCommandSuggestions && e.key === 'Tab') {
+      e.preventDefault()
+      const selected = commandSuggestions[activeCommandIndex]
+      if (selected) applyCommandSuggestion(selected.name)
+      return
+    }
+
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault()
       handleSend()
@@ -44,7 +219,22 @@ export function ChatWindow() {
     e.target.style.height = Math.min(e.target.scrollHeight, 200) + 'px'
   }
 
+  const handlePermissionDecision = async (approve: boolean, remember: boolean) => {
+    if (!activePermission || permissionSubmitting) return
+    setPermissionSubmitting(true)
+    await respondPermission(activePermission.challenge_id, approve, remember, sessionId)
+    setPermissionSubmitting(false)
+  }
+
   const isEmpty = messages.length === 0
+  const modes = availableModes.length > 0
+    ? availableModes
+    : [
+      { key: 'execute', title: 'Execute', summary: 'Balanced autonomous execution.', is_default: true },
+      { key: 'plan', title: 'Plan', summary: 'Plan-first execution.', is_default: false },
+      { key: 'debug', title: 'Debug', summary: 'Hypothesis-driven debugging.', is_default: false },
+      { key: 'review', title: 'Review', summary: 'Risk-focused code review.', is_default: false },
+    ]
 
   return (
     <div style={{
@@ -54,6 +244,7 @@ export function ChatWindow() {
       height: '100%',
       overflow: 'hidden',
       background: 'var(--bg-0)',
+      position: 'relative',
     }}>
       {/* Header */}
       <div style={{
@@ -102,6 +293,31 @@ export function ChatWindow() {
           <FolderOpen size={12} />
           {projectDir ? projectDir.split('/').pop() : 'SET PROJECT DIR'}
         </button>
+
+        <select
+          value={sessionMode || 'execute'}
+          onChange={(e) => {
+            void setSessionMode(e.target.value, sessionId)
+          }}
+          title="Session execution mode"
+          style={{
+            background: 'var(--bg-2)',
+            border: '1px solid var(--border)',
+            color: 'var(--text-1)',
+            padding: '4px 10px',
+            borderRadius: 'var(--radius)',
+            fontSize: 11,
+            fontFamily: 'var(--font-mono)',
+            cursor: 'pointer',
+            minWidth: 110,
+          }}
+        >
+          {modes.map((mode) => (
+            <option key={mode.key} value={mode.key}>
+              MODE: {mode.key.toUpperCase()}
+            </option>
+          ))}
+        </select>
 
         {/* GitHub Button */}
         <a
@@ -306,6 +522,65 @@ export function ChatWindow() {
         background: 'var(--bg-1)',
         flexShrink: 0,
       }}>
+        <div style={{ position: 'relative' }}>
+          {showCommandSuggestions && (
+            <div style={{
+              position: 'absolute',
+              left: 0,
+              right: 0,
+              bottom: 'calc(100% + 8px)',
+              background: 'var(--bg-2)',
+              border: '1px solid var(--border-bright)',
+              borderRadius: 'var(--radius)',
+              boxShadow: '0 8px 24px rgba(0, 0, 0, 0.35)',
+              overflow: 'hidden',
+              zIndex: 20,
+              maxHeight: 260,
+              overflowY: 'auto',
+            }}>
+              {commandSuggestions.map((command, idx) => {
+                const selected = idx === activeCommandIndex
+                return (
+                  <button
+                    key={command.name}
+                    type="button"
+                    onMouseEnter={() => setActiveCommandIndex(idx)}
+                    onMouseDown={(e) => {
+                      e.preventDefault()
+                      applyCommandSuggestion(command.name)
+                    }}
+                    style={{
+                      width: '100%',
+                      background: selected ? 'var(--bg-3)' : 'transparent',
+                      border: 'none',
+                      borderBottom: idx === commandSuggestions.length - 1 ? 'none' : '1px solid var(--border)',
+                      cursor: 'pointer',
+                      textAlign: 'left',
+                      padding: '9px 12px',
+                      display: 'grid',
+                      gap: 2,
+                    }}
+                  >
+                    <span style={{
+                      color: selected ? 'var(--accent)' : 'var(--text-0)',
+                      fontSize: 12,
+                      fontFamily: 'var(--font-mono)',
+                    }}>
+                      {command.name}
+                    </span>
+                    <span style={{
+                      color: 'var(--text-2)',
+                      fontSize: 10,
+                      fontFamily: 'var(--font-mono)',
+                    }}>
+                      {command.description}
+                    </span>
+                  </button>
+                )
+              })}
+            </div>
+          )}
+
         <div style={{
           display: 'flex',
           gap: 10,
@@ -324,7 +599,7 @@ export function ChatWindow() {
             value={input}
             onChange={handleTextareaChange}
             onKeyDown={handleKeyDown}
-            placeholder="Ask KŌDO anything... (Shift+Enter for newline)"
+            placeholder="Ask KŌDO anything or run /help (Shift+Enter for newline)"
             rows={1}
             style={{
               flex: 1,
@@ -358,10 +633,138 @@ export function ChatWindow() {
             {isLoading ? <Square size={15} /> : <Send size={15} />}
           </button>
         </div>
+        </div>
         <div style={{ fontSize: 10, color: 'var(--text-2)', marginTop: 6, textAlign: 'center' }}>
-          ENTER to send · SHIFT+ENTER for newline · KŌDO can read & write files, run commands, search the web
+          ENTER to send · SHIFT+ENTER for newline · TAB to autocomplete command · try /help /tasks /agents /skills /mcp /cost
         </div>
       </div>
+
+      {activePermission && (
+        <div style={{
+          position: 'absolute',
+          inset: 0,
+          background: 'rgba(0, 0, 0, 0.45)',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          zIndex: 30,
+          padding: 20,
+        }}>
+          <div style={{
+            width: '100%',
+            maxWidth: 720,
+            background: 'var(--bg-1)',
+            border: '1px solid var(--border-bright)',
+            borderRadius: 'var(--radius)',
+            boxShadow: '0 0 0 1px var(--border), 0 16px 45px rgba(0,0,0,0.35)',
+            padding: 16,
+            display: 'grid',
+            gap: 12,
+          }}>
+            <div style={{
+              fontSize: 12,
+              color: 'var(--accent)',
+              letterSpacing: '0.08em',
+              fontWeight: 700,
+            }}>
+              PERMISSION REQUIRED
+            </div>
+
+            <div style={{ fontSize: 13, color: 'var(--text-0)' }}>
+              Tool <strong>{activePermission.tool_name}</strong> requested approval.
+            </div>
+
+            <div style={{
+              fontSize: 12,
+              color: 'var(--text-2)',
+              border: '1px solid var(--border)',
+              borderRadius: 'var(--radius)',
+              background: 'var(--bg-2)',
+              padding: 10,
+              maxHeight: 160,
+              overflowY: 'auto',
+              whiteSpace: 'pre-wrap',
+              wordBreak: 'break-word',
+            }}>
+              {activePermission.input_preview || '(no preview provided)'}
+            </div>
+
+            <div style={{
+              display: 'grid',
+              gridTemplateColumns: '1fr 1fr',
+              gap: 8,
+            }}>
+              <button
+                onClick={() => handlePermissionDecision(true, false)}
+                disabled={permissionSubmitting}
+                style={{
+                  border: '1px solid var(--green)',
+                  background: 'var(--green-dim)',
+                  color: 'var(--green)',
+                  borderRadius: 'var(--radius)',
+                  padding: '8px 10px',
+                  cursor: permissionSubmitting ? 'wait' : 'pointer',
+                  fontSize: 11,
+                  fontFamily: 'var(--font-mono)',
+                }}
+              >
+                APPROVE ONCE
+              </button>
+
+              <button
+                onClick={() => handlePermissionDecision(false, false)}
+                disabled={permissionSubmitting}
+                style={{
+                  border: '1px solid var(--red)',
+                  background: 'var(--red-dim)',
+                  color: 'var(--red)',
+                  borderRadius: 'var(--radius)',
+                  padding: '8px 10px',
+                  cursor: permissionSubmitting ? 'wait' : 'pointer',
+                  fontSize: 11,
+                  fontFamily: 'var(--font-mono)',
+                }}
+              >
+                DENY ONCE
+              </button>
+
+              <button
+                onClick={() => handlePermissionDecision(true, true)}
+                disabled={permissionSubmitting}
+                style={{
+                  border: '1px solid var(--blue)',
+                  background: 'var(--blue-dim)',
+                  color: 'var(--blue)',
+                  borderRadius: 'var(--radius)',
+                  padding: '8px 10px',
+                  cursor: permissionSubmitting ? 'wait' : 'pointer',
+                  fontSize: 11,
+                  fontFamily: 'var(--font-mono)',
+                }}
+              >
+                APPROVE + REMEMBER
+              </button>
+
+              <button
+                onClick={() => handlePermissionDecision(false, true)}
+                disabled={permissionSubmitting}
+                style={{
+                  border: '1px solid var(--border)',
+                  background: 'var(--bg-2)',
+                  color: 'var(--text-1)',
+                  borderRadius: 'var(--radius)',
+                  padding: '8px 10px',
+                  cursor: permissionSubmitting ? 'wait' : 'pointer',
+                  fontSize: 11,
+                  fontFamily: 'var(--font-mono)',
+                }}
+              >
+                DENY + REMEMBER
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

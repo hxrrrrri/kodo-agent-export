@@ -86,6 +86,10 @@ MEMORY_RATE_LIMITER = SlidingWindowRateLimiter(
     max_requests=max(1, int(os.getenv("RATE_LIMIT_MEMORY_PER_MINUTE", "10"))),
     window_seconds=60,
 )
+COMMANDS_RATE_LIMITER = SlidingWindowRateLimiter(
+    max_requests=max(1, int(os.getenv("RATE_LIMIT_COMMANDS_PER_MINUTE", "120"))),
+    window_seconds=60,
+)
 
 
 async def enforce_rate_limit(request: Request, limiter: SlidingWindowRateLimiter, scope: str) -> None:

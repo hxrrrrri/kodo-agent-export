@@ -8,6 +8,7 @@ export function Sidebar() {
   const {
     sessions,
     sessionId,
+    loadModes,
     loadSessions,
     loadSession,
     newSession,
@@ -19,6 +20,7 @@ export function Sidebar() {
   const [tokenSaved, setTokenSaved] = useState(false)
 
   useEffect(() => {
+    loadModes()
     loadSessions()
     loadUsage()
     setTokenDraft(getApiAuthToken())
@@ -277,7 +279,7 @@ function SessionItem({
           {session.title || 'Untitled'}
         </div>
         <div style={{ fontSize: 10, color: 'var(--text-2)', marginTop: 2 }}>
-          {formatDate(session.updated_at)} · {session.message_count} msgs
+          {formatDate(session.updated_at)} · {session.message_count} msgs{session.mode ? ` · ${session.mode}` : ''}
         </div>
       </div>
       <button

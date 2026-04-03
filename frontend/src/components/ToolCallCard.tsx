@@ -10,6 +10,7 @@ const TOOL_ICONS: Record<string, React.ReactNode> = {
   grep: <Search size={13} />,
   glob: <Search size={13} />,
   web_fetch: <Globe size={13} />,
+  mcp_tool_call: <Terminal size={13} />,
 }
 
 const TOOL_COLORS: Record<string, string> = {
@@ -20,6 +21,7 @@ const TOOL_COLORS: Record<string, string> = {
   grep: 'var(--green)',
   glob: 'var(--green)',
   web_fetch: 'var(--blue)',
+  mcp_tool_call: 'var(--blue)',
 }
 
 function getInputPreview(tool: string, input: Record<string, unknown>): string {
@@ -31,6 +33,7 @@ function getInputPreview(tool: string, input: Record<string, unknown>): string {
     case 'grep': return `"${input.pattern}" in ${input.path || '.'}`
     case 'glob': return String(input.pattern || '')
     case 'web_fetch': return String(input.url || '')
+    case 'mcp_tool_call': return `${String(input.server_name || '')}:${String(input.tool_name || '')}`
     default: return JSON.stringify(input).slice(0, 60)
   }
 }

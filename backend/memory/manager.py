@@ -3,6 +3,7 @@ import json
 import aiofiles
 from datetime import datetime
 from pathlib import Path
+from typing import Any
 
 
 KODO_DIR = Path.home() / ".kodo"
@@ -61,10 +62,25 @@ class MemoryManager:
 
     async def save_session(self, session_id: str, messages: list[dict], metadata: dict | None = None):
         session_file = SESSIONS_DIR / f"{session_id}.json"
+        merged_metadata: dict[str, Any] = {}
+
+        if session_file.exists():
+            try:
+                async with aiofiles.open(session_file, "r") as f:
+                    existing = json.loads(await f.read())
+                existing_metadata = existing.get("metadata", {}) if isinstance(existing, dict) else {}
+                if isinstance(existing_metadata, dict):
+                    merged_metadata.update(existing_metadata)
+            except Exception:
+                merged_metadata = {}
+
+        if isinstance(metadata, dict):
+            merged_metadata.update(metadata)
+
         data = {
             "session_id": session_id,
             "updated_at": datetime.utcnow().isoformat(),
-            "metadata": metadata or {},
+            "metadata": merged_metadata,
             "messages": messages,
         }
         async with aiofiles.open(session_file, "w") as f:
@@ -78,6 +94,57 @@ class MemoryManager:
             data = json.loads(await f.read())
         return data.get("messages", [])
 
+    async def load_session_payload(self, session_id: str) -> dict[str, Any] | None:
+        session_file = SESSIONS_DIR / f"{session_id}.json"
+        if not session_file.exists():
+            return None
+        async with aiofiles.open(session_file, "r") as f:
+            data = json.loads(await f.read())
+        if not isinstance(data, dict):
+            return None
+        return data
+
+    async def get_session_metadata(self, session_id: str) -> dict[str, Any]:
+        payload = await self.load_session_payload(session_id)
+        if payload is None:
+            return {}
+        metadata = payload.get("metadata", {})
+        return metadata if isinstance(metadata, dict) else {}
+
+    async def update_session_metadata(
+        self,
+        session_id: str,
+        updates: dict[str, Any],
+        *,
+        create_if_missing: bool = True,
+    ) -> dict[str, Any]:
+        payload = await self.load_session_payload(session_id)
+        if payload is None:
+            if not create_if_missing:
+                raise ValueError("Session not found")
+            payload = {
+                "session_id": session_id,
+                "metadata": {},
+                "messages": [],
+            }
+
+        metadata = payload.get("metadata", {})
+        if not isinstance(metadata, dict):
+            metadata = {}
+
+        for key, value in updates.items():
+            if value is None:
+                metadata.pop(str(key), None)
+            else:
+                metadata[str(key)] = value
+
+        await self.save_session(
+            session_id=session_id,
+            messages=payload.get("messages", []),
+            metadata=metadata,
+        )
+        return metadata
+
     async def list_sessions(self) -> list[dict]:
         sessions = []
         for f in sorted(SESSIONS_DIR.glob("*.json"), key=lambda x: x.stat().st_mtime, reverse=True):
@@ -89,6 +156,7 @@ class MemoryManager:
                     "updated_at": data.get("updated_at", ""),
                     "message_count": len(data.get("messages", [])),
                     "title": data.get("metadata", {}).get("title", "Untitled"),
+                    "mode": data.get("metadata", {}).get("mode", "execute"),
                 })
             except Exception:
                 continue
@@ -107,6 +175,40 @@ class MemoryManager:
         note = f"\n## Note [{timestamp}]\n{content}\n"
         async with aiofiles.open(GLOBAL_MEMORY_FILE, "a") as f:
             await f.write(note)
+
+    async def import_session_payload(
+        self,
+        payload: dict[str, Any],
+        override_session_id: str | None = None,
+    ) -> str:
+        messages = payload.get("messages", [])
+        metadata = payload.get("metadata", {})
+        session_id = (override_session_id or payload.get("session_id") or "").strip()
+
+        if not session_id:
+            session_id = datetime.utcnow().strftime("imported-%Y%m%d%H%M%S")
+
+        if not isinstance(messages, list):
+            raise ValueError("messages must be a list")
+
+        normalized_messages: list[dict[str, Any]] = []
+        for item in messages:
+            if not isinstance(item, dict):
+                continue
+            role = str(item.get("role", "")).strip()
+            content = item.get("content", "")
+            if role not in {"user", "assistant", "system"}:
+                continue
+            if not isinstance(content, str):
+                content = str(content)
+            normalized_messages.append({"role": role, "content": content})
+
+        await self.save_session(
+            session_id=session_id,
+            messages=normalized_messages,
+            metadata=metadata if isinstance(metadata, dict) else {},
+        )
+        return session_id
 
 
 memory_manager = MemoryManager()

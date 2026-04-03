@@ -1,5 +1,12 @@
 import { useCallback, useRef } from 'react'
-import { useChatStore, Message, ToolCall } from '../store/chatStore'
+import {
+  useChatStore,
+  CommandDefinition,
+  Message,
+  ModeOption,
+  PermissionChallenge,
+  ToolCall,
+} from '../store/chatStore'
 import { buildApiHeaders, parseApiError } from '../lib/api'
 
 const API = '/api/chat'
@@ -11,6 +18,85 @@ function genId() {
 export function useChat() {
   const store = useChatStore()
   const abortRef = useRef<AbortController | null>(null)
+
+  const loadModes = useCallback(async () => {
+    try {
+      const res = await fetch(`${API}/modes`, {
+        headers: buildApiHeaders(),
+      })
+      if (!res.ok) {
+        throw new Error(await parseApiError(res))
+      }
+      const data = await res.json()
+      const modes = (data.modes || []) as ModeOption[]
+      store.setAvailableModes(modes)
+      if (!store.sessionMode) {
+        store.setSessionMode((data.default_mode as string) || 'execute')
+      }
+    } catch (e) {
+      console.error('Failed to load modes', e)
+      store.setAvailableModes([])
+    }
+  }, [store])
+
+  const loadCommands = useCallback(async () => {
+    try {
+      const res = await fetch(`${API}/commands`, {
+        headers: buildApiHeaders(),
+      })
+      if (!res.ok) {
+        throw new Error(await parseApiError(res))
+      }
+      const data = await res.json()
+      useChatStore.getState().setCommands((data.commands || []) as CommandDefinition[])
+    } catch (e) {
+      console.error('Failed to load commands', e)
+      useChatStore.getState().setCommands([])
+    }
+  }, [])
+
+  const loadPendingPermissions = useCallback(async (sessionId?: string | null) => {
+    const sid = (sessionId ?? store.sessionId) || ''
+    if (!sid) {
+      store.setPermissionChallenges([])
+      return
+    }
+
+    try {
+      const res = await fetch(`${API}/permissions/pending?session_id=${encodeURIComponent(sid)}`, {
+        headers: buildApiHeaders(),
+      })
+      if (!res.ok) {
+        throw new Error(await parseApiError(res))
+      }
+      const data = await res.json()
+      store.setPermissionChallenges((data.pending || []) as PermissionChallenge[])
+    } catch (e) {
+      console.error('Failed to load pending permissions', e)
+    }
+  }, [store])
+
+  const respondPermission = useCallback(async (
+    challengeId: string,
+    approve: boolean,
+    remember: boolean,
+    sessionId?: string | null,
+  ) => {
+    try {
+      const res = await fetch(`${API}/permissions/${encodeURIComponent(challengeId)}/decision`, {
+        method: 'POST',
+        headers: buildApiHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify({ approve, remember }),
+      })
+      if (!res.ok) {
+        throw new Error(await parseApiError(res))
+      }
+      await loadPendingPermissions(sessionId ?? store.sessionId)
+    } catch (e) {
+      console.error('Failed to submit permission decision', e)
+      store.setError(String(e))
+    }
+  }, [loadPendingPermissions, store])
 
   const loadUsage = useCallback(async () => {
     try {
@@ -63,8 +149,35 @@ export function useChat() {
           timestamp: Date.now(),
         }))
       store.setMessages(messages)
+      const metadata = data.metadata as { mode?: string } | undefined
+      const mode = metadata?.mode || 'execute'
+      store.setSessionMode(mode)
     } catch (e) {
       console.error('Failed to load session', e)
+    }
+  }, [store])
+
+  const setSessionMode = useCallback(async (mode: string, targetSessionId?: string | null) => {
+    const normalized = mode.trim() || 'execute'
+    store.setSessionMode(normalized)
+
+    const sid = targetSessionId ?? store.sessionId
+    if (!sid) return
+
+    try {
+      const res = await fetch(`${API}/sessions/${encodeURIComponent(sid)}/mode`, {
+        method: 'POST',
+        headers: buildApiHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify({ mode: normalized }),
+      })
+      if (!res.ok) {
+        throw new Error(await parseApiError(res))
+      }
+      const data = await res.json()
+      store.setSessionMode((data.mode as string) || normalized)
+    } catch (e) {
+      console.error('Failed to set session mode', e)
+      store.setError(String(e))
     }
   }, [store])
 
@@ -79,6 +192,7 @@ export function useChat() {
       }
       const data = await res.json()
       store.setSessionId(data.session_id)
+      store.setSessionMode('execute')
       store.clearMessages()
     } catch (e) {
       console.error('Failed to create session', e)
@@ -138,6 +252,7 @@ export function useChat() {
     store.addMessage(assistantMsg)
 
     let sessionId = store.sessionId
+    let permissionPollTimer: ReturnType<typeof window.setInterval> | null = null
     if (!sessionId) {
       const res = await fetch(`${API}/new-session`, {
         method: 'POST',
@@ -152,6 +267,11 @@ export function useChat() {
     }
 
     try {
+      await loadPendingPermissions(sessionId)
+      permissionPollTimer = window.setInterval(() => {
+        void loadPendingPermissions(sessionId)
+      }, 1000)
+
       const response = await fetch(`${API}/send`, {
         method: 'POST',
         headers: buildApiHeaders({ 'Content-Type': 'application/json' }),
@@ -159,6 +279,7 @@ export function useChat() {
           message: content,
           session_id: sessionId,
           project_dir: store.projectDir || null,
+          mode: store.sessionMode || 'execute',
         }),
         signal: abortRef.current.signal,
       })
@@ -203,12 +324,16 @@ export function useChat() {
         content: msg.content || 'An error occurred.',
       }))
     } finally {
+      if (permissionPollTimer !== null) {
+        window.clearInterval(permissionPollTimer)
+      }
       store.setLoading(false)
       store.updateLastMessage((msg) => ({ ...msg, isStreaming: false }))
       loadSessions()
       loadUsage()
+      loadPendingPermissions(sessionId)
     }
-  }, [loadSessions, loadUsage, store])
+  }, [loadPendingPermissions, loadSessions, loadUsage, store])
 
   function handleEvent(event: Record<string, unknown>, _assistantId: string) {
     switch (event.type) {
@@ -268,6 +393,14 @@ export function useChat() {
 
       case 'meta':
         // Metadata event currently includes request/session identifiers.
+        if (typeof event.mode === 'string' && event.mode.trim()) {
+          store.setSessionMode(event.mode)
+        }
+        break
+
+      case 'permission_request':
+        // Reserved for future server-pushed permission events.
+        void loadPendingPermissions(store.sessionId)
         break
     }
   }
@@ -276,16 +409,22 @@ export function useChat() {
     abortRef.current?.abort()
     store.setLoading(false)
     store.updateLastMessage((msg) => ({ ...msg, isStreaming: false }))
-  }, [])
+    void loadPendingPermissions(store.sessionId)
+  }, [loadPendingPermissions, store])
 
   return {
     ...store,
     sendMessage,
+    loadCommands,
+    loadModes,
     loadSessions,
     loadSession,
+    setSessionMode,
     newSession,
     deleteSession,
     loadUsage,
+    loadPendingPermissions,
+    respondPermission,
     stopGeneration,
   }
 }

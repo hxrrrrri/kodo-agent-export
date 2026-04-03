@@ -1,6 +1,7 @@
 import asyncio
 import os
 import re
+import subprocess
 from .base import BaseTool, ToolResult
 from .path_guard import enforce_allowed_path
 
@@ -56,6 +57,12 @@ class BashTool(BaseTool):
         "required": ["command"],
     }
 
+    def prompt(self) -> str:
+        return (
+            "Use for shell automation and diagnostics. Prefer non-destructive commands, "
+            "and keep execution scoped to the intended project directory."
+        )
+
     def is_dangerous(self, command: str = "", **kwargs) -> bool:
         for pattern in DANGEROUS_PATTERNS:
             if re.search(pattern, command, re.IGNORECASE):
@@ -71,7 +78,7 @@ class BashTool(BaseTool):
     async def execute(self, command: str, timeout: int = 30, cwd: str | None = None, **kwargs) -> ToolResult:
         timeout = min(timeout, 120)
         try:
-            effective_cwd = enforce_allowed_path(cwd or os.getcwd())
+            effective_cwd = enforce_allowed_path(cwd or ".")
         except ValueError as e:
             return ToolResult(success=False, output="", error=str(e))
 
@@ -79,13 +86,29 @@ class BashTool(BaseTool):
             return ToolResult(success=False, output="", error=f"Working directory not found: {effective_cwd}")
 
         try:
-            proc = await asyncio.create_subprocess_shell(
-                command,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-                cwd=effective_cwd,
-            )
-            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+            try:
+                proc = await asyncio.create_subprocess_shell(
+                    command,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                    cwd=effective_cwd,
+                )
+                stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+                return_code = proc.returncode
+            except NotImplementedError:
+                # Some Windows event loop policies do not support asyncio subprocesses.
+                completed = await asyncio.to_thread(
+                    subprocess.run,
+                    command,
+                    shell=True,
+                    capture_output=True,
+                    cwd=effective_cwd,
+                    timeout=timeout,
+                )
+                stdout = completed.stdout or b""
+                stderr = completed.stderr or b""
+                return_code = completed.returncode
+
             out = stdout.decode("utf-8", errors="replace")
             err = stderr.decode("utf-8", errors="replace")
 
@@ -98,12 +121,13 @@ class BashTool(BaseTool):
                 combined = combined[:20000] + "\n... [output truncated]"
 
             return ToolResult(
-                success=proc.returncode == 0,
+                success=return_code == 0,
                 output=combined or "(no output)",
-                error=None if proc.returncode == 0 else f"Exit code: {proc.returncode}",
-                metadata={"exit_code": proc.returncode, "cwd": effective_cwd},
+                error=None if return_code == 0 else f"Exit code: {return_code}",
+                metadata={"exit_code": return_code, "cwd": effective_cwd},
             )
-        except asyncio.TimeoutError:
+        except (asyncio.TimeoutError, subprocess.TimeoutExpired):
             return ToolResult(success=False, output="", error=f"Command timed out after {timeout}s")
         except Exception as e:
-            return ToolResult(success=False, output="", error=str(e))
+            msg = str(e).strip() or e.__class__.__name__
+            return ToolResult(success=False, output="", error=msg)

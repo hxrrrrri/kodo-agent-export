@@ -5,30 +5,17 @@ from typing import Any, AsyncGenerator
 from anthropic import AsyncAnthropic
 from openai import AsyncOpenAI
 
+from agent.modes import normalize_mode
 from agent.permissions import get_permission_checker
-from memory.manager import memory_manager
+from agent.prompt_builder import build_system_prompt
 from tools import ALL_TOOLS, TOOL_MAP, ToolResult
+from tools.path_guard import project_dir_context
 
 DEFAULT_OPENAI_MODEL = "gpt-4o"
 DEFAULT_ANTHROPIC_MODEL = "claude-sonnet-4-6"
 OPENAI_MODEL_PREFIXES = ("gpt-", "o1", "o3", "o4")
 ANTHROPIC_MODEL_PREFIXES = ("claude",)
 MAX_TOKENS = int(os.getenv("MAX_TOKENS", "8192"))
-
-SYSTEM_PROMPT = """You are KODO, a powerful personal autonomous AI agent. You can:
-- Execute bash commands to interact with the OS
-- Read, write, and edit files
-- Search codebases with grep and glob
-- Fetch web pages for documentation and info
-- Chain multiple tools together to complete complex tasks autonomously
-
-You are direct, capable, and efficient. When given a task:
-1. Think through the steps needed
-2. Use tools proactively without asking unnecessary questions
-3. Report what you're doing as you do it
-4. If something fails, diagnose and try an alternative approach
-
-Always show your work - briefly explain each tool call before making it."""
 
 
 def build_openai_tools() -> list[dict]:
@@ -96,9 +83,10 @@ def _resolve_provider_config() -> tuple[str, str, str]:
 
 
 class AgentLoop:
-    def __init__(self, session_id: str, project_dir: str | None = None):
+    def __init__(self, session_id: str, project_dir: str | None = None, mode: str | None = None):
         self.session_id = session_id
         self.project_dir = project_dir
+        self.mode = normalize_mode(mode)
         self.provider, self.model, api_key = _resolve_provider_config()
         if self.provider == "openai":
             self.client: Any = AsyncOpenAI(api_key=api_key)
@@ -107,10 +95,7 @@ class AgentLoop:
         self.permission_checker = get_permission_checker()
 
     async def _build_system_prompt(self) -> str:
-        memory = await memory_manager.load_memory(self.project_dir)
-        if memory:
-            return SYSTEM_PROMPT + "\n\n" + memory
-        return SYSTEM_PROMPT
+        return await build_system_prompt(project_dir=self.project_dir, mode=self.mode)
 
     async def run(
         self,
@@ -121,30 +106,31 @@ class AgentLoop:
         if approval_callback:
             self.permission_checker.set_approval_callback(approval_callback)
 
-        try:
-            if self.provider == "openai":
-                try:
-                    async for event in self._run_openai(user_message, history):
-                        yield event
-                except Exception as e:
-                    if self._is_openai_quota_error(e) and self._switch_to_anthropic_fallback():
-                        async for event in self._run_anthropic(user_message, history):
-                            yield event
-                    else:
-                        raise
-            else:
-                try:
-                    async for event in self._run_anthropic(user_message, history):
-                        yield event
-                except Exception as e:
-                    if self._is_anthropic_low_credit_error(e) and self._switch_to_openai_fallback():
+        with project_dir_context(self.project_dir):
+            try:
+                if self.provider == "openai":
+                    try:
                         async for event in self._run_openai(user_message, history):
                             yield event
-                    else:
-                        raise
+                    except Exception as e:
+                        if self._is_openai_quota_error(e) and self._switch_to_anthropic_fallback():
+                            async for event in self._run_anthropic(user_message, history):
+                                yield event
+                        else:
+                            raise
+                else:
+                    try:
+                        async for event in self._run_anthropic(user_message, history):
+                            yield event
+                    except Exception as e:
+                        if self._is_anthropic_low_credit_error(e) and self._switch_to_openai_fallback():
+                            async for event in self._run_openai(user_message, history):
+                                yield event
+                        else:
+                            raise
 
-        except Exception as e:
-            yield {"type": "error", "message": self._format_runtime_error(e)}
+            except Exception as e:
+                yield {"type": "error", "message": self._format_runtime_error(e)}
 
     def _is_openai_quota_error(self, error: Exception) -> bool:
         msg = str(error).lower()

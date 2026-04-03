@@ -14,13 +14,22 @@ class PermissionMode(str, Enum):
 
 
 # Patterns that are ALWAYS blocked regardless of mode
-BLOCKED_PATTERNS = [
+BLOCKED_BASH_PATTERNS = [
     r"rm\s+-rf\s+/",              # rm -rf / (any variant)
     r"rm\s+-rf\s+/\*",            # rm -rf /*
     r"sudo\s+rm\s+-rf",           # sudo rm -rf
     r">\s*/dev/sd[a-z]",          # write to raw disk
     r"mkfs\.",                     # format filesystem
     r":(){ :|:& };:",              # fork bomb
+]
+
+BLOCKED_POWERSHELL_PATTERNS = [
+    r"Remove-Item\s+.+-Recurse\s+-Force\s+[A-Za-z]:\\\s*$",
+    r"Format-Volume\b",
+    r"Clear-Disk\b",
+    r"Initialize-Disk\b",
+    r"diskpart\b",
+    r"\\\\\\.\\PhysicalDrive\d+",
 ]
 
 
@@ -37,7 +46,13 @@ class PermissionChecker:
         """Permanently blocked — no approval can override."""
         if tool_name == "bash":
             cmd = kwargs.get("command", "")
-            for pattern in BLOCKED_PATTERNS:
+            for pattern in BLOCKED_BASH_PATTERNS:
+                if re.search(pattern, cmd, re.IGNORECASE):
+                    return True
+
+        if tool_name == "powershell":
+            cmd = kwargs.get("command", "")
+            for pattern in BLOCKED_POWERSHELL_PATTERNS:
                 if re.search(pattern, cmd, re.IGNORECASE):
                     return True
         return False
@@ -76,7 +91,7 @@ class PermissionChecker:
         return approved, "user approved" if approved else "user denied"
 
     def _build_preview(self, tool_name: str, kwargs: dict) -> str:
-        if tool_name == "bash":
+        if tool_name in ("bash", "powershell"):
             return kwargs.get("command", "")
         if tool_name in ("file_write", "file_edit"):
             return kwargs.get("path", "") + " (file modification)"

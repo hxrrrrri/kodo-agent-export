@@ -2,21 +2,32 @@ import json
 import os
 import re
 import uuid
+from typing import Any
+
+from agent.coordinator import agent_coordinator
+from agent.modes import DEFAULT_MODE, list_modes, normalize_mode
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field, field_validator
 
 from agent.loop import AgentLoop
 from api.security import (
+    COMMANDS_RATE_LIMITER,
     MEMORY_RATE_LIMITER,
     SEND_RATE_LIMITER,
     SESSION_RATE_LIMITER,
     enforce_rate_limit,
     require_api_auth,
 )
+from api.permission_hub import permission_hub
+from commands.router import execute_command, is_command_message
+from mcp.registry import mcp_registry
+from mcp.stdio_client import MCPClientError
 from memory.manager import memory_manager
 from observability.audit import log_audit_event
 from observability.usage import record_usage_event, summarize_usage
+from skills.registry import skill_registry
+from tasks.manager import task_manager
 from tools.path_guard import enforce_allowed_path
 
 router = APIRouter(prefix="/api/chat", tags=["chat"])
@@ -29,10 +40,16 @@ def _safe_error_message(error: Exception) -> str:
     return message[:500]
 
 
+def _resolve_mode(requested_mode: str | None, stored_mode: str | None) -> str:
+    target = requested_mode if requested_mode is not None else stored_mode
+    return normalize_mode(target)
+
+
 class ChatRequest(BaseModel):
     message: str = Field(min_length=1, max_length=12000)
     session_id: str | None = Field(default=None, max_length=128)
     project_dir: str | None = Field(default=None, max_length=1024)
+    mode: str | None = Field(default=None, max_length=64)
 
     @field_validator("message")
     @classmethod
@@ -42,9 +59,29 @@ class ChatRequest(BaseModel):
             raise ValueError("message is required")
         return text
 
+    @field_validator("mode")
+    @classmethod
+    def validate_mode(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        text = value.strip()
+        return text or None
+
 
 class NewSessionResponse(BaseModel):
     session_id: str
+
+
+class SessionModeRequest(BaseModel):
+    mode: str = Field(min_length=1, max_length=64)
+
+    @field_validator("mode")
+    @classmethod
+    def validate_mode(cls, value: str) -> str:
+        text = value.strip()
+        if not text:
+            raise ValueError("mode is required")
+        return text
 
 
 class MemoryAppendRequest(BaseModel):
@@ -54,6 +91,89 @@ class MemoryAppendRequest(BaseModel):
     @classmethod
     def validate_content(cls, value: str) -> str:
         return value.strip()
+
+
+class SessionImportRequest(BaseModel):
+    session_id: str | None = Field(default=None, max_length=128)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+    messages: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class TaskCreateRequest(BaseModel):
+    prompt: str = Field(min_length=1, max_length=12000)
+    project_dir: str | None = Field(default=None, max_length=1024)
+    requested_by_session: str | None = Field(default=None, max_length=128)
+
+    @field_validator("prompt")
+    @classmethod
+    def validate_prompt(cls, value: str) -> str:
+        return value.strip()
+
+
+class MCPServerRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=120)
+    command: str = Field(min_length=1, max_length=1000)
+    args: list[str] = Field(default_factory=list)
+    transport: str = Field(default="stdio", max_length=32)
+    configured_tools: list[str] = Field(default_factory=list)
+
+
+class MCPToolCallRequest(BaseModel):
+    arguments: dict[str, Any] = Field(default_factory=dict)
+    timeout_seconds: int = Field(default=20, ge=1, le=120)
+
+
+class AgentSpawnRequest(BaseModel):
+    goal: str = Field(min_length=1, max_length=12000)
+    role: str = Field(default="general", max_length=120)
+    project_dir: str | None = Field(default=None, max_length=1024)
+    parent_session_id: str | None = Field(default=None, max_length=128)
+
+    @field_validator("goal")
+    @classmethod
+    def validate_goal(cls, value: str) -> str:
+        return value.strip()
+
+
+class PermissionDecisionRequest(BaseModel):
+    approve: bool
+    remember: bool = False
+
+
+async def _run_background_task(prompt: str, project_dir: str | None, task_id: str) -> dict[str, Any]:
+    agent = AgentLoop(session_id=f"task-{task_id}", project_dir=project_dir)
+    parts: list[str] = []
+    usage_payload: dict[str, Any] | None = None
+    events_count = 0
+
+    async for event in agent.run(prompt, history=[]):
+        events_count += 1
+        event_type = str(event.get("type", ""))
+        if event_type == "text":
+            parts.append(str(event.get("content", "")))
+        elif event_type == "done" and isinstance(event.get("usage"), dict):
+            usage_payload = event.get("usage")
+        elif event_type == "error":
+            return {
+                "output": "".join(parts),
+                "error": str(event.get("message", "Task execution failed")),
+                "usage": usage_payload,
+                "events_count": events_count,
+                "provider": getattr(agent, "provider", None),
+                "model": getattr(agent, "model", None),
+            }
+
+    return {
+        "output": "".join(parts),
+        "error": None,
+        "usage": usage_payload,
+        "events_count": events_count,
+        "provider": getattr(agent, "provider", None),
+        "model": getattr(agent, "model", None),
+    }
+
+
+task_manager.set_runner(_run_background_task)
 
 
 @router.post("/send")
@@ -74,32 +194,147 @@ async def send_message(req: ChatRequest, request: Request):
             raise HTTPException(status_code=400, detail=f"project_dir is not a directory: {project_dir}")
 
     session_id = req.session_id or str(uuid.uuid4())
+    existing_payload = await memory_manager.load_session_payload(session_id)
+    history = existing_payload.get("messages", []) if existing_payload else []
+    metadata = existing_payload.get("metadata", {}) if existing_payload else {}
+    stored_mode = str(metadata.get("mode", DEFAULT_MODE)) if isinstance(metadata, dict) else DEFAULT_MODE
+
+    try:
+        effective_mode = _resolve_mode(req.mode, stored_mode)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+
+    if req.mode is not None:
+        await memory_manager.update_session_metadata(
+            session_id,
+            {"mode": effective_mode},
+            create_if_missing=True,
+        )
+
     log_audit_event(
         "chat_send_started",
         request_id=request_id,
         session_id=session_id,
         has_history=bool(req.session_id),
         has_project_dir=bool(project_dir),
+        mode=effective_mode,
     )
 
-    # Load existing history
-    history = await memory_manager.load_session(session_id)
+    async def approval_callback(tool_name: str, input_preview: str, tool_description: str) -> bool:
+        policy = await permission_hub.get_policy(session_id, tool_name)
+        if policy is not None:
+            log_audit_event(
+                "permission_policy_applied",
+                request_id=request_id,
+                session_id=session_id,
+                tool_name=tool_name,
+                approved=policy,
+            )
+            return policy
+
+        challenge = await permission_hub.create_challenge(
+            session_id=session_id,
+            tool_name=tool_name,
+            input_preview=input_preview,
+            tool_description=tool_description,
+        )
+        challenge_id = str(challenge.get("challenge_id", ""))
+        log_audit_event(
+            "permission_challenge_created",
+            request_id=request_id,
+            session_id=session_id,
+            challenge_id=challenge_id,
+            tool_name=tool_name,
+        )
+
+        timeout_seconds = max(10, int(os.getenv("PERMISSION_REQUEST_TIMEOUT_SECONDS", "120")))
+        approved, remember, outcome = await permission_hub.wait_for_decision(
+            challenge_id,
+            timeout_seconds=timeout_seconds,
+        )
+
+        log_audit_event(
+            "permission_challenge_resolved",
+            request_id=request_id,
+            session_id=session_id,
+            challenge_id=challenge_id,
+            tool_name=tool_name,
+            approved=approved,
+            remember=remember,
+            outcome=outcome,
+        )
+        return approved
+
+    if is_command_message(req.message):
+        async def command_stream():
+            yield f"data: {json.dumps({'type': 'meta', 'request_id': request_id, 'session_id': session_id, 'mode': effective_mode})}\n\n"
+
+            try:
+                result = await execute_command(req.message, session_id=session_id, project_dir=project_dir)
+            except Exception as e:
+                log_audit_event(
+                    "chat_command_error",
+                    request_id=request_id,
+                    session_id=session_id,
+                    error=str(e),
+                )
+                yield f"data: {json.dumps({'type': 'error', 'message': _safe_error_message(e)})}\n\n"
+                return
+
+            updated_history = list(history) + [
+                {"role": "user", "content": req.message},
+                {"role": "assistant", "content": result.text},
+            ]
+            title = req.message[:60] + ("..." if len(req.message) > 60 else "")
+            latest_mode = effective_mode
+            latest_metadata = await memory_manager.get_session_metadata(session_id)
+            if isinstance(latest_metadata, dict):
+                try:
+                    latest_mode = normalize_mode(str(latest_metadata.get("mode", effective_mode)))
+                except ValueError:
+                    latest_mode = effective_mode
+            await memory_manager.save_session(
+                session_id,
+                updated_history,
+                metadata={"title": title, "mode": latest_mode},
+            )
+
+            log_audit_event(
+                "chat_command_executed",
+                request_id=request_id,
+                session_id=session_id,
+                command=result.name,
+                mode=latest_mode,
+            )
+
+            yield f"data: {json.dumps({'type': 'text', 'content': result.text})}\n\n"
+            yield f"data: {json.dumps({'type': 'done', 'usage': {'input_tokens': 0, 'output_tokens': 0, 'model': 'command-router'}})}\n\n"
+
+        return StreamingResponse(
+            command_stream(),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+                "X-Session-ID": session_id,
+            },
+        )
 
     async def event_stream():
         assistant_parts = []
         usage_payload: dict | None = None
 
         try:
-            agent = AgentLoop(session_id=session_id, project_dir=project_dir)
+            agent = AgentLoop(session_id=session_id, project_dir=project_dir, mode=effective_mode)
         except Exception as e:
             log_audit_event("chat_send_init_error", request_id=request_id, session_id=session_id, error=str(e))
             yield f"data: {json.dumps({'type': 'error', 'message': _safe_error_message(e)})}\n\n"
             return
 
-        yield f"data: {json.dumps({'type': 'meta', 'request_id': request_id, 'session_id': session_id})}\n\n"
+        yield f"data: {json.dumps({'type': 'meta', 'request_id': request_id, 'session_id': session_id, 'mode': effective_mode})}\n\n"
 
         try:
-            async for event in agent.run(req.message, history):
+            async for event in agent.run(req.message, history, approval_callback=approval_callback):
                 # Collect for history saving
                 if event["type"] == "text":
                     assistant_parts.append(event["content"])
@@ -122,7 +357,7 @@ async def send_message(req: ChatRequest, request: Request):
                     await memory_manager.save_session(
                         session_id,
                         updated_history,
-                        metadata={"title": title},
+                        metadata={"title": title, "mode": effective_mode},
                     )
 
                     if usage_payload:
@@ -141,6 +376,7 @@ async def send_message(req: ChatRequest, request: Request):
                             request_id=request_id,
                             session_id=session_id,
                             provider=agent.provider,
+                            mode=effective_mode,
                             usage=usage_event,
                         )
                     else:
@@ -149,6 +385,7 @@ async def send_message(req: ChatRequest, request: Request):
                             request_id=request_id,
                             session_id=session_id,
                             provider=agent.provider,
+                            mode=effective_mode,
                             usage=None,
                         )
 
@@ -165,6 +402,41 @@ async def send_message(req: ChatRequest, request: Request):
             "X-Session-ID": session_id,
         },
     )
+
+
+@router.get("/permissions/pending")
+async def list_pending_permissions(
+    request: Request,
+    session_id: str | None = Query(default=None, max_length=128),
+):
+    require_api_auth(request)
+    await enforce_rate_limit(request, MEMORY_RATE_LIMITER, "permissions_pending")
+    pending = await permission_hub.list_pending(session_id=session_id)
+    return {"pending": pending}
+
+
+@router.post("/permissions/{challenge_id}/decision")
+async def decide_permission(challenge_id: str, body: PermissionDecisionRequest, request: Request):
+    require_api_auth(request)
+    await enforce_rate_limit(request, MEMORY_RATE_LIMITER, "permissions_decision")
+    payload = await permission_hub.set_decision(
+        challenge_id,
+        approve=body.approve,
+        remember=body.remember,
+    )
+    if payload is None:
+        raise HTTPException(status_code=404, detail="Permission challenge not found")
+
+    log_audit_event(
+        "permission_decision",
+        request_id=getattr(request.state, "request_id", None),
+        challenge_id=challenge_id,
+        session_id=payload.get("session_id"),
+        tool_name=payload.get("tool_name"),
+        approve=body.approve,
+        remember=body.remember,
+    )
+    return {"saved": True, "challenge": payload}
 
 
 @router.post("/new-session", response_model=NewSessionResponse)
@@ -193,25 +465,403 @@ async def list_sessions(request: Request):
     return {"sessions": sessions}
 
 
+@router.get("/modes")
+async def list_modes_endpoint(request: Request):
+    require_api_auth(request)
+    await enforce_rate_limit(request, MEMORY_RATE_LIMITER, "modes")
+    return {
+        "default_mode": DEFAULT_MODE,
+        "modes": list_modes(),
+    }
+
+
+@router.get("/sessions/{session_id}/mode")
+async def get_session_mode_endpoint(session_id: str, request: Request):
+    require_api_auth(request)
+    await enforce_rate_limit(request, SESSION_RATE_LIMITER, "get_session_mode")
+
+    metadata = await memory_manager.get_session_metadata(session_id)
+    raw_mode = str(metadata.get("mode", DEFAULT_MODE))
+    try:
+        mode = normalize_mode(raw_mode)
+    except ValueError:
+        mode = DEFAULT_MODE
+
+    return {
+        "session_id": session_id,
+        "mode": mode,
+    }
+
+
+@router.post("/sessions/{session_id}/mode")
+async def set_session_mode_endpoint(session_id: str, body: SessionModeRequest, request: Request):
+    require_api_auth(request)
+    await enforce_rate_limit(request, SESSION_RATE_LIMITER, "set_session_mode")
+
+    try:
+        mode = normalize_mode(body.mode)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+
+    metadata = await memory_manager.update_session_metadata(
+        session_id,
+        {"mode": mode},
+        create_if_missing=True,
+    )
+
+    log_audit_event(
+        "set_session_mode",
+        request_id=getattr(request.state, "request_id", None),
+        session_id=session_id,
+        mode=mode,
+    )
+    return {
+        "session_id": session_id,
+        "mode": str(metadata.get("mode", mode)),
+    }
+
+
+@router.get("/commands")
+async def list_commands_endpoint(request: Request):
+    require_api_auth(request)
+    await enforce_rate_limit(request, COMMANDS_RATE_LIMITER, "commands")
+    return {
+        "commands": [
+            {"name": "/help", "description": "Show available commands"},
+            {"name": "/cost [days]", "description": "Show token and cost usage summary"},
+            {"name": "/session", "description": "List recent sessions"},
+            {"name": "/session current", "description": "Show current session id"},
+            {"name": "/memory <text>", "description": "Append note to global memory"},
+            {"name": "/memory show", "description": "Show loaded memory context"},
+            {"name": "/mode", "description": "Show current session mode"},
+            {"name": "/mode list", "description": "List available execution modes"},
+            {"name": "/mode set <name>", "description": "Set session execution mode"},
+            {"name": "/mode reset", "description": "Reset mode to default"},
+            {"name": "/tasks", "description": "List background tasks"},
+            {"name": "/tasks create <prompt>", "description": "Create a background task"},
+            {"name": "/tasks get <task_id>", "description": "Get task details"},
+            {"name": "/tasks stop <task_id>", "description": "Stop a background task"},
+            {"name": "/mcp list", "description": "List MCP server entries"},
+            {"name": "/mcp add <name> <command>", "description": "Add MCP server entry"},
+            {"name": "/mcp remove <name>", "description": "Remove MCP server entry"},
+            {"name": "/mcp tools <name>", "description": "List configured MCP tools for server"},
+            {"name": "/mcp call <name> <tool> [json_args]", "description": "Call MCP tool with optional JSON arguments"},
+            {"name": "/agents", "description": "List spawned sub-agents"},
+            {"name": "/agents spawn <goal>", "description": "Spawn sub-agent"},
+            {"name": "/agents get <agent_id>", "description": "Get sub-agent details"},
+            {"name": "/agents stop <agent_id>", "description": "Stop sub-agent"},
+            {"name": "/skills", "description": "List bundled skills"},
+            {"name": "/skills show <name>", "description": "Show skill content"},
+        ]
+    }
+
+
+@router.post("/tasks")
+async def create_task_endpoint(body: TaskCreateRequest, request: Request):
+    require_api_auth(request)
+    await enforce_rate_limit(request, MEMORY_RATE_LIMITER, "create_task")
+
+    project_dir = body.project_dir
+    if project_dir:
+        try:
+            project_dir = enforce_allowed_path(project_dir)
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
+        if not os.path.isdir(project_dir):
+            raise HTTPException(status_code=400, detail=f"project_dir is not a directory: {project_dir}")
+
+    task = await task_manager.create_task(
+        prompt=body.prompt,
+        project_dir=project_dir,
+        requested_by_session=body.requested_by_session,
+    )
+    log_audit_event(
+        "task_created",
+        request_id=getattr(request.state, "request_id", None),
+        task_id=task.get("task_id"),
+        requested_by_session=body.requested_by_session,
+    )
+    return task
+
+
+@router.get("/tasks")
+async def list_tasks_endpoint(
+    request: Request,
+    limit: int = Query(default=20, ge=1, le=500),
+):
+    require_api_auth(request)
+    await enforce_rate_limit(request, MEMORY_RATE_LIMITER, "list_tasks")
+    tasks = await task_manager.list_tasks(limit=limit)
+    return {"tasks": tasks}
+
+
+@router.get("/tasks/{task_id}")
+async def get_task_endpoint(task_id: str, request: Request):
+    require_api_auth(request)
+    await enforce_rate_limit(request, MEMORY_RATE_LIMITER, "get_task")
+    payload = await task_manager.get_task(task_id)
+    if payload is None:
+        raise HTTPException(status_code=404, detail="Task not found")
+    return payload
+
+
+@router.post("/tasks/{task_id}/stop")
+async def stop_task_endpoint(task_id: str, request: Request):
+    require_api_auth(request)
+    await enforce_rate_limit(request, MEMORY_RATE_LIMITER, "stop_task")
+    stopped = await task_manager.stop_task(task_id)
+    if not stopped:
+        raise HTTPException(status_code=404, detail="Task not running or not found")
+    payload = await task_manager.get_task(task_id)
+    return payload or {"task_id": task_id, "status": "cancelled"}
+
+
+@router.get("/mcp/servers")
+async def list_mcp_servers_endpoint(request: Request):
+    require_api_auth(request)
+    await enforce_rate_limit(request, MEMORY_RATE_LIMITER, "list_mcp_servers")
+    return {"servers": await mcp_registry.list_servers()}
+
+
+@router.post("/mcp/servers")
+async def add_mcp_server_endpoint(body: MCPServerRequest, request: Request):
+    require_api_auth(request)
+    await enforce_rate_limit(request, MEMORY_RATE_LIMITER, "add_mcp_server")
+    try:
+        payload = await mcp_registry.add_server(
+            name=body.name,
+            command=body.command,
+            args=body.args,
+            transport=body.transport,
+            configured_tools=body.configured_tools,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+
+    log_audit_event(
+        "mcp_server_added",
+        request_id=getattr(request.state, "request_id", None),
+        name=body.name,
+        transport=body.transport,
+    )
+    return payload
+
+
+@router.delete("/mcp/servers/{name}")
+async def remove_mcp_server_endpoint(name: str, request: Request):
+    require_api_auth(request)
+    await enforce_rate_limit(request, MEMORY_RATE_LIMITER, "remove_mcp_server")
+    removed = await mcp_registry.remove_server(name)
+    if not removed:
+        raise HTTPException(status_code=404, detail="MCP server not found")
+    log_audit_event(
+        "mcp_server_removed",
+        request_id=getattr(request.state, "request_id", None),
+        name=name,
+    )
+    return {"removed": True, "name": name}
+
+
+@router.get("/mcp/servers/{name}/tools")
+async def list_mcp_server_tools_endpoint(name: str, request: Request):
+    require_api_auth(request)
+    await enforce_rate_limit(request, MEMORY_RATE_LIMITER, "list_mcp_tools")
+    try:
+        tools = await mcp_registry.discover_tools(name)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
+    return {"name": name, "tools": tools}
+
+
+@router.post("/mcp/servers/{name}/tools/{tool_name}/call")
+async def call_mcp_server_tool_endpoint(
+    name: str,
+    tool_name: str,
+    body: MCPToolCallRequest,
+    request: Request,
+):
+    require_api_auth(request)
+    await enforce_rate_limit(request, MEMORY_RATE_LIMITER, "call_mcp_tool")
+
+    try:
+        payload = await mcp_registry.call_tool(
+            server_name=name,
+            tool_name=tool_name,
+            arguments=body.arguments,
+            timeout_seconds=body.timeout_seconds,
+        )
+    except ValueError as e:
+        detail = str(e)
+        status_code = 404 if "not found" in detail.lower() else 400
+        raise HTTPException(status_code=status_code, detail=detail) from e
+    except MCPClientError as e:
+        raise HTTPException(status_code=502, detail=f"MCP runtime error: {e}") from e
+
+    log_audit_event(
+        "mcp_tool_called",
+        request_id=getattr(request.state, "request_id", None),
+        name=name,
+        tool_name=tool_name,
+    )
+    return payload
+
+
+@router.post("/agents")
+async def spawn_agent_endpoint(body: AgentSpawnRequest, request: Request):
+    require_api_auth(request)
+    await enforce_rate_limit(request, MEMORY_RATE_LIMITER, "spawn_agent")
+
+    project_dir = body.project_dir
+    if project_dir:
+        try:
+            project_dir = enforce_allowed_path(project_dir)
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
+        if not os.path.isdir(project_dir):
+            raise HTTPException(status_code=400, detail=f"project_dir is not a directory: {project_dir}")
+
+    try:
+        payload = await agent_coordinator.spawn_agent(
+            goal=body.goal,
+            role=body.role,
+            project_dir=project_dir,
+            parent_session_id=body.parent_session_id,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+
+    log_audit_event(
+        "agent_spawned",
+        request_id=getattr(request.state, "request_id", None),
+        agent_id=payload.get("agent_id"),
+        task_id=payload.get("task_id"),
+        role=body.role,
+    )
+    return payload
+
+
+@router.get("/agents")
+async def list_agents_endpoint(
+    request: Request,
+    limit: int = Query(default=20, ge=1, le=500),
+):
+    require_api_auth(request)
+    await enforce_rate_limit(request, MEMORY_RATE_LIMITER, "list_agents")
+    return {"agents": await agent_coordinator.list_agents(limit=limit)}
+
+
+@router.get("/agents/{agent_id}")
+async def get_agent_endpoint(agent_id: str, request: Request):
+    require_api_auth(request)
+    await enforce_rate_limit(request, MEMORY_RATE_LIMITER, "get_agent")
+    payload = await agent_coordinator.get_agent(agent_id)
+    if payload is None:
+        raise HTTPException(status_code=404, detail="Agent not found")
+    return payload
+
+
+@router.post("/agents/{agent_id}/stop")
+async def stop_agent_endpoint(agent_id: str, request: Request):
+    require_api_auth(request)
+    await enforce_rate_limit(request, MEMORY_RATE_LIMITER, "stop_agent")
+    stopped = await agent_coordinator.stop_agent(agent_id)
+    if not stopped:
+        raise HTTPException(status_code=404, detail="Agent not running or not found")
+    payload = await agent_coordinator.get_agent(agent_id)
+    return payload or {"agent_id": agent_id, "status": "cancelled"}
+
+
+@router.get("/skills")
+async def list_skills_endpoint(request: Request):
+    require_api_auth(request)
+    await enforce_rate_limit(request, MEMORY_RATE_LIMITER, "list_skills")
+    return {"skills": skill_registry.list_skills()}
+
+
+@router.get("/skills/{name}")
+async def get_skill_endpoint(name: str, request: Request):
+    require_api_auth(request)
+    await enforce_rate_limit(request, MEMORY_RATE_LIMITER, "get_skill")
+    payload = skill_registry.get_skill(name)
+    if payload is None:
+        raise HTTPException(status_code=404, detail="Skill not found")
+    return payload
+
+
 @router.get("/sessions/{session_id}")
 async def get_session(session_id: str, request: Request):
     require_api_auth(request)
     await enforce_rate_limit(request, SESSION_RATE_LIMITER, "get_session")
-    messages = await memory_manager.load_session(session_id)
-    if not messages:
+    payload = await memory_manager.load_session_payload(session_id)
+    if payload is None:
         log_audit_event(
             "get_session_not_found",
             request_id=getattr(request.state, "request_id", None),
             session_id=session_id,
         )
         raise HTTPException(status_code=404, detail="Session not found")
+
+    messages = payload.get("messages", [])
+    metadata = payload.get("metadata", {})
+    if not isinstance(metadata, dict):
+        metadata = {}
+
+    raw_mode = str(metadata.get("mode", DEFAULT_MODE))
+    try:
+        normalized_mode = normalize_mode(raw_mode)
+    except ValueError:
+        normalized_mode = DEFAULT_MODE
+    metadata["mode"] = normalized_mode
+
     log_audit_event(
         "get_session",
         request_id=getattr(request.state, "request_id", None),
         session_id=session_id,
         message_count=len(messages),
     )
-    return {"session_id": session_id, "messages": messages}
+    return {"session_id": session_id, "messages": messages, "metadata": metadata}
+
+
+@router.get("/sessions/{session_id}/export")
+async def export_session(session_id: str, request: Request):
+    require_api_auth(request)
+    await enforce_rate_limit(request, SESSION_RATE_LIMITER, "export_session")
+    payload = await memory_manager.load_session_payload(session_id)
+    if payload is None:
+        raise HTTPException(status_code=404, detail="Session not found")
+    log_audit_event(
+        "export_session",
+        request_id=getattr(request.state, "request_id", None),
+        session_id=session_id,
+        message_count=len(payload.get("messages", [])),
+    )
+    return payload
+
+
+@router.post("/sessions/import", response_model=NewSessionResponse)
+async def import_session(body: SessionImportRequest, request: Request):
+    require_api_auth(request)
+    await enforce_rate_limit(request, SESSION_RATE_LIMITER, "import_session")
+    payload = {
+        "session_id": body.session_id,
+        "metadata": body.metadata,
+        "messages": body.messages,
+    }
+    try:
+        imported_session_id = await memory_manager.import_session_payload(
+            payload,
+            override_session_id=body.session_id,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+
+    log_audit_event(
+        "import_session",
+        request_id=getattr(request.state, "request_id", None),
+        session_id=imported_session_id,
+        message_count=len(body.messages),
+    )
+    return NewSessionResponse(session_id=imported_session_id)
 
 
 @router.delete("/sessions/{session_id}")

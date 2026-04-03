@@ -1,6 +1,7 @@
 import glob as glob_module
 import os
 from .base import BaseTool, ToolResult
+from .path_guard import enforce_allowed_path
 
 
 class GlobTool(BaseTool):
@@ -31,10 +32,16 @@ class GlobTool(BaseTool):
     }
 
     async def execute(self, pattern: str, base_dir: str = ".", max_results: int = 100, **kwargs) -> ToolResult:
-        base_dir = os.path.expanduser(base_dir)
+        try:
+            resolved_base_dir = enforce_allowed_path(base_dir or ".")
+        except ValueError as e:
+            return ToolResult(success=False, output="", error=str(e))
+
+        if not os.path.isdir(resolved_base_dir):
+            return ToolResult(success=False, output="", error=f"Base directory not found: {resolved_base_dir}")
 
         try:
-            full_pattern = os.path.join(base_dir, pattern)
+            full_pattern = os.path.join(resolved_base_dir, pattern)
             matches = glob_module.glob(full_pattern, recursive=True)
 
             # Filter out common noise
@@ -51,7 +58,7 @@ class GlobTool(BaseTool):
             return ToolResult(
                 success=True,
                 output=output,
-                metadata={"total_matches": len(matches), "pattern": pattern},
+                metadata={"total_matches": len(matches), "pattern": pattern, "base_dir": resolved_base_dir},
             )
         except Exception as e:
             return ToolResult(success=False, output="", error=str(e))

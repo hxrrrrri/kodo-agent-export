@@ -1,13 +1,13 @@
 from abc import ABC, abstractmethod
 from typing import Any
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class ToolResult(BaseModel):
     success: bool
     output: str
     error: str | None = None
-    metadata: dict[str, Any] = {}
+    metadata: dict[str, Any] = Field(default_factory=dict)
 
 
 class BaseTool(ABC):
@@ -20,6 +20,10 @@ class BaseTool(ABC):
     @abstractmethod
     async def execute(self, **kwargs) -> ToolResult:
         pass
+
+    def prompt(self) -> str:
+        """Optional system-prompt guidance contributed by this tool."""
+        return ""
 
     def to_anthropic_schema(self) -> dict:
         """Convert to Anthropic API tool format."""
