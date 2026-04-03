@@ -2,6 +2,7 @@ import json
 import os
 import shlex
 from dataclasses import dataclass
+from datetime import datetime
 
 from agent.coordinator import agent_coordinator
 from agent.modes import DEFAULT_MODE, get_mode, list_modes, normalize_mode
@@ -14,13 +15,17 @@ from profiles.manager import profile_manager
 from providers.smart_router import ROUTER_STRATEGIES, get_smart_router, smart_router_enabled
 from skills.registry import skill_registry
 from tasks.manager import task_manager
+from tools import TOOL_MAP
 
 
 KNOWN_ROOT_COMMANDS = [
     "/help",
     "/cost",
+    "/search",
+    "/git",
     "/session",
     "/memory",
+    "/checkpoint",
     "/mode",
     "/provider",
     "/doctor",
@@ -36,8 +41,11 @@ KNOWN_ROOT_COMMANDS = [
 COMMAND_REGISTRY: dict[str, str] = {
     "/help": "Show available commands",
     "/cost": "Show token and estimated cost usage",
+    "/search": "Search the web via configured providers",
+    "/git": "Run safe, read-only git commands",
     "/session": "List and inspect sessions",
     "/memory": "Manage global memory notes",
+    "/checkpoint": "Create/list/restore session checkpoints",
     "/mode": "Inspect or set session mode",
     "/provider": "Inspect and activate provider profiles",
     "/doctor": "Run runtime health checks",
@@ -55,6 +63,7 @@ COMMAND_REGISTRY: dict[str, str] = {
 class CommandExecutionResult:
     name: str
     text: str
+    run_prompt: str | None = None
 
 
 def is_command_message(message: str) -> bool:
@@ -124,10 +133,17 @@ def _help_text() -> str:
         "Available commands:",
         "/help - Show this command list",
         "/cost [days] - Show token and estimated cost usage",
+        "/search <query> - Search the web and return top results",
+        "/git <subcommand> - Run safe read-only git command",
+        "/git log|status|diff - Shortcut git commands",
         "/session - List recent sessions",
         "/session current - Show current session id",
         "/memory <text> - Append a note to global memory",
         "/memory show - Show loaded memory context",
+        "/checkpoint - Create checkpoint",
+        "/checkpoint <label> - Create checkpoint with label",
+        "/checkpoint list - List checkpoints",
+        "/checkpoint restore <id> --yes - Restore checkpoint",
         "/mode - Show current session mode",
         "/mode list - List available execution modes",
         "/mode set <name> - Set session mode",
@@ -157,6 +173,7 @@ def _help_text() -> str:
         "/agents stop <agent_id> - Stop sub-agent",
         "/skills - List bundled skills",
         "/skills show <name> - Show skill content",
+        "/skills run <name> - Run a bundled skill now",
     ])
 
 
@@ -359,6 +376,17 @@ async def _format_model_status(session_id: str) -> str:
     return "\n".join(lines)
 
 
+async def _run_tool_command(tool_name: str, **kwargs) -> CommandExecutionResult:
+    tool = TOOL_MAP.get(tool_name)
+    if tool is None:
+        return CommandExecutionResult(name=tool_name, text=f"Tool not registered: {tool_name}")
+
+    result = await tool.execute(**kwargs)
+    if result.success:
+        return CommandExecutionResult(name=tool_name, text=result.output)
+    return CommandExecutionResult(name=tool_name, text=result.error or "Tool execution failed")
+
+
 async def execute_command(message: str, session_id: str, project_dir: str | None = None) -> CommandExecutionResult:
     raw = message.strip()
 
@@ -385,6 +413,54 @@ async def execute_command(message: str, session_id: str, project_dir: str | None
                 return CommandExecutionResult(name="cost", text="Usage: /cost [days]")
         return CommandExecutionResult(name="cost", text=_format_cost(days))
 
+    if command == "/search":
+        query = " ".join(args).strip()
+        if not query:
+            return CommandExecutionResult(name="search", text="Usage: /search <query>")
+
+        tool_result = await _run_tool_command("web_search", query=query, num_results=5)
+        if tool_result.name == "web_search" and tool_result.text.strip().startswith("["):
+            try:
+                data = json.loads(tool_result.text)
+            except json.JSONDecodeError:
+                return CommandExecutionResult(name="search", text=tool_result.text)
+
+            if not isinstance(data, list) or not data:
+                return CommandExecutionResult(name="search", text="No search results found.")
+
+            lines = ["Search results:"]
+            for idx, item in enumerate(data[:5], start=1):
+                if not isinstance(item, dict):
+                    continue
+                title = str(item.get("title", "") or "Untitled")
+                url = str(item.get("url", "") or "")
+                snippet = str(item.get("snippet", "") or "")
+                lines.append(f"{idx}. {title}")
+                if url:
+                    lines.append(f"   {url}")
+                if snippet:
+                    lines.append(f"   {snippet}")
+            return CommandExecutionResult(name="search", text="\n".join(lines))
+
+        return CommandExecutionResult(name="search", text=tool_result.text)
+
+    if command == "/git":
+        if not args:
+            return CommandExecutionResult(name="git", text="Usage: /git <subcommand>")
+
+        action = args[0].lower()
+        if action == "log":
+            git_command = "log --oneline -15"
+        elif action == "status":
+            git_command = "status --short"
+        elif action == "diff":
+            git_command = "diff --stat"
+        else:
+            git_command = " ".join(args).strip()
+
+        tool_result = await _run_tool_command("git_run", command=git_command, cwd=project_dir)
+        return CommandExecutionResult(name="git", text=tool_result.text)
+
     if command == "/session":
         if args and args[0].lower() == "current":
             return CommandExecutionResult(name="session", text=f"Current session id: {session_id}")
@@ -408,6 +484,52 @@ async def execute_command(message: str, session_id: str, project_dir: str | None
             return CommandExecutionResult(name="memory", text="Usage: /memory <text> or /memory show")
         await memory_manager.append_to_memory(note)
         return CommandExecutionResult(name="memory", text="Saved note to global memory.")
+
+    if command == "/checkpoint":
+        if not args:
+            history = await memory_manager.load_session(session_id)
+            label = f"checkpoint at {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')}"
+            checkpoint_id = await memory_manager.create_checkpoint(session_id, history, label=label)
+            return CommandExecutionResult(name="checkpoint", text=f"Created checkpoint {checkpoint_id}: {label}")
+
+        action = args[0].lower()
+        if action == "list":
+            rows = await memory_manager.list_checkpoints(session_id)
+            if not rows:
+                return CommandExecutionResult(name="checkpoint", text="No checkpoints found for this session.")
+            lines = ["Checkpoints:"]
+            for row in rows:
+                lines.append(
+                    f"- {row.get('checkpoint_id')} | {row.get('label') or 'checkpoint'} | {row.get('message_count')} msgs | {row.get('created_at')}"
+                )
+            return CommandExecutionResult(name="checkpoint", text="\n".join(lines))
+
+        if action == "restore":
+            if len(args) < 2:
+                return CommandExecutionResult(name="checkpoint", text="Usage: /checkpoint restore <id> --yes")
+            if "--yes" not in args:
+                return CommandExecutionResult(
+                    name="checkpoint",
+                    text="Restore requires confirmation. Run: /checkpoint restore <id> --yes",
+                )
+
+            checkpoint_id = args[1].strip()
+            try:
+                restored = await memory_manager.restore_checkpoint(session_id, checkpoint_id)
+            except ValueError as e:
+                return CommandExecutionResult(name="checkpoint", text=str(e))
+
+            metadata = await memory_manager.get_session_metadata(session_id)
+            await memory_manager.save_session(session_id, restored, metadata=metadata)
+            return CommandExecutionResult(
+                name="checkpoint",
+                text=f"Restored checkpoint {checkpoint_id}. Session now has {len(restored)} messages.",
+            )
+
+        label = " ".join(args).strip()
+        history = await memory_manager.load_session(session_id)
+        checkpoint_id = await memory_manager.create_checkpoint(session_id, history, label=label)
+        return CommandExecutionResult(name="checkpoint", text=f"Created checkpoint {checkpoint_id}: {label}")
 
     if command == "/mode":
         if not args:
@@ -757,7 +879,26 @@ async def execute_command(message: str, session_id: str, project_dir: str | None
                 content = content[:3500] + "\n\n... (truncated)"
             return CommandExecutionResult(name="skills", text=content)
 
-        return CommandExecutionResult(name="skills", text="Usage: /skills [list|show]")
+        if action == "run":
+            if len(args) < 2:
+                return CommandExecutionResult(name="skills", text="Usage: /skills run <name>")
+            payload = skill_registry.get_skill(args[1])
+            if payload is None:
+                return CommandExecutionResult(name="skills", text=f"Skill not found: {args[1]}")
+
+            skill_name = str(payload.get("name", args[1]))
+            skill_content = str(payload.get("content", "")).strip()
+            if not skill_content:
+                return CommandExecutionResult(name="skills", text=f"Skill is empty: {skill_name}")
+
+            run_prompt = f"[Skill: {skill_name}]\n{skill_content}\n\nPlease execute this skill now."
+            return CommandExecutionResult(
+                name="skills",
+                text=f"Running skill: {skill_name}",
+                run_prompt=run_prompt,
+            )
+
+        return CommandExecutionResult(name="skills", text="Usage: /skills [list|show|run]")
 
     suggestions = _suggest_commands(command)
     if suggestions:

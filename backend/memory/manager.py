@@ -1,5 +1,6 @@
 import json
 import aiofiles
+import uuid
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -8,6 +9,7 @@ from typing import Any
 KODO_DIR = Path.home() / ".kodo"
 GLOBAL_MEMORY_FILE = KODO_DIR / "MEMORY.md"
 SESSIONS_DIR = KODO_DIR / "sessions"
+CHECKPOINTS_DIR = KODO_DIR / "checkpoints"
 
 DEFAULT_MEMORY = """# KŌDO Memory
 
@@ -31,8 +33,75 @@ class MemoryManager:
     def __init__(self):
         KODO_DIR.mkdir(exist_ok=True)
         SESSIONS_DIR.mkdir(exist_ok=True)
+        CHECKPOINTS_DIR.mkdir(exist_ok=True)
         if not GLOBAL_MEMORY_FILE.exists():
             GLOBAL_MEMORY_FILE.write_text(DEFAULT_MEMORY, encoding="utf-8")
+
+    async def create_checkpoint(
+        self,
+        session_id: str,
+        messages: list[dict],
+        label: str | None = None,
+    ) -> str:
+        checkpoint_id = f"cp_{uuid.uuid4().hex[:12]}"
+        created_at = datetime.utcnow().isoformat()
+        session_dir = CHECKPOINTS_DIR / session_id
+        session_dir.mkdir(parents=True, exist_ok=True)
+
+        payload = {
+            "checkpoint_id": checkpoint_id,
+            "session_id": session_id,
+            "label": (label or "").strip() or None,
+            "created_at": created_at,
+            "message_count": len(messages),
+            "messages": messages,
+        }
+
+        target = session_dir / f"{checkpoint_id}.json"
+        tmp = session_dir / f"{checkpoint_id}.json.tmp"
+        async with aiofiles.open(tmp, "w", encoding="utf-8") as f:
+            await f.write(json.dumps(payload, ensure_ascii=True, indent=2))
+        tmp.replace(target)
+        return checkpoint_id
+
+    async def list_checkpoints(self, session_id: str) -> list[dict]:
+        session_dir = CHECKPOINTS_DIR / session_id
+        if not session_dir.exists():
+            return []
+
+        rows: list[dict[str, Any]] = []
+        for item in sorted(session_dir.glob("cp_*.json"), key=lambda p: p.stat().st_mtime, reverse=True):
+            try:
+                async with aiofiles.open(item, "r", encoding="utf-8") as f:
+                    data = json.loads(await f.read())
+                if not isinstance(data, dict):
+                    continue
+                rows.append(
+                    {
+                        "checkpoint_id": str(data.get("checkpoint_id", item.stem)),
+                        "label": data.get("label"),
+                        "message_count": int(data.get("message_count", 0) or 0),
+                        "created_at": str(data.get("created_at", "")),
+                    }
+                )
+            except Exception:
+                continue
+        return rows
+
+    async def restore_checkpoint(self, session_id: str, checkpoint_id: str) -> list[dict]:
+        target = CHECKPOINTS_DIR / session_id / f"{checkpoint_id}.json"
+        if not target.exists():
+            raise ValueError("Checkpoint not found")
+
+        async with aiofiles.open(target, "r", encoding="utf-8") as f:
+            data = json.loads(await f.read())
+        if not isinstance(data, dict):
+            raise ValueError("Invalid checkpoint payload")
+
+        messages = data.get("messages", [])
+        if not isinstance(messages, list):
+            raise ValueError("Invalid checkpoint messages")
+        return messages
 
     async def load_memory(self, project_dir: str | None = None) -> str:
         """Load global + project memory into a system prompt section."""
@@ -201,7 +270,7 @@ class MemoryManager:
             content = item.get("content", "")
             if role not in {"user", "assistant", "system"}:
                 continue
-            if not isinstance(content, str):
+            if not isinstance(content, (str, list)):
                 content = str(content)
             normalized_messages.append({"role": role, "content": content})
 

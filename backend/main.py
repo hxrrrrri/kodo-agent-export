@@ -1,6 +1,7 @@
 # ruff: noqa: E402
 
 import asyncio
+import logging
 import os
 import uuid
 from dotenv import load_dotenv
@@ -22,6 +23,10 @@ from api.profiles import router as profiles_router
 from api.providers import router as providers_router
 from observability.audit import log_audit_event
 from observability.request_context import clear_request_id, set_request_id
+from providers.smart_router import get_smart_router, smart_router_enabled
+
+
+logger = logging.getLogger(__name__)
 
 
 def _parse_allowed_origins() -> list[str]:
@@ -42,7 +47,7 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=_parse_allowed_origins(),
     allow_credentials=True,
-    allow_methods=["GET", "POST", "DELETE", "OPTIONS"],
+    allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
     allow_headers=["Authorization", "Content-Type", "Accept"],
 )
 
@@ -120,3 +125,13 @@ async def health_ready():
         "status": "ok" if has_provider_key else "degraded",
         "ready": has_provider_key,
     }
+
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    if smart_router_enabled():
+        try:
+            router = await get_smart_router()
+            await router.close()
+        except Exception as e:
+            logger.warning("SmartRouter shutdown warning: %s", e)

@@ -7,6 +7,8 @@ from .file_edit import FileEditTool
 from .grep import GrepTool
 from .glob_tool import GlobTool
 from .web_fetch import WebFetchTool
+from .web_search import WebSearchTool
+from .git_tool import GitTool
 from .task_create import TaskCreateTool
 from .task_list import TaskListTool
 from .task_get import TaskGetTool
@@ -34,6 +36,8 @@ ALL_TOOLS: list[BaseTool] = [
     GrepTool(),
     GlobTool(),
     WebFetchTool(),
+    WebSearchTool(),
+    GitTool(),
     TaskCreateTool(),
     TaskListTool(),
     TaskGetTool(),

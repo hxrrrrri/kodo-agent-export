@@ -9,7 +9,7 @@ from agent.session_runner import SessionRunner
 from agent.modes import DEFAULT_MODE, list_modes, normalize_mode
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from api.security import (
     COMMANDS_RATE_LIMITER,
@@ -45,19 +45,46 @@ def _resolve_mode(requested_mode: str | None, stored_mode: str | None) -> str:
     return normalize_mode(target)
 
 
+def _extract_text_content(content: Any) -> str:
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts: list[str] = []
+        for block in content:
+            if not isinstance(block, dict):
+                continue
+            block_type = str(block.get("type", "")).lower()
+            if block_type == "text":
+                text = block.get("text", "")
+                if isinstance(text, str) and text.strip():
+                    parts.append(text.strip())
+        return "\n".join(parts).strip()
+    return str(content or "").strip()
+
+
 class ChatRequest(BaseModel):
-    message: str = Field(min_length=1, max_length=12000)
+    message: str | None = Field(default=None, max_length=12000)
+    content: str | list[dict[str, Any]] | None = Field(default=None)
+    image_attachment: dict[str, str] | None = Field(default=None)
     session_id: str | None = Field(default=None, max_length=128)
     project_dir: str | None = Field(default=None, max_length=1024)
     mode: str | None = Field(default=None, max_length=64)
 
     @field_validator("message")
     @classmethod
-    def validate_message(cls, value: str) -> str:
+    def validate_message(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
         text = value.strip()
-        if not text:
-            raise ValueError("message is required")
-        return text
+        return text or None
+
+    @model_validator(mode="after")
+    def validate_content_or_message(self) -> "ChatRequest":
+        has_message = isinstance(self.message, str) and bool(self.message.strip())
+        has_content = self.content is not None
+        if not has_message and not has_content:
+            raise ValueError("message or content is required")
+        return self
 
     @field_validator("mode")
     @classmethod
@@ -97,6 +124,22 @@ class SessionImportRequest(BaseModel):
     session_id: str | None = Field(default=None, max_length=128)
     metadata: dict[str, Any] = Field(default_factory=dict)
     messages: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class UpdateSessionRequest(BaseModel):
+    title: str = Field(min_length=1, max_length=200)
+
+    @field_validator("title")
+    @classmethod
+    def validate_title(cls, value: str) -> str:
+        text = value.strip()
+        if not text:
+            raise ValueError("title is required")
+        return text
+
+
+class CheckpointCreateRequest(BaseModel):
+    label: str | None = Field(default=None, max_length=200)
 
 
 class TaskCreateRequest(BaseModel):
@@ -197,6 +240,12 @@ async def send_message(req: ChatRequest, request: Request):
             raise HTTPException(status_code=400, detail=f"project_dir is not a directory: {project_dir}")
 
     session_id = req.session_id or str(uuid.uuid4())
+    user_content: str | list[dict[str, Any]] = req.content if req.content is not None else (req.message or "")
+    user_text = _extract_text_content(user_content)
+    user_payload: dict[str, Any] = {"role": "user", "content": user_content}
+    if isinstance(req.image_attachment, dict):
+        user_payload["image_attachment"] = req.image_attachment
+
     existing_payload = await memory_manager.load_session_payload(session_id)
     history = existing_payload.get("messages", []) if existing_payload else []
     metadata = existing_payload.get("metadata", {}) if existing_payload else {}
@@ -269,12 +318,12 @@ async def send_message(req: ChatRequest, request: Request):
         )
         return approved
 
-    if is_command_message(req.message):
+    if req.content is None and is_command_message(user_text):
         async def command_stream():
             yield f"data: {json.dumps({'type': 'meta', 'request_id': request_id, 'session_id': session_id, 'mode': effective_mode})}\n\n"
 
             try:
-                result = await execute_command(req.message, session_id=session_id, project_dir=project_dir)
+                result = await execute_command(user_text, session_id=session_id, project_dir=project_dir)
             except Exception as e:
                 log_audit_event(
                     "chat_command_error",
@@ -286,10 +335,10 @@ async def send_message(req: ChatRequest, request: Request):
                 return
 
             updated_history = list(history) + [
-                {"role": "user", "content": req.message},
+                {"role": "user", "content": user_text},
                 {"role": "assistant", "content": result.text},
             ]
-            title = req.message[:60] + ("..." if len(req.message) > 60 else "")
+            title = user_text[:60] + ("..." if len(user_text) > 60 else "")
             latest_mode = effective_mode
             latest_metadata = await memory_manager.get_session_metadata(session_id)
             if isinstance(latest_metadata, dict):
@@ -297,6 +346,51 @@ async def send_message(req: ChatRequest, request: Request):
                     latest_mode = normalize_mode(str(latest_metadata.get("mode", effective_mode)))
                 except ValueError:
                     latest_mode = effective_mode
+            if result.run_prompt:
+                runner = SessionRunner()
+                usage_payload: dict[str, Any] | None = None
+                run_messages = list(updated_history) + [{"role": "user", "content": result.run_prompt}]
+
+                yield f"data: {json.dumps({'type': 'text', 'content': result.text})}\n\n"
+
+                async for event in runner.stream(
+                    session_id=session_id,
+                    messages=run_messages,
+                    project_dir=project_dir,
+                    mode=latest_mode,
+                    approval_callback=approval_callback,
+                ):
+                    if event.get("type") == "done" and isinstance(event.get("usage"), dict):
+                        usage_payload = event["usage"]
+                    yield f"data: {json.dumps(event)}\n\n"
+
+                run_result = getattr(runner, "_last_result", None)
+                if usage_payload is not None:
+                    try:
+                        usage_event = record_usage_event(
+                            session_id=session_id,
+                            model=str(usage_payload.get("model", "")),
+                            input_tokens=int(usage_payload.get("input_tokens", 0) or 0),
+                            output_tokens=int(usage_payload.get("output_tokens", 0) or 0),
+                            provider=str(getattr(run_result, "provider", "unknown") or "unknown"),
+                            input_cache_read_tokens=int(usage_payload.get("input_cache_read_tokens", 0) or 0),
+                            input_cache_write_tokens=int(usage_payload.get("input_cache_write_tokens", 0) or 0),
+                        )
+                    except Exception:
+                        usage_event = None
+                else:
+                    usage_event = None
+
+                log_audit_event(
+                    "chat_command_executed",
+                    request_id=request_id,
+                    session_id=session_id,
+                    command=result.name,
+                    mode=latest_mode,
+                    usage=usage_event,
+                )
+                return
+
             await memory_manager.save_session(
                 session_id,
                 updated_history,
@@ -328,7 +422,7 @@ async def send_message(req: ChatRequest, request: Request):
         usage_payload: dict | None = None
         runner = SessionRunner()
 
-        session_messages = list(history) + [{"role": "user", "content": req.message}]
+        session_messages = list(history) + [user_payload]
 
         yield f"data: {json.dumps({'type': 'meta', 'request_id': request_id, 'session_id': session_id, 'mode': effective_mode})}\n\n"
 
@@ -358,6 +452,8 @@ async def send_message(req: ChatRequest, request: Request):
                         input_tokens=int(usage_payload.get("input_tokens", 0) or 0),
                         output_tokens=int(usage_payload.get("output_tokens", 0) or 0),
                         provider=str(provider_name or "unknown"),
+                        input_cache_read_tokens=int(usage_payload.get("input_cache_read_tokens", 0) or 0),
+                        input_cache_write_tokens=int(usage_payload.get("input_cache_write_tokens", 0) or 0),
                     )
                 except Exception:
                     usage_event = None
@@ -442,6 +538,11 @@ async def new_session(request: Request):
     return NewSessionResponse(session_id=session_id)
 
 
+@router.post("/sessions", response_model=NewSessionResponse)
+async def create_session(request: Request):
+    return await new_session(request)
+
+
 @router.get("/sessions")
 async def list_sessions(request: Request):
     require_api_auth(request)
@@ -453,6 +554,119 @@ async def list_sessions(request: Request):
         count=len(sessions),
     )
     return {"sessions": sessions}
+
+
+@router.patch("/sessions/{session_id}")
+async def update_session(session_id: str, body: UpdateSessionRequest, request: Request):
+    require_api_auth(request)
+    await enforce_rate_limit(request, SESSION_RATE_LIMITER, "update_session")
+
+    payload = await memory_manager.load_session_payload(session_id)
+    if payload is None:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    metadata = await memory_manager.update_session_metadata(
+        session_id,
+        {"title": body.title},
+        create_if_missing=False,
+    )
+
+    log_audit_event(
+        "update_session",
+        request_id=getattr(request.state, "request_id", None),
+        session_id=session_id,
+        title=body.title,
+    )
+    return {
+        "session_id": session_id,
+        "metadata": metadata,
+    }
+
+
+@router.post("/sessions/{session_id}/checkpoint")
+async def create_checkpoint_endpoint(
+    session_id: str,
+    body: CheckpointCreateRequest,
+    request: Request,
+):
+    require_api_auth(request)
+    await enforce_rate_limit(request, SESSION_RATE_LIMITER, "create_checkpoint")
+
+    payload = await memory_manager.load_session_payload(session_id)
+    if payload is None:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    messages = payload.get("messages", [])
+    if not isinstance(messages, list):
+        messages = []
+
+    checkpoint_id = await memory_manager.create_checkpoint(
+        session_id=session_id,
+        messages=messages,
+        label=body.label,
+    )
+
+    log_audit_event(
+        "checkpoint_created",
+        request_id=getattr(request.state, "request_id", None),
+        session_id=session_id,
+        checkpoint_id=checkpoint_id,
+    )
+    return {
+        "session_id": session_id,
+        "checkpoint_id": checkpoint_id,
+    }
+
+
+@router.get("/sessions/{session_id}/checkpoints")
+async def list_checkpoints_endpoint(session_id: str, request: Request):
+    require_api_auth(request)
+    await enforce_rate_limit(request, SESSION_RATE_LIMITER, "list_checkpoints")
+    checkpoints = await memory_manager.list_checkpoints(session_id)
+    return {
+        "session_id": session_id,
+        "checkpoints": checkpoints,
+    }
+
+
+@router.post("/sessions/{session_id}/checkpoints/{checkpoint_id}/restore")
+async def restore_checkpoint_endpoint(
+    session_id: str,
+    checkpoint_id: str,
+    request: Request,
+):
+    require_api_auth(request)
+    await enforce_rate_limit(request, SESSION_RATE_LIMITER, "restore_checkpoint")
+
+    payload = await memory_manager.load_session_payload(session_id)
+    if payload is None:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    metadata = payload.get("metadata", {}) if isinstance(payload, dict) else {}
+    try:
+        messages = await memory_manager.restore_checkpoint(session_id, checkpoint_id)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
+
+    await memory_manager.save_session(
+        session_id=session_id,
+        messages=messages,
+        metadata=metadata if isinstance(metadata, dict) else {},
+    )
+
+    log_audit_event(
+        "checkpoint_restored",
+        request_id=getattr(request.state, "request_id", None),
+        session_id=session_id,
+        checkpoint_id=checkpoint_id,
+        message_count=len(messages),
+    )
+    return {
+        "restored": True,
+        "session_id": session_id,
+        "checkpoint_id": checkpoint_id,
+        "message_count": len(messages),
+    }
 
 
 @router.get("/modes")
@@ -519,10 +733,15 @@ async def list_commands_endpoint(request: Request):
         "commands": [
             {"name": "/help", "description": "Show available commands"},
             {"name": "/cost [days]", "description": "Show token and cost usage summary"},
+            {"name": "/search <query>", "description": "Search the web and return top results"},
+            {"name": "/git <subcommand>", "description": "Run safe, read-only git command"},
             {"name": "/session", "description": "List recent sessions"},
             {"name": "/session current", "description": "Show current session id"},
             {"name": "/memory <text>", "description": "Append note to global memory"},
             {"name": "/memory show", "description": "Show loaded memory context"},
+            {"name": "/checkpoint", "description": "Create checkpoint for current session"},
+            {"name": "/checkpoint list", "description": "List session checkpoints"},
+            {"name": "/checkpoint restore <id> --yes", "description": "Restore a checkpoint"},
             {"name": "/mode", "description": "Show current session mode"},
             {"name": "/mode list", "description": "List available execution modes"},
             {"name": "/mode set <name>", "description": "Set session execution mode"},
@@ -552,6 +771,7 @@ async def list_commands_endpoint(request: Request):
             {"name": "/agents stop <agent_id>", "description": "Stop sub-agent"},
             {"name": "/skills", "description": "List bundled skills"},
             {"name": "/skills show <name>", "description": "Show skill content"},
+            {"name": "/skills run <name>", "description": "Run bundled skill immediately"},
         ]
     }
 

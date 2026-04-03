@@ -3,17 +3,75 @@
   "displayName": "KODO VS Code",
   "publisher": "kodo-agent",
   "version": "0.1.0",
+  "description": "Run and control your KODO agent directly inside VS Code.",
   "engines": {
     "vscode": "^1.88.0"
   },
   "main": "./out/extension.js",
+  "categories": [
+    "Other"
+  ],
   "contributes": {
     "commands": [
       {
         "command": "kodo.open",
         "title": "KODO: Open Agent"
+      },
+      {
+        "command": "kodo.newSession",
+        "title": "KODO: New Session"
+      },
+      {
+        "command": "kodo.sendSelection",
+        "title": "KODO: Send Editor Selection"
+      },
+      {
+        "command": "kodo.openExternal",
+        "title": "KODO: Open Agent In Browser"
+      },
+      {
+        "command": "kodo.showLogs",
+        "title": "KODO: Show Extension Logs"
       }
-    ]
+    ],
+    "keybindings": [
+      {
+        "command": "kodo.open",
+        "key": "ctrl+alt+k",
+        "mac": "cmd+alt+k"
+      },
+      {
+        "command": "kodo.sendSelection",
+        "key": "ctrl+alt+enter",
+        "mac": "cmd+alt+enter",
+        "when": "editorTextFocus"
+      }
+    ],
+    "configuration": {
+      "title": "KODO",
+      "properties": {
+        "kodo.serverUrl": {
+          "type": "string",
+          "default": "http://localhost:5173",
+          "description": "KODO frontend URL used in the embedded panel."
+        },
+        "kodo.apiUrl": {
+          "type": "string",
+          "default": "http://localhost:8000",
+          "description": "KODO backend API base URL used for extension actions."
+        },
+        "kodo.apiToken": {
+          "type": "string",
+          "default": "",
+          "description": "Optional bearer token for protected KODO API endpoints."
+        },
+        "kodo.autoOpenOnStartup": {
+          "type": "boolean",
+          "default": false,
+          "description": "Automatically open the KODO panel when VS Code starts."
+        }
+      }
+    }
   },
   "scripts": {
     "compile": "tsc -p .",

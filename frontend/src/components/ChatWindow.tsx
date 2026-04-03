@@ -1,8 +1,17 @@
-import { useEffect, useMemo, useRef, useState, KeyboardEvent } from 'react'
-import { Send, Square, FolderOpen, Zap } from 'lucide-react'
+import { useCallback, useEffect, useMemo, useRef, useState, KeyboardEvent } from 'react'
+import { Send, Square, FolderOpen, Zap, ImagePlus, X, Search } from 'lucide-react'
 import { useChat } from '../hooks/useChat'
 import { MessageBubble } from './MessageBubble'
 import { CommandDefinition } from '../store/chatStore'
+
+const CONTEXT_TOKEN_BUDGET = Number(import.meta.env.VITE_CONTEXT_TOKEN_BUDGET || 60000)
+
+type PendingImage = {
+  previewUrl: string
+  data: string
+  media_type: string
+  name: string
+}
 
 const EXAMPLE_PROMPTS = [
   '/help',
@@ -22,10 +31,15 @@ const EXAMPLE_PROMPTS = [
 const FALLBACK_COMMANDS: CommandDefinition[] = [
   { name: '/help', description: 'Show available commands' },
   { name: '/cost [days]', description: 'Show token and estimated cost usage' },
+  { name: '/search <query>', description: 'Search the web and return top results' },
+  { name: '/git <subcommand>', description: 'Run safe, read-only git command' },
   { name: '/session', description: 'List recent sessions' },
   { name: '/session current', description: 'Show current session id' },
   { name: '/memory <text>', description: 'Append note to global memory' },
   { name: '/memory show', description: 'Show loaded memory context' },
+  { name: '/checkpoint', description: 'Create checkpoint for current session' },
+  { name: '/checkpoint list', description: 'List session checkpoints' },
+  { name: '/checkpoint restore <id> --yes', description: 'Restore a session checkpoint' },
   { name: '/mode', description: 'Show current session mode' },
   { name: '/mode list', description: 'List available execution modes' },
   { name: '/mode set <name>', description: 'Set session execution mode' },
@@ -55,6 +69,7 @@ const FALLBACK_COMMANDS: CommandDefinition[] = [
   { name: '/agents stop <agent_id>', description: 'Stop sub-agent' },
   { name: '/skills', description: 'List bundled skills' },
   { name: '/skills show <name>', description: 'Show skill content' },
+  { name: '/skills run <name>', description: 'Run bundled skill immediately' },
 ]
 
 function leadingCommandToken(value: string): string {
@@ -133,6 +148,11 @@ function buildCommandSuggestions(input: string, commands: CommandDefinition[]): 
   return ranked.slice(0, 8).map((item) => item.command)
 }
 
+function approximateTokens(value: string): number {
+  if (!value.trim()) return 0
+  return Math.max(1, Math.ceil(value.length / 4))
+}
+
 export function ChatWindow() {
   const {
     messages,
@@ -150,20 +170,27 @@ export function ChatWindow() {
     setSessionMode,
     permissionChallenges,
     respondPermission,
+    searchQuery,
+    setSearchQuery,
   } = useChat()
   const [input, setInput] = useState('')
   const [showProjectInput, setShowProjectInput] = useState(false)
   const [permissionSubmitting, setPermissionSubmitting] = useState(false)
   const [activeCommandIndex, setActiveCommandIndex] = useState(0)
+  const [pendingImage, setPendingImage] = useState<PendingImage | null>(null)
+  const messageListRef = useRef<HTMLDivElement>(null)
   const bottomRef = useRef<HTMLDivElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
+  const imageInputRef = useRef<HTMLInputElement>(null)
+  const shouldAutoScrollRef = useRef(true)
   const commandsRequestedRef = useRef(false)
 
   const activePermission = permissionChallenges.length > 0 ? permissionChallenges[0] : null
 
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
-  }, [messages])
+    if (!shouldAutoScrollRef.current) return
+    bottomRef.current?.scrollIntoView({ behavior: isLoading ? 'auto' : 'smooth' })
+  }, [messages, isLoading])
 
   useEffect(() => {
     if (commandsRequestedRef.current) return
@@ -179,6 +206,14 @@ export function ChatWindow() {
     setActiveCommandIndex(0)
   }, [input, showCommandSuggestions])
 
+  useEffect(() => {
+    setInput('')
+    setPendingImage(null)
+    if (textareaRef.current) {
+      textareaRef.current.style.height = 'auto'
+    }
+  }, [sessionId])
+
   const applyCommandSuggestion = (name: string) => {
     const next = `${name}${name.includes('<') ? '' : ' '}`
     setInput(next)
@@ -193,12 +228,47 @@ export function ChatWindow() {
     })
   }
 
-  const handleSend = () => {
+  const handleSend = useCallback(() => {
     const msg = input.trim()
-    if (!msg || isLoading) return
+    if ((!msg && !pendingImage) || isLoading) return
+    const imagePayload = pendingImage
+      ? {
+          url: pendingImage.previewUrl,
+          data: pendingImage.data,
+          media_type: pendingImage.media_type,
+        }
+      : undefined
     setInput('')
+    setPendingImage(null)
     if (textareaRef.current) textareaRef.current.style.height = 'auto'
-    sendMessage(msg)
+    sendMessage(msg, imagePayload)
+  }, [input, pendingImage, isLoading, sendMessage])
+
+  useEffect(() => {
+    const onKeyDown = (event: globalThis.KeyboardEvent) => {
+      const isMeta = event.ctrlKey || event.metaKey
+      if (isMeta && event.key.toLowerCase() === 'k') {
+        event.preventDefault()
+        textareaRef.current?.focus()
+      }
+      if (isMeta && event.key === 'Enter') {
+        event.preventDefault()
+        handleSend()
+      }
+      if (event.key === 'Escape' && isLoading) {
+        event.preventDefault()
+        stopGeneration()
+      }
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [isLoading, stopGeneration, handleSend])
+
+  const handleMessagesScroll = () => {
+    const container = messageListRef.current
+    if (!container) return
+    const distanceFromBottom = container.scrollHeight - container.scrollTop - container.clientHeight
+    shouldAutoScrollRef.current = distanceFromBottom < 80
   }
 
   const handleKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
@@ -229,6 +299,29 @@ export function ChatWindow() {
     e.target.style.height = Math.min(e.target.scrollHeight, 200) + 'px'
   }
 
+  const handleImagePick = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+    const reader = new FileReader()
+    reader.onload = () => {
+      const result = typeof reader.result === 'string' ? reader.result : ''
+      if (!result.startsWith('data:')) return
+      const split = result.split(',', 2)
+      if (split.length !== 2) return
+      const header = split[0]
+      const data = split[1]
+      const mediaType = header.replace('data:', '').replace(';base64', '') || file.type || 'image/png'
+      setPendingImage({
+        previewUrl: result,
+        data,
+        media_type: mediaType,
+        name: file.name,
+      })
+    }
+    reader.readAsDataURL(file)
+    e.target.value = ''
+  }
+
   const handlePermissionDecision = async (approve: boolean, remember: boolean) => {
     if (!activePermission || permissionSubmitting) return
     setPermissionSubmitting(true)
@@ -237,6 +330,25 @@ export function ChatWindow() {
   }
 
   const isEmpty = messages.length === 0
+  const filteredMessages = useMemo(() => {
+    const query = searchQuery.trim().toLowerCase()
+    if (!query) return messages
+    return messages.filter((msg) => {
+      const inContent = msg.content.toLowerCase().includes(query)
+      const inTools = (msg.toolCalls || []).some((tc) => {
+        const output = typeof tc.output === 'string' ? tc.output.toLowerCase() : ''
+        return output.includes(query) || tc.tool.toLowerCase().includes(query)
+      })
+      return inContent || inTools
+    })
+  }, [messages, searchQuery])
+
+  const contextTokens = useMemo(() => {
+    const messageTokens = messages.reduce((total, message) => total + approximateTokens(message.content), 0)
+    return messageTokens
+  }, [messages])
+  const contextPercent = Math.min(100, Math.round((contextTokens / CONTEXT_TOKEN_BUDGET) * 100))
+
   const modes = availableModes.length > 0
     ? availableModes
     : [
@@ -264,6 +376,8 @@ export function ChatWindow() {
         alignItems: 'center',
         justifyContent: 'space-between',
         background: 'var(--bg-1)',
+        gap: 10,
+        flexWrap: 'wrap',
         flexShrink: 0,
       }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
@@ -275,6 +389,36 @@ export function ChatWindow() {
               <span style={{ color: 'var(--green)' }}>● READY</span>
             )}
           </span>
+        </div>
+
+        <div style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: 6,
+          border: '1px solid var(--border)',
+          borderRadius: 'var(--radius)',
+          background: 'var(--bg-2)',
+          padding: '4px 8px',
+          minWidth: 210,
+          flex: 1,
+          maxWidth: 320,
+        }}>
+          <Search size={12} color="var(--text-2)" />
+          <input
+            type="text"
+            value={searchQuery}
+            onChange={(event) => setSearchQuery(event.target.value)}
+            placeholder="Search messages"
+            style={{
+              width: '100%',
+              background: 'transparent',
+              border: 'none',
+              outline: 'none',
+              color: 'var(--text-0)',
+              fontFamily: 'var(--font-mono)',
+              fontSize: 11,
+            }}
+          />
         </div>
 
         <button
@@ -378,6 +522,39 @@ export function ChatWindow() {
         </a>
       </div>
 
+      <div style={{
+        padding: '8px 24px',
+        borderBottom: '1px solid var(--border)',
+        background: 'var(--bg-2)',
+        display: 'grid',
+        gap: 5,
+      }}>
+        <div style={{
+          display: 'flex',
+          justifyContent: 'space-between',
+          fontSize: 10,
+          color: 'var(--text-2)',
+          letterSpacing: '0.06em',
+        }}>
+          <span>CONTEXT WINDOW</span>
+          <span>{contextTokens.toLocaleString()} / {CONTEXT_TOKEN_BUDGET.toLocaleString()} TOK</span>
+        </div>
+        <div style={{
+          height: 6,
+          borderRadius: 999,
+          border: '1px solid var(--border)',
+          background: 'var(--bg-0)',
+          overflow: 'hidden',
+        }}>
+          <div style={{
+            width: `${contextPercent}%`,
+            height: '100%',
+            background: contextPercent > 85 ? 'var(--red)' : contextPercent > 65 ? 'var(--yellow)' : 'var(--accent)',
+            transition: 'width 0.2s ease',
+          }} />
+        </div>
+      </div>
+
       {/* Project dir input */}
       {showProjectInput && (
         <div style={{
@@ -431,7 +608,10 @@ export function ChatWindow() {
         flex: 1,
         overflowY: 'auto',
         padding: '24px 32px',
-      }}>
+      }}
+        ref={messageListRef}
+        onScroll={handleMessagesScroll}
+      >
         {isEmpty && (
           <div style={{
             display: 'flex',
@@ -504,9 +684,22 @@ export function ChatWindow() {
           </div>
         )}
 
-        {messages.map((msg) => (
-          <MessageBubble key={msg.id} message={msg} />
+        {filteredMessages.map((msg) => (
+          <MessageBubble key={msg.id} message={msg} searchQuery={searchQuery} />
         ))}
+
+        {searchQuery.trim() && filteredMessages.length === 0 && (
+          <div style={{
+            border: '1px dashed var(--border-bright)',
+            borderRadius: 'var(--radius)',
+            padding: '10px 12px',
+            color: 'var(--text-1)',
+            fontSize: 12,
+            marginBottom: 14,
+          }}>
+            No message matches for "{searchQuery.trim()}" in this session.
+          </div>
+        )}
 
         {error && (
           <div style={{
@@ -581,7 +774,6 @@ export function ChatWindow() {
                     <span style={{
                       color: 'var(--text-2)',
                       fontSize: 10,
-                      fontFamily: 'var(--font-mono)',
                     }}>
                       {command.description}
                     </span>
@@ -604,12 +796,80 @@ export function ChatWindow() {
           onFocusCapture={e => { (e.currentTarget as HTMLElement).style.borderColor = 'var(--accent)' }}
           onBlurCapture={e => { (e.currentTarget as HTMLElement).style.borderColor = 'var(--border)' }}
         >
+          <input
+            ref={imageInputRef}
+            type="file"
+            accept="image/*"
+            onChange={handleImagePick}
+            style={{ display: 'none' }}
+          />
+
+          <button
+            type="button"
+            onClick={() => imageInputRef.current?.click()}
+            title="Attach image"
+            style={{
+              width: 32,
+              height: 32,
+              borderRadius: 'var(--radius)',
+              border: `1px solid ${pendingImage ? 'var(--accent)' : 'var(--border)'}`,
+              background: pendingImage ? 'var(--accent-dim)' : 'var(--bg-3)',
+              color: pendingImage ? 'var(--accent)' : 'var(--text-1)',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              cursor: 'pointer',
+              flexShrink: 0,
+            }}
+          >
+            <ImagePlus size={14} />
+          </button>
+
+          {pendingImage && (
+            <div style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 8,
+              border: '1px solid var(--border-bright)',
+              borderRadius: 'var(--radius)',
+              background: 'var(--bg-3)',
+              padding: '4px 6px',
+              maxWidth: 190,
+              flexShrink: 0,
+            }}>
+              <img
+                src={pendingImage.previewUrl}
+                alt={pendingImage.name}
+                style={{ width: 34, height: 34, objectFit: 'cover', borderRadius: 3 }}
+              />
+              <span className="truncate" style={{ fontSize: 10, color: 'var(--text-1)', maxWidth: 100 }}>
+                {pendingImage.name}
+              </span>
+              <button
+                type="button"
+                onClick={() => setPendingImage(null)}
+                style={{
+                  border: 'none',
+                  background: 'transparent',
+                  color: 'var(--text-2)',
+                  cursor: 'pointer',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  padding: 0,
+                }}
+              >
+                <X size={12} />
+              </button>
+            </div>
+          )}
+
           <textarea
             ref={textareaRef}
             value={input}
             onChange={handleTextareaChange}
             onKeyDown={handleKeyDown}
-            placeholder="Ask KŌDO anything or run /help (Shift+Enter for newline)"
+            placeholder="Ask KŌDO anything, attach an image, or run /help"
             rows={1}
             style={{
               flex: 1,
@@ -627,14 +887,14 @@ export function ChatWindow() {
           />
           <button
             onClick={isLoading ? stopGeneration : handleSend}
-            disabled={!isLoading && !input.trim()}
+            disabled={!isLoading && !input.trim() && !pendingImage}
             style={{
-              background: isLoading ? 'var(--red-dim)' : input.trim() ? 'var(--accent)' : 'var(--bg-3)',
+              background: isLoading ? 'var(--red-dim)' : (input.trim() || pendingImage) ? 'var(--accent)' : 'var(--bg-3)',
               border: isLoading ? '1px solid var(--red)' : 'none',
-              color: isLoading ? 'var(--red)' : input.trim() ? '#0a0a0b' : 'var(--text-2)',
+              color: isLoading ? 'var(--red)' : (input.trim() || pendingImage) ? '#0a0a0b' : 'var(--text-2)',
               width: 36, height: 36,
               borderRadius: 'var(--radius)',
-              cursor: (!isLoading && !input.trim()) ? 'not-allowed' : 'pointer',
+              cursor: (!isLoading && !input.trim() && !pendingImage) ? 'not-allowed' : 'pointer',
               display: 'flex', alignItems: 'center', justifyContent: 'center',
               flexShrink: 0,
               transition: 'all 0.15s',
@@ -645,7 +905,7 @@ export function ChatWindow() {
         </div>
         </div>
         <div style={{ fontSize: 10, color: 'var(--text-2)', marginTop: 6, textAlign: 'center' }}>
-          ENTER to send · SHIFT+ENTER for newline · TAB to autocomplete command · try /help /tasks /agents /skills /mcp /cost
+          Enter send · Shift+Enter newline · Tab autocomplete · Ctrl/Cmd+K focus · Esc stop generation
         </div>
       </div>
 
@@ -681,7 +941,7 @@ export function ChatWindow() {
             </div>
 
             <div style={{ fontSize: 13, color: 'var(--text-0)' }}>
-              Tool <strong>{activePermission.tool_name}</strong> requested approval.
+              Tool <strong>{activePermission?.tool_name}</strong> requested approval.
             </div>
 
             <div style={{
@@ -696,7 +956,7 @@ export function ChatWindow() {
               whiteSpace: 'pre-wrap',
               wordBreak: 'break-word',
             }}>
-              {activePermission.input_preview || '(no preview provided)'}
+              {activePermission?.input_preview || '(no preview provided)'}
             </div>
 
             <div style={{

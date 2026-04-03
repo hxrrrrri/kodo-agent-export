@@ -30,6 +30,15 @@ SAFE_PATTERNS = [
 ]
 
 
+def _max_output_chars() -> int:
+    raw = os.getenv("BASH_MAX_OUTPUT_CHARS", "20000").strip()
+    try:
+        value = int(raw)
+    except ValueError:
+        value = 20000
+    return max(2000, min(value, 200000))
+
+
 class BashTool(BaseTool):
     name = "bash"
     description = (
@@ -116,9 +125,9 @@ class BashTool(BaseTool):
             if err:
                 combined += f"\n[stderr]\n{err}" if out else err
 
-            # Truncate very long output
-            if len(combined) > 20000:
-                combined = combined[:20000] + "\n... [output truncated]"
+            max_chars = _max_output_chars()
+            if len(combined) > max_chars:
+                combined = combined[:max_chars] + "\n... [output truncated]"
 
             return ToolResult(
                 success=return_code == 0,

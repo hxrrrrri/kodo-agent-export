@@ -2,6 +2,42 @@ import { useState } from 'react'
 import { Terminal, FileText, Search, Globe, ChevronDown, ChevronRight, CheckCircle, XCircle, Loader } from 'lucide-react'
 import { ToolCall } from '../store/chatStore'
 
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
+
+function renderHighlightedText(text: string, query: string): JSX.Element {
+  const trimmed = query.trim()
+  if (!trimmed) {
+    return <>{text}</>
+  }
+
+  const pattern = new RegExp(`(${escapeRegExp(trimmed)})`, 'ig')
+  const parts = text.split(pattern)
+  return (
+    <>
+      {parts.map((part, idx) => {
+        if (part.toLowerCase() === trimmed.toLowerCase()) {
+          return (
+            <mark
+              key={`${part}-${idx}`}
+              style={{
+                background: 'var(--yellow-dim)',
+                color: 'var(--yellow)',
+                padding: '0 1px',
+                borderRadius: 2,
+              }}
+            >
+              {part}
+            </mark>
+          )
+        }
+        return <span key={`${part}-${idx}`}>{part}</span>
+      })}
+    </>
+  )
+}
+
 const TOOL_ICONS: Record<string, React.ReactNode> = {
   bash: <Terminal size={13} />,
   file_read: <FileText size={13} />,
@@ -38,11 +74,71 @@ function getInputPreview(tool: string, input: Record<string, unknown>): string {
   }
 }
 
-export function ToolCallCard({ tc, isLast }: { tc: ToolCall; isLast: boolean }) {
+function getDiffText(tc: ToolCall): string {
+  const value = tc.metadata?.diff
+  return typeof value === 'string' ? value : ''
+}
+
+function renderDiff(diffText: string): JSX.Element | null {
+  const lines = diffText.split('\n')
+  if (lines.length === 0) return null
+
+  return (
+    <div style={{
+      border: '1px solid var(--border)',
+      borderRadius: 'var(--radius)',
+      background: 'var(--bg-0)',
+      maxHeight: 260,
+      overflow: 'auto',
+      fontFamily: 'var(--font-mono)',
+      fontSize: 11,
+      lineHeight: 1.45,
+    }}>
+      {lines.map((line, index) => {
+        let background = 'transparent'
+        let color = 'var(--text-1)'
+        if (line.startsWith('+') && !line.startsWith('+++')) {
+          background = 'rgba(0,255,136,0.08)'
+          color = 'var(--green)'
+        } else if (line.startsWith('-') && !line.startsWith('---')) {
+          background = 'rgba(255,59,59,0.12)'
+          color = 'var(--red)'
+        } else if (line.startsWith('@@')) {
+          background = 'rgba(77,166,255,0.12)'
+          color = 'var(--blue)'
+        }
+
+        return (
+          <div
+            key={`${line}-${index}`}
+            style={{
+              background,
+              color,
+              padding: '2px 8px',
+              whiteSpace: 'pre',
+            }}
+          >
+            {line || ' '}
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
+export function ToolCallCard({ tc, isLast, searchQuery }: { tc: ToolCall; isLast: boolean; searchQuery?: string }) {
   const [expanded, setExpanded] = useState(false)
   const color = TOOL_COLORS[tc.tool] || 'var(--text-1)'
   const icon = TOOL_ICONS[tc.tool] || <Terminal size={13} />
   const preview = getInputPreview(tc.tool, tc.input)
+  const diffText = getDiffText(tc)
+  const normalizedSearch = (searchQuery || '').trim().toLowerCase()
+  const searchMatch = Boolean(
+    normalizedSearch && (
+      preview.toLowerCase().includes(normalizedSearch) ||
+      String(tc.output || '').toLowerCase().includes(normalizedSearch)
+    )
+  )
   const hasResult = tc.output !== undefined
   const isRunning = !hasResult && isLast
 
@@ -52,7 +148,7 @@ export function ToolCallCard({ tc, isLast }: { tc: ToolCall; isLast: boolean }) 
       style={{
         margin: '6px 0',
         borderRadius: 'var(--radius)',
-        border: `1px solid var(--border)`,
+        border: `1px solid ${searchMatch ? 'var(--yellow)' : 'var(--border)'}`,
         background: 'var(--bg-2)',
         overflow: 'hidden',
         fontSize: 12,
@@ -148,8 +244,24 @@ export function ToolCallCard({ tc, isLast }: { tc: ToolCall; isLast: boolean }) 
                 maxHeight: 200,
                 overflow: 'auto',
               }}>
-                {tc.output}
+                {normalizedSearch
+                  ? renderHighlightedText(tc.output, normalizedSearch)
+                  : tc.output}
               </pre>
+            </div>
+          )}
+
+          {diffText && (
+            <div style={{ padding: '8px 10px', borderTop: '1px solid var(--border)' }}>
+              <div style={{
+                fontSize: 10,
+                color: 'var(--text-2)',
+                letterSpacing: '0.1em',
+                marginBottom: 6,
+              }}>
+                DIFF
+              </div>
+              {renderDiff(diffText)}
             </div>
           )}
         </div>

@@ -8,15 +8,29 @@ export interface ToolCall {
   output?: string
   success?: boolean
   approved?: boolean
+  metadata?: Record<string, unknown>
+}
+
+export interface ImageAttachment {
+  url?: string
+  data?: string
+  media_type?: string
 }
 
 export interface Message {
   id: string
   role: MessageRole
   content: string
+  imageAttachment?: ImageAttachment
   toolCalls?: ToolCall[]
   isStreaming?: boolean
-  usage?: { input_tokens: number; output_tokens: number; model: string }
+  usage?: {
+    input_tokens: number
+    output_tokens: number
+    model: string
+    input_cache_read_tokens?: number
+    input_cache_write_tokens?: number
+  }
   timestamp: number
 }
 
@@ -71,6 +85,13 @@ export interface PermissionChallenge {
   decided_at?: string | null
 }
 
+export interface Checkpoint {
+  checkpoint_id: string
+  label?: string | null
+  message_count: number
+  created_at: string
+}
+
 interface ChatState {
   sessionId: string | null
   sessions: Session[]
@@ -80,23 +101,30 @@ interface ChatState {
   projectDir: string
   usageSummary: UsageSummary | null
   permissionChallenges: PermissionChallenge[]
+  checkpoints: Checkpoint[]
   sessionMode: string
   availableModes: ModeOption[]
   commands: CommandDefinition[]
+  theme: 'dark' | 'light'
+  searchQuery: string
 
   setSessionId: (id: string | null) => void
   setSessions: (sessions: Session[]) => void
   setMessages: (messages: Message[]) => void
   addMessage: (message: Message) => void
   updateLastMessage: (updater: (msg: Message) => Message) => void
+  updateMessageById: (id: string, updater: (msg: Message) => Message) => void
   setLoading: (loading: boolean) => void
   setError: (error: string | null) => void
   setProjectDir: (dir: string) => void
   setUsageSummary: (summary: UsageSummary | null) => void
   setPermissionChallenges: (pending: PermissionChallenge[]) => void
+  setCheckpoints: (items: Checkpoint[]) => void
   setSessionMode: (mode: string) => void
   setAvailableModes: (modes: ModeOption[]) => void
   setCommands: (commands: CommandDefinition[]) => void
+  setTheme: (theme: 'dark' | 'light') => void
+  setSearchQuery: (query: string) => void
   clearMessages: () => void
 }
 
@@ -109,9 +137,12 @@ export const useChatStore = create<ChatState>((set) => ({
   projectDir: '',
   usageSummary: null,
   permissionChallenges: [],
+  checkpoints: [],
   sessionMode: 'execute',
   availableModes: [],
   commands: [],
+  theme: 'dark',
+  searchQuery: '',
 
   setSessionId: (id) => set({ sessionId: id }),
   setSessions: (sessions) => set({ sessions }),
@@ -124,13 +155,25 @@ export const useChatStore = create<ChatState>((set) => ({
       msgs[msgs.length - 1] = updater(msgs[msgs.length - 1])
       return { messages: msgs }
     }),
+  updateMessageById: (id, updater) =>
+    set((s) => {
+      if (!id) return s
+      const idx = s.messages.findIndex((msg) => msg.id === id)
+      if (idx < 0) return s
+      const msgs = [...s.messages]
+      msgs[idx] = updater(msgs[idx])
+      return { messages: msgs }
+    }),
   setLoading: (isLoading) => set({ isLoading }),
   setError: (error) => set({ error }),
   setProjectDir: (projectDir) => set({ projectDir }),
   setUsageSummary: (usageSummary) => set({ usageSummary }),
   setPermissionChallenges: (permissionChallenges) => set({ permissionChallenges }),
+  setCheckpoints: (checkpoints) => set({ checkpoints }),
   setSessionMode: (sessionMode) => set({ sessionMode }),
   setAvailableModes: (availableModes) => set({ availableModes }),
   setCommands: (commands) => set({ commands }),
+  setTheme: (theme) => set({ theme }),
+  setSearchQuery: (searchQuery) => set({ searchQuery }),
   clearMessages: () => set({ messages: [] }),
 }))

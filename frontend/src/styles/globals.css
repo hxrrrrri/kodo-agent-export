@@ -30,6 +30,32 @@
   --sidebar-width: 260px;
 }
 
+:root[data-theme='light'] {
+  --bg-0: #f7f6f2;
+  --bg-1: #f0eee9;
+  --bg-2: #e9e6df;
+  --bg-3: #ded9cf;
+  --border: #c5bdaf;
+  --border-bright: #a99d8a;
+
+  --text-0: #1f1c17;
+  --text-1: #484238;
+  --text-2: #756e61;
+
+  --accent: #cf3b00;
+  --accent-dim: rgba(207, 59, 0, 0.14);
+  --accent-glow: rgba(207, 59, 0, 0.22);
+
+  --green: #0f8f4f;
+  --green-dim: rgba(15, 143, 79, 0.14);
+  --yellow: #9f7a00;
+  --yellow-dim: rgba(159, 122, 0, 0.12);
+  --red: #b22727;
+  --red-dim: rgba(178, 39, 39, 0.14);
+  --blue: #0f67b7;
+  --blue-dim: rgba(15, 103, 183, 0.14);
+}
+
 *, *::before, *::after {
   box-sizing: border-box;
   margin: 0;
@@ -49,6 +75,12 @@ body {
   font-size: 14px;
   line-height: 1.6;
   -webkit-font-smoothing: antialiased;
+}
+
+@media (max-width: 900px) {
+  :root {
+    --sidebar-width: 220px;
+  }
 }
 
 /* Scrollbar */

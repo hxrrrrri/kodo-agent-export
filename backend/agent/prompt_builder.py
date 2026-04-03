@@ -1,6 +1,5 @@
 from agent.modes import get_mode
 from memory.manager import memory_manager
-from tools import ALL_TOOLS
 
 BASE_SYSTEM_PROMPT = """You are KODO, a powerful personal autonomous AI agent. You can:
 - Execute bash commands to interact with the OS
@@ -19,6 +18,8 @@ Always show your work - briefly explain each tool call before making it."""
 
 
 def build_tool_prompt_context() -> str:
+    from tools import ALL_TOOLS
+
     lines: list[str] = []
     for tool in ALL_TOOLS:
         contribution = tool.prompt().strip()

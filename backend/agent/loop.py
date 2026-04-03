@@ -26,6 +26,20 @@ ANTHROPIC_MODEL_PREFIXES = ("claude",)
 MAX_TOKENS = int(os.getenv("MAX_TOKENS", "8192"))
 
 
+def _env_int(name: str, default: int, minimum: int) -> int:
+    raw = os.getenv(name, str(default)).strip()
+    try:
+        value = int(raw)
+    except ValueError:
+        value = default
+    return max(minimum, value)
+
+
+MAX_CONTEXT_MESSAGES = _env_int("MAX_CONTEXT_MESSAGES", 50, 1)
+ENABLE_PROMPT_CACHE = os.getenv("KODO_ENABLE_PROMPT_CACHE", "0").strip().lower() in {"1", "true", "yes", "on"}
+N_CACHE_MESSAGES = _env_int("N_CACHE_MESSAGES", 4, 1)
+
+
 @dataclass
 class RuntimeConfig:
     provider: str
@@ -173,6 +187,214 @@ def _runtime_from_profile(profile: ProviderProfile, model_override: str | None =
     )
 
 
+def _truncate_history(history: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    if len(history) <= MAX_CONTEXT_MESSAGES:
+        return list(history)
+    return list(history[-MAX_CONTEXT_MESSAGES:])
+
+
+def _normalize_content_blocks(content: Any) -> list[dict[str, Any]]:
+    if isinstance(content, str):
+        return [{"type": "text", "text": content}] if content else []
+
+    if not isinstance(content, list):
+        if content is None:
+            return []
+        return [{"type": "text", "text": str(content)}]
+
+    blocks: list[dict[str, Any]] = []
+    for item in content:
+        if not isinstance(item, dict):
+            continue
+
+        block_type = str(item.get("type", "")).lower().strip()
+        if block_type == "text":
+            text = item.get("text")
+            if isinstance(text, str):
+                blocks.append({"type": "text", "text": text})
+            continue
+
+        if block_type != "image":
+            continue
+
+        source = item.get("source", {})
+        if not isinstance(source, dict):
+            continue
+
+        source_type = str(source.get("type", "")).lower().strip()
+        media_type = str(source.get("media_type") or source.get("mime_type") or "image/png").strip()
+        data = source.get("data")
+        url = source.get("url")
+
+        if source_type == "base64" and isinstance(data, str) and data.strip():
+            blocks.append(
+                {
+                    "type": "image",
+                    "source": {
+                        "type": "base64",
+                        "media_type": media_type,
+                        "data": data.strip(),
+                    },
+                }
+            )
+            continue
+
+        if source_type == "url" and isinstance(url, str) and url.strip():
+            blocks.append(
+                {
+                    "type": "image",
+                    "source": {
+                        "type": "url",
+                        "url": url.strip(),
+                    },
+                }
+            )
+
+    return blocks
+
+
+def _text_from_content(content: Any) -> str:
+    blocks = _normalize_content_blocks(content)
+    parts: list[str] = []
+    for block in blocks:
+        if block.get("type") == "text":
+            text = block.get("text")
+            if isinstance(text, str) and text.strip():
+                parts.append(text.strip())
+    return "\n".join(parts).strip()
+
+
+def _to_openai_content(content: Any) -> str | list[dict[str, Any]]:
+    blocks = _normalize_content_blocks(content)
+    if not blocks:
+        return ""
+
+    only_text = all(block.get("type") == "text" for block in blocks)
+    if only_text:
+        return "\n".join(str(block.get("text", "")) for block in blocks)
+
+    parts: list[dict[str, Any]] = []
+    for block in blocks:
+        block_type = str(block.get("type", "")).lower()
+        if block_type == "text":
+            parts.append({"type": "text", "text": str(block.get("text", ""))})
+            continue
+
+        source = block.get("source", {})
+        if not isinstance(source, dict):
+            continue
+
+        source_type = str(source.get("type", "")).lower().strip()
+        image_url = ""
+        if source_type == "base64":
+            media_type = str(source.get("media_type") or source.get("mime_type") or "image/png")
+            data = str(source.get("data", "")).strip()
+            if data:
+                image_url = f"data:{media_type};base64,{data}"
+        elif source_type == "url":
+            image_url = str(source.get("url", "")).strip()
+
+        if image_url:
+            parts.append({"type": "image_url", "image_url": {"url": image_url}})
+
+    return parts
+
+
+def _to_anthropic_content(content: Any) -> list[dict[str, Any]]:
+    blocks = _normalize_content_blocks(content)
+    normalized: list[dict[str, Any]] = []
+
+    for block in blocks:
+        block_type = str(block.get("type", "")).lower().strip()
+        if block_type == "text":
+            normalized.append({"type": "text", "text": str(block.get("text", ""))})
+            continue
+
+        source = block.get("source", {})
+        if not isinstance(source, dict):
+            continue
+
+        source_type = str(source.get("type", "")).lower().strip()
+        if source_type == "base64":
+            data = str(source.get("data", "")).strip()
+            if not data:
+                continue
+            media_type = str(source.get("media_type") or source.get("mime_type") or "image/png")
+            normalized.append(
+                {
+                    "type": "image",
+                    "source": {
+                        "type": "base64",
+                        "media_type": media_type,
+                        "data": data,
+                    },
+                }
+            )
+            continue
+
+        if source_type == "url":
+            url = str(source.get("url", "")).strip()
+            if url:
+                normalized.append({"type": "text", "text": f"Image URL: {url}"})
+
+    if normalized:
+        return normalized
+    return [{"type": "text", "text": ""}]
+
+
+def _build_openai_messages(history: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    messages: list[dict[str, Any]] = []
+    for msg in _truncate_history(history):
+        role = str(msg.get("role", "")).lower()
+        if role not in {"user", "assistant"}:
+            continue
+        content = _to_openai_content(msg.get("content", ""))
+        if isinstance(content, str) and not content.strip():
+            continue
+        if isinstance(content, list) and not content:
+            continue
+        messages.append({"role": role, "content": content})
+    return messages
+
+
+def _build_anthropic_messages(history: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    messages: list[dict[str, Any]] = []
+    for msg in _truncate_history(history):
+        role = str(msg.get("role", "")).lower()
+        if role not in {"user", "assistant"}:
+            continue
+        messages.append({"role": role, "content": _to_anthropic_content(msg.get("content", ""))})
+    return messages
+
+
+def _anthropic_system_payload(system_text: str) -> str | list[dict[str, Any]]:
+    if not ENABLE_PROMPT_CACHE:
+        return system_text
+    return [{"type": "text", "text": system_text, "cache_control": {"type": "ephemeral"}}]
+
+
+def _apply_anthropic_cache_controls(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    if not ENABLE_PROMPT_CACHE:
+        return messages
+
+    marked: list[dict[str, Any]] = []
+    start_index = max(0, len(messages) - N_CACHE_MESSAGES)
+
+    for idx, message in enumerate(messages):
+        copied = {
+            "role": message.get("role", "user"),
+            "content": list(message.get("content", [])) if isinstance(message.get("content"), list) else message.get("content"),
+        }
+        if idx >= start_index and isinstance(copied.get("content"), list) and copied["content"]:
+            first_block = copied["content"][0]
+            if isinstance(first_block, dict):
+                updated = dict(first_block)
+                updated["cache_control"] = {"type": "ephemeral"}
+                copied["content"][0] = updated
+        marked.append(copied)
+    return marked
+
+
 class AgentLoop:
     def __init__(
         self,
@@ -258,7 +480,7 @@ class AgentLoop:
 
     async def run(
         self,
-        user_message: str,
+        user_message: str | list[dict[str, Any]],
         history: list[dict[str, Any]],
         approval_callback=None,
     ) -> AsyncGenerator[dict[str, Any], None]:
@@ -301,12 +523,16 @@ class AgentLoop:
             except Exception as exc:
                 yield {"type": "error", "message": self._format_runtime_error(exc)}
 
-    async def _run_smart(self, user_message: str, history: list[dict[str, Any]]) -> AsyncGenerator[dict[str, Any], None]:
+    async def _run_smart(
+        self,
+        user_message: str | list[dict[str, Any]],
+        history: list[dict[str, Any]],
+    ) -> AsyncGenerator[dict[str, Any], None]:
         if self.smart_router is None:
             raise RuntimeError("Smart router is not initialized")
 
         attempted: list[str] = []
-        router_messages = list(history) + [{"role": "user", "content": user_message}]
+        router_messages = _truncate_history(history) + [{"role": "user", "content": user_message}]
 
         while True:
             decision = await self.smart_router.route(
@@ -464,15 +690,15 @@ class AgentLoop:
                 return await self.client.chat.completions.create(**kwargs)
             raise
 
-    async def _run_openai(self, user_message: str, history: list[dict[str, Any]]) -> AsyncGenerator[dict[str, Any], None]:
+    async def _run_openai(
+        self,
+        user_message: str | list[dict[str, Any]],
+        history: list[dict[str, Any]],
+    ) -> AsyncGenerator[dict[str, Any], None]:
         system = await self._build_system_prompt()
         messages: list[dict[str, Any]] = [{"role": "system", "content": system}]
-
-        for msg in history:
-            if msg.get("role") in ("user", "assistant") and isinstance(msg.get("content"), str):
-                messages.append({"role": msg["role"], "content": msg["content"]})
-
-        messages.append({"role": "user", "content": user_message})
+        messages.extend(_build_openai_messages(history))
+        messages.append({"role": "user", "content": _to_openai_content(user_message)})
 
         total_input_tokens = 0
         total_output_tokens = 0
@@ -569,6 +795,7 @@ class AgentLoop:
                         "tool": tool_name,
                         "output": result.output if result.success else result.error,
                         "success": result.success,
+                        "metadata": result.metadata,
                     }
 
                 messages.append(
@@ -579,25 +806,27 @@ class AgentLoop:
                     }
                 )
 
-    async def _run_anthropic(self, user_message: str, history: list[dict[str, Any]]) -> AsyncGenerator[dict[str, Any], None]:
+    async def _run_anthropic(
+        self,
+        user_message: str | list[dict[str, Any]],
+        history: list[dict[str, Any]],
+    ) -> AsyncGenerator[dict[str, Any], None]:
         system = await self._build_system_prompt()
-        messages: list[dict[str, Any]] = []
-
-        for msg in history:
-            if msg.get("role") in ("user", "assistant") and isinstance(msg.get("content"), str):
-                messages.append({"role": msg["role"], "content": msg["content"]})
-
-        messages.append({"role": "user", "content": user_message})
+        messages = _build_anthropic_messages(history)
+        messages.append({"role": "user", "content": _to_anthropic_content(user_message)})
 
         total_input_tokens = 0
         total_output_tokens = 0
+        total_cache_write_tokens = 0
+        total_cache_read_tokens = 0
 
         while True:
+            request_messages = _apply_anthropic_cache_controls(messages)
             response = await self.client.messages.create(
                 model=self.model,
                 max_tokens=MAX_TOKENS,
-                system=system,
-                messages=messages,
+                system=_anthropic_system_payload(system),
+                messages=request_messages,
                 tools=ANTHROPIC_TOOLS,
             )
 
@@ -605,6 +834,8 @@ class AgentLoop:
             if usage:
                 total_input_tokens += getattr(usage, "input_tokens", 0) or 0
                 total_output_tokens += getattr(usage, "output_tokens", 0) or 0
+                total_cache_write_tokens += getattr(usage, "cache_creation_input_tokens", 0) or 0
+                total_cache_read_tokens += getattr(usage, "cache_read_input_tokens", 0) or 0
 
             assistant_content: list[dict[str, Any]] = []
             tool_calls: list[dict[str, Any]] = []
@@ -641,6 +872,8 @@ class AgentLoop:
                     "usage": {
                         "input_tokens": total_input_tokens,
                         "output_tokens": total_output_tokens,
+                        "input_cache_write_tokens": total_cache_write_tokens,
+                        "input_cache_read_tokens": total_cache_read_tokens,
                         "model": self.model,
                     },
                 }
@@ -673,6 +906,7 @@ class AgentLoop:
                         "tool": tool_name,
                         "output": result.output if result.success else result.error,
                         "success": result.success,
+                        "metadata": result.metadata,
                     }
 
                 tool_result_blocks.append(
@@ -688,16 +922,12 @@ class AgentLoop:
 
     async def _run_gemini(
         self,
-        user_message: str,
+        user_message: str | list[dict[str, Any]],
         history: list[dict[str, Any]],
         model: str,
     ) -> AsyncGenerator[dict[str, Any], None]:
         system = await self._build_system_prompt()
-        messages: list[dict[str, Any]] = []
-
-        for msg in history:
-            if msg.get("role") in ("user", "assistant") and isinstance(msg.get("content"), str):
-                messages.append({"role": msg["role"], "content": msg["content"]})
+        messages: list[dict[str, Any]] = _truncate_history(history)
         messages.append({"role": "user", "content": user_message})
 
         stream_result = await gemini_chat(
@@ -730,7 +960,7 @@ class AgentLoop:
         yield {
             "type": "done",
             "usage": {
-                "input_tokens": max(1, len(user_message) // 4),
+                "input_tokens": max(1, len(_text_from_content(user_message)) // 4),
                 "output_tokens": output_tokens,
                 "model": model,
             },

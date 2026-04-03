@@ -1,4 +1,5 @@
 import os
+import difflib
 import aiofiles
 from .base import BaseTool, ToolResult
 from .path_guard import enforce_allowed_path
@@ -65,18 +66,30 @@ class FileEditTool(BaseTool):
             async with aiofiles.open(path, "w", encoding="utf-8") as f:
                 await f.write(new_content)
 
-            # Build a minimal diff preview
-            old_lines = old_str.splitlines()
-            new_lines = new_str.splitlines()
-            diff_preview = "\n".join(f"- {line_text}" for line_text in old_lines[:5])
-            diff_preview += "\n" + "\n".join(f"+ {line_text}" for line_text in new_lines[:5])
-            if len(old_lines) > 5 or len(new_lines) > 5:
-                diff_preview += "\n... (truncated)"
+            original_lines = content.splitlines(keepends=True)
+            updated_lines = new_content.splitlines(keepends=True)
+            diff_lines = list(
+                difflib.unified_diff(
+                    original_lines,
+                    updated_lines,
+                    fromfile=f"a/{os.path.basename(path)}",
+                    tofile=f"b/{os.path.basename(path)}",
+                    lineterm="",
+                )
+            )
+            diff_text = "\n".join(diff_lines)
+            changed_lines = len(
+                [line for line in diff_lines if (line.startswith("+") or line.startswith("-")) and not line.startswith(("+++", "---"))]
+            )
 
             return ToolResult(
                 success=True,
-                output=f"Edit applied to {path}\n\n{diff_preview}",
-                metadata={"path": path},
+                output=f"Edit applied to {path}",
+                metadata={
+                    "path": path,
+                    "diff": diff_text,
+                    "lines_changed": changed_lines,
+                },
             )
         except Exception as e:
             return ToolResult(success=False, output="", error=str(e))

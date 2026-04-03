@@ -81,7 +81,21 @@ def _resolve_rates(provider: str, model: str) -> tuple[float, float]:
 
 def estimate_cost_usd(provider: str, model: str, input_tokens: int, output_tokens: int) -> float:
     input_rate, output_rate = _resolve_rates(provider, model)
-    return (input_tokens / 1_000_000) * input_rate + (output_tokens / 1_000_000) * output_rate
+    base_cost = (input_tokens / 1_000_000) * input_rate + (output_tokens / 1_000_000) * output_rate
+    return base_cost
+
+
+def estimate_cache_cost_usd(provider: str, model: str, input_cache_read_tokens: int, input_cache_write_tokens: int) -> float:
+    provider_l = (provider or "").strip().lower()
+    model_l = (model or "").strip().lower()
+    model_short = model_l.split("/", 1)[-1] if "/" in model_l else model_l
+
+    if provider_l != "anthropic" and not model_short.startswith("claude"):
+        return 0.0
+
+    read_rate = float(os.getenv("COST_CLAUDE_CACHE_READ_PER_M", "0.30") or 0.30)
+    write_rate = float(os.getenv("COST_CLAUDE_CACHE_WRITE_PER_M", "3.75") or 3.75)
+    return (input_cache_read_tokens / 1_000_000) * read_rate + (input_cache_write_tokens / 1_000_000) * write_rate
 
 
 def record_usage_event(
@@ -91,6 +105,8 @@ def record_usage_event(
     input_tokens: int,
     output_tokens: int,
     provider: str,
+    input_cache_read_tokens: int = 0,
+    input_cache_write_tokens: int = 0,
 ) -> dict[str, Any]:
     event = {
         "ts": _utc_now().isoformat(),
@@ -99,11 +115,17 @@ def record_usage_event(
         "model": model,
         "input_tokens": int(input_tokens),
         "output_tokens": int(output_tokens),
+        "input_cache_read_tokens": int(input_cache_read_tokens),
+        "input_cache_write_tokens": int(input_cache_write_tokens),
     }
-    event["cost_usd_estimated"] = round(
-        estimate_cost_usd(provider, model, event["input_tokens"], event["output_tokens"]),
-        8,
+    base_cost = estimate_cost_usd(provider, model, event["input_tokens"], event["output_tokens"])
+    cache_cost = estimate_cache_cost_usd(
+        provider,
+        model,
+        event["input_cache_read_tokens"],
+        event["input_cache_write_tokens"],
     )
+    event["cost_usd_estimated"] = round(base_cost + cache_cost, 8)
     event["estimated_cost_usd"] = event["cost_usd_estimated"]
 
     if telemetry_disabled():
@@ -146,6 +168,8 @@ def summarize_usage(days: int = 7, limit: int = 200) -> dict[str, Any]:
             "totals": {
                 "input_tokens": 0,
                 "output_tokens": 0,
+                "input_cache_read_tokens": 0,
+                "input_cache_write_tokens": 0,
                 "cost_usd_total": 0.0,
                 "estimated_cost_usd": 0.0,
             },
@@ -167,6 +191,8 @@ def summarize_usage(days: int = 7, limit: int = 200) -> dict[str, Any]:
 
     total_input = 0
     total_output = 0
+    total_cache_read = 0
+    total_cache_write = 0
     total_cost = 0.0
     by_model: dict[str, dict[str, float | int]] = {}
 
@@ -174,15 +200,30 @@ def summarize_usage(days: int = 7, limit: int = 200) -> dict[str, Any]:
         model = str(e.get("model", "unknown"))
         inp = int(e.get("input_tokens", 0) or 0)
         outp = int(e.get("output_tokens", 0) or 0)
+        cache_read = int(e.get("input_cache_read_tokens", 0) or 0)
+        cache_write = int(e.get("input_cache_write_tokens", 0) or 0)
         cost = float(e.get("cost_usd_estimated", e.get("estimated_cost_usd", 0.0)) or 0.0)
 
         total_input += inp
         total_output += outp
+        total_cache_read += cache_read
+        total_cache_write += cache_write
         total_cost += cost
 
-        row = by_model.setdefault(model, {"input_tokens": 0, "output_tokens": 0, "cost_usd_total": 0.0})
+        row = by_model.setdefault(
+            model,
+            {
+                "input_tokens": 0,
+                "output_tokens": 0,
+                "input_cache_read_tokens": 0,
+                "input_cache_write_tokens": 0,
+                "cost_usd_total": 0.0,
+            },
+        )
         row["input_tokens"] = int(row["input_tokens"]) + inp
         row["output_tokens"] = int(row["output_tokens"]) + outp
+        row["input_cache_read_tokens"] = int(row["input_cache_read_tokens"]) + cache_read
+        row["input_cache_write_tokens"] = int(row["input_cache_write_tokens"]) + cache_write
         row["cost_usd_total"] = round(float(row["cost_usd_total"]) + cost, 8)
 
     return {
@@ -191,6 +232,8 @@ def summarize_usage(days: int = 7, limit: int = 200) -> dict[str, Any]:
         "totals": {
             "input_tokens": total_input,
             "output_tokens": total_output,
+            "input_cache_read_tokens": total_cache_read,
+            "input_cache_write_tokens": total_cache_write,
             "cost_usd_total": round(total_cost, 8),
             "estimated_cost_usd": round(total_cost, 8),
         },
