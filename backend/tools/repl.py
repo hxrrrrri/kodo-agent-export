@@ -1,16 +1,18 @@
+from __future__ import annotations
+
 import asyncio
 import contextlib
 import io
+import json
 import os
 import re
-import subprocess
+import time
+import uuid
+from dataclasses import dataclass, field
 from typing import Any
 
 from .base import BaseTool, ToolResult
 from .path_guard import enforce_allowed_path
-
-_PYTHON_SESSIONS: dict[str, dict[str, Any]] = {}
-_NODE_SESSIONS: dict[str, list[str]] = {}
 
 DANGEROUS_PATTERNS = [
     r"\bsubprocess\b",
@@ -20,6 +22,85 @@ DANGEROUS_PATTERNS = [
     r"child_process",
     r"process\.exit\(",
 ]
+
+NODE_RESULT_PREFIX = "__KODO_RESULT__"
+NODE_BOOTSTRAP_SCRIPT = r"""
+const vm = require('vm');
+const readline = require('readline');
+
+const context = vm.createContext({
+  require,
+  process,
+  Buffer,
+  setTimeout,
+  setInterval,
+  clearTimeout,
+  clearInterval,
+});
+
+const rl = readline.createInterface({ input: process.stdin, crlfDelay: Infinity });
+
+rl.on('line', async (line) => {
+  let req;
+  try {
+    req = JSON.parse(line);
+  } catch (err) {
+    process.stdout.write(`__KODO_RESULT__${JSON.stringify({ ok: false, error: 'Invalid JSON request' })}\n`);
+    return;
+  }
+
+  const logs = [];
+  context.console = {
+    log: (...args) => logs.push(args.map((v) => (typeof v === 'string' ? v : JSON.stringify(v))).join(' ')),
+    error: (...args) => logs.push('[stderr] ' + args.map((v) => (typeof v === 'string' ? v : JSON.stringify(v))).join(' ')),
+  };
+
+  const id = String(req.id ?? '');
+  const code = String(req.code ?? '');
+
+  try {
+    const script = new vm.Script(code, { displayErrors: true });
+    let value = script.runInContext(context);
+    if (value && typeof value.then === 'function') {
+      value = await value;
+    }
+    process.stdout.write(
+    `__KODO_RESULT__${JSON.stringify({ id, ok: true, stdout: logs.join('\n'), result: value === undefined ? null : value })}\n`,
+    );
+  } catch (err) {
+    const error = err && err.stack ? String(err.stack) : String(err);
+    process.stdout.write(
+    `__KODO_RESULT__${JSON.stringify({ id, ok: false, stdout: logs.join('\n'), error })}\n`,
+    );
+  }
+});
+""".strip()
+
+
+@dataclass
+class PythonSession:
+    scope: dict[str, Any]
+    last_used: float = field(default_factory=time.monotonic)
+
+
+@dataclass
+class NodeSession:
+    process: asyncio.subprocess.Process
+    cwd: str
+    lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+    last_used: float = field(default_factory=time.monotonic)
+
+
+_PYTHON_SESSIONS: dict[str, PythonSession] = {}
+_NODE_SESSIONS: dict[str, NodeSession] = {}
+_REPL_CLEANUP_TASK: asyncio.Task[Any] | None = None
+
+
+def _timeout_seconds() -> int:
+    try:
+        return max(10, int(os.getenv("REPL_SESSION_TIMEOUT_SECONDS", "300") or 300))
+    except ValueError:
+        return 300
 
 
 def _session_key(session_id: str | None) -> str:
@@ -41,6 +122,89 @@ def _run_python_cell(scope: dict[str, Any], code: str) -> tuple[str, str]:
             exec(compile(code, "<repl>", "exec"), scope)
 
     return stdout_buffer.getvalue(), stderr_buffer.getvalue()
+
+
+async def _close_node_session(key: str) -> None:
+    session = _NODE_SESSIONS.pop(key, None)
+    if not session:
+        return
+
+    process = session.process
+    if process.returncode is None:
+        process.kill()
+        with contextlib.suppress(Exception):
+            await process.wait()
+
+
+async def _cleanup_idle_sessions() -> None:
+    while True:
+        await asyncio.sleep(min(30, _timeout_seconds()))
+        cutoff = time.monotonic() - _timeout_seconds()
+
+        expired_python = [key for key, session in _PYTHON_SESSIONS.items() if session.last_used < cutoff]
+        for key in expired_python:
+            _PYTHON_SESSIONS.pop(key, None)
+
+        expired_node = [key for key, session in _NODE_SESSIONS.items() if session.last_used < cutoff]
+        for key in expired_node:
+            await _close_node_session(key)
+
+
+def _ensure_cleanup_loop() -> None:
+    global _REPL_CLEANUP_TASK
+    if _REPL_CLEANUP_TASK is not None and not _REPL_CLEANUP_TASK.done():
+        return
+
+    loop = asyncio.get_running_loop()
+    _REPL_CLEANUP_TASK = loop.create_task(_cleanup_idle_sessions())
+
+
+async def _ensure_node_session(key: str, cwd: str, reset: bool) -> NodeSession:
+    if reset:
+        await _close_node_session(key)
+
+    existing = _NODE_SESSIONS.get(key)
+    if existing and existing.process.returncode is None and existing.cwd == cwd:
+        existing.last_used = time.monotonic()
+        return existing
+
+    if existing:
+        await _close_node_session(key)
+
+    process = await asyncio.create_subprocess_exec(
+        "node",
+        "-e",
+        NODE_BOOTSTRAP_SCRIPT,
+        stdin=asyncio.subprocess.PIPE,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+        cwd=cwd,
+    )
+    session = NodeSession(process=process, cwd=cwd)
+    _NODE_SESSIONS[key] = session
+    return session
+
+
+async def _read_node_response(session: NodeSession, timeout: int) -> dict[str, Any]:
+    if session.process.stdout is None:
+        raise RuntimeError("Node REPL stdout is unavailable")
+
+    passthrough: list[str] = []
+    while True:
+        line_bytes = await asyncio.wait_for(session.process.stdout.readline(), timeout=timeout)
+        if not line_bytes:
+            raise RuntimeError("Node REPL process terminated unexpectedly")
+
+        line = line_bytes.decode("utf-8", errors="replace").rstrip("\r\n")
+        if line.startswith(NODE_RESULT_PREFIX):
+            raw = line[len(NODE_RESULT_PREFIX) :]
+            payload = json.loads(raw)
+            if passthrough and isinstance(payload, dict):
+                existing = str(payload.get("stdout", ""))
+                payload["stdout"] = "\n".join([*passthrough, existing]).strip("\n")
+            return payload
+
+        passthrough.append(line)
 
 
 class ReplTool(BaseTool):
@@ -105,6 +269,8 @@ class ReplTool(BaseTool):
         cwd: str | None = None,
         **kwargs,
     ) -> ToolResult:
+        _ensure_cleanup_loop()
+
         lang = language.strip().lower()
         snippet = code.rstrip("\n")
         if not snippet.strip():
@@ -122,21 +288,25 @@ class ReplTool(BaseTool):
 
     async def _execute_python(self, key: str, snippet: str, *, reset: bool, timeout: int) -> ToolResult:
         if reset or key not in _PYTHON_SESSIONS:
-            _PYTHON_SESSIONS[key] = {
-                "__name__": "__main__",
-                "__builtins__": __builtins__,
-            }
+            _PYTHON_SESSIONS[key] = PythonSession(
+                scope={
+                    "__name__": "__main__",
+                    "__builtins__": __builtins__,
+                }
+            )
 
-        scope = _PYTHON_SESSIONS[key]
+        session = _PYTHON_SESSIONS[key]
+        session.last_used = time.monotonic()
+
         try:
             stdout, stderr = await asyncio.wait_for(
-                asyncio.to_thread(_run_python_cell, scope, snippet),
+                asyncio.to_thread(_run_python_cell, session.scope, snippet),
                 timeout=timeout,
             )
         except asyncio.TimeoutError:
             return ToolResult(success=False, output="", error=f"REPL execution timed out after {timeout}s")
-        except Exception as e:
-            return ToolResult(success=False, output="", error=f"Python REPL error: {e}")
+        except Exception as exc:
+            return ToolResult(success=False, output="", error=f"Python REPL error: {exc}")
 
         combined = stdout
         if stderr:
@@ -151,7 +321,7 @@ class ReplTool(BaseTool):
             metadata={
                 "language": "python",
                 "session_id": key,
-                "globals_count": len(scope),
+                "globals_count": len(session.scope),
             },
         )
 
@@ -166,84 +336,64 @@ class ReplTool(BaseTool):
     ) -> ToolResult:
         try:
             effective_cwd = enforce_allowed_path(cwd or ".")
-        except ValueError as e:
-            return ToolResult(success=False, output="", error=str(e))
+        except ValueError as exc:
+            return ToolResult(success=False, output="", error=str(exc))
 
         if not os.path.isdir(effective_cwd):
             return ToolResult(success=False, output="", error=f"Working directory not found: {effective_cwd}")
 
-        if reset or key not in _NODE_SESSIONS:
-            _NODE_SESSIONS[key] = []
-
-        history = _NODE_SESSIONS[key]
-        history.append(snippet)
-        script = "\n".join(history)
-
         try:
-            proc = await asyncio.create_subprocess_exec(
-                "node",
-                "-e",
-                script,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-                cwd=effective_cwd,
-            )
+            session = await _ensure_node_session(key, effective_cwd, reset)
         except FileNotFoundError:
-            history.pop()
             return ToolResult(success=False, output="", error="Node.js executable not found (node).")
-        except NotImplementedError:
-            proc = None
-        except Exception as e:
-            history.pop()
-            msg = str(e).strip() or e.__class__.__name__
-            return ToolResult(success=False, output="", error=f"Node REPL error: {msg}")
+        except Exception as exc:
+            return ToolResult(success=False, output="", error=f"Node REPL error: {exc}")
+
+        payload = {
+            "id": str(uuid.uuid4()),
+            "code": snippet,
+        }
+
+        if session.process.stdin is None:
+            return ToolResult(success=False, output="", error="Node REPL stdin is unavailable")
 
         try:
-            if proc is not None:
-                stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
-                return_code = proc.returncode
-            else:
-                completed = await asyncio.to_thread(
-                    subprocess.run,
-                    ["node", "-e", script],
-                    capture_output=True,
-                    cwd=effective_cwd,
-                    timeout=timeout,
-                )
-                stdout = completed.stdout or b""
-                stderr = completed.stderr or b""
-                return_code = completed.returncode
+            async with session.lock:
+                session.last_used = time.monotonic()
+                session.process.stdin.write((json.dumps(payload, ensure_ascii=True) + "\n").encode("utf-8"))
+                await session.process.stdin.drain()
+                response = await _read_node_response(session, timeout)
+                session.last_used = time.monotonic()
         except asyncio.TimeoutError:
-            if proc is not None:
-                proc.kill()
-                await proc.wait()
-            history.pop()
+            await _close_node_session(key)
             return ToolResult(success=False, output="", error=f"REPL execution timed out after {timeout}s")
-        except subprocess.TimeoutExpired:
-            history.pop()
-            return ToolResult(success=False, output="", error=f"REPL execution timed out after {timeout}s")
+        except json.JSONDecodeError:
+            await _close_node_session(key)
+            return ToolResult(success=False, output="", error="Invalid response from Node REPL")
+        except Exception as exc:
+            await _close_node_session(key)
+            return ToolResult(success=False, output="", error=f"Node REPL error: {exc}")
 
-        if return_code != 0:
-            history.pop()
+        stdout = str(response.get("stdout", "") or "")
+        result_value = response.get("result")
+        if result_value is not None:
+            if stdout:
+                stdout += "\n"
+            stdout += repr(result_value)
 
-        out = stdout.decode("utf-8", errors="replace")
-        err = stderr.decode("utf-8", errors="replace")
+        if len(stdout) > 20000:
+            stdout = stdout[:20000] + "\n... [output truncated]"
 
-        combined = out
-        if err:
-            combined += f"\n[stderr]\n{err}" if out else err
-
-        if len(combined) > 20000:
-            combined = combined[:20000] + "\n... [output truncated]"
+        ok = bool(response.get("ok", False))
+        error_text = str(response.get("error", "") or "")
 
         return ToolResult(
-            success=return_code == 0,
-            output=combined or "(no output)",
-            error=None if return_code == 0 else f"Exit code: {return_code}",
+            success=ok,
+            output=stdout or "(no output)",
+            error=None if ok else (error_text or "Node execution failed"),
             metadata={
                 "language": "node",
                 "session_id": key,
                 "cwd": effective_cwd,
-                "history_size": len(history),
             },
         )

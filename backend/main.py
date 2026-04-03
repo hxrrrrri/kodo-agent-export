@@ -1,3 +1,5 @@
+# ruff: noqa: E402
+
 import asyncio
 import os
 import uuid
@@ -15,6 +17,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from api.bridge import router as bridge_router
 from api.chat import router as chat_router
+from api.doctor import router as doctor_router
+from api.profiles import router as profiles_router
+from api.providers import router as providers_router
 from observability.audit import log_audit_event
 from observability.request_context import clear_request_id, set_request_id
 
@@ -43,6 +48,9 @@ app.add_middleware(
 
 app.include_router(chat_router)
 app.include_router(bridge_router)
+app.include_router(providers_router)
+app.include_router(doctor_router)
+app.include_router(profiles_router)
 
 
 @app.middleware("http")
@@ -77,7 +85,6 @@ async def root():
 async def health():
     openai_key_set = bool(os.getenv("OPENAI_API_KEY"))
     anthropic_key_set = bool(os.getenv("ANTHROPIC_API_KEY"))
-    configured_model = os.getenv("MODEL", "").strip().lower()
     primary_provider = os.getenv("PRIMARY_PROVIDER", "anthropic").strip().lower()
     if openai_key_set and anthropic_key_set:
         provider = "openai" if primary_provider == "openai" else "anthropic"

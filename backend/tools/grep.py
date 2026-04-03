@@ -83,7 +83,7 @@ class GrepTool(BaseTool):
                     stdout=asyncio.subprocess.PIPE,
                     stderr=asyncio.subprocess.PIPE,
                 )
-                stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=30)
+                stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=30)
             except NotImplementedError:
                 completed = await asyncio.to_thread(
                     subprocess.run,
@@ -92,7 +92,6 @@ class GrepTool(BaseTool):
                     timeout=30,
                 )
                 stdout = completed.stdout or b""
-                stderr = completed.stderr or b""
 
             output = stdout.decode("utf-8", errors="replace").strip()
 

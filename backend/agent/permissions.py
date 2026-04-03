@@ -61,8 +61,6 @@ class PermissionChecker:
         """
         Returns (approved: bool, reason: str)
         """
-        from tools.base import BaseTool
-
         # Always-block check
         if self.is_blocked(tool.name, **kwargs):
             return False, "This operation is permanently blocked for safety."

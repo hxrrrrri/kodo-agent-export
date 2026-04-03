@@ -5,12 +5,12 @@ import uuid
 from typing import Any
 
 from agent.coordinator import agent_coordinator
+from agent.session_runner import SessionRunner
 from agent.modes import DEFAULT_MODE, list_modes, normalize_mode
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field, field_validator
 
-from agent.loop import AgentLoop
 from api.security import (
     COMMANDS_RATE_LIMITER,
     MEMORY_RATE_LIMITER,
@@ -141,35 +141,38 @@ class PermissionDecisionRequest(BaseModel):
 
 
 async def _run_background_task(prompt: str, project_dir: str | None, task_id: str) -> dict[str, Any]:
-    agent = AgentLoop(session_id=f"task-{task_id}", project_dir=project_dir)
     parts: list[str] = []
     usage_payload: dict[str, Any] | None = None
     events_count = 0
 
-    async for event in agent.run(prompt, history=[]):
+    runner = SessionRunner()
+
+    async def on_event(event: dict[str, Any]) -> None:
+        nonlocal usage_payload
+        nonlocal events_count
+
         events_count += 1
         event_type = str(event.get("type", ""))
         if event_type == "text":
             parts.append(str(event.get("content", "")))
         elif event_type == "done" and isinstance(event.get("usage"), dict):
             usage_payload = event.get("usage")
-        elif event_type == "error":
-            return {
-                "output": "".join(parts),
-                "error": str(event.get("message", "Task execution failed")),
-                "usage": usage_payload,
-                "events_count": events_count,
-                "provider": getattr(agent, "provider", None),
-                "model": getattr(agent, "model", None),
-            }
+
+    result = await runner.run(
+        session_id=f"task-{task_id}",
+        messages=[{"role": "user", "content": prompt}],
+        project_dir=project_dir,
+        mode=DEFAULT_MODE,
+        stream_callback=on_event,
+    )
 
     return {
         "output": "".join(parts),
-        "error": None,
+        "error": result.error,
         "usage": usage_payload,
         "events_count": events_count,
-        "provider": getattr(agent, "provider", None),
-        "model": getattr(agent, "model", None),
+        "provider": result.provider,
+        "model": result.model,
     }
 
 
@@ -198,6 +201,7 @@ async def send_message(req: ChatRequest, request: Request):
     history = existing_payload.get("messages", []) if existing_payload else []
     metadata = existing_payload.get("metadata", {}) if existing_payload else {}
     stored_mode = str(metadata.get("mode", DEFAULT_MODE)) if isinstance(metadata, dict) else DEFAULT_MODE
+    stored_model_override = str(metadata.get("model_override", "")).strip() if isinstance(metadata, dict) else ""
 
     try:
         effective_mode = _resolve_mode(req.mode, stored_mode)
@@ -321,73 +325,59 @@ async def send_message(req: ChatRequest, request: Request):
         )
 
     async def event_stream():
-        assistant_parts = []
         usage_payload: dict | None = None
+        runner = SessionRunner()
 
-        try:
-            agent = AgentLoop(session_id=session_id, project_dir=project_dir, mode=effective_mode)
-        except Exception as e:
-            log_audit_event("chat_send_init_error", request_id=request_id, session_id=session_id, error=str(e))
-            yield f"data: {json.dumps({'type': 'error', 'message': _safe_error_message(e)})}\n\n"
-            return
+        session_messages = list(history) + [{"role": "user", "content": req.message}]
 
         yield f"data: {json.dumps({'type': 'meta', 'request_id': request_id, 'session_id': session_id, 'mode': effective_mode})}\n\n"
 
         try:
-            async for event in agent.run(req.message, history, approval_callback=approval_callback):
-                # Collect for history saving
-                if event["type"] == "text":
-                    assistant_parts.append(event["content"])
-                elif event["type"] == "done" and isinstance(event.get("usage"), dict):
+            async for event in runner.stream(
+                session_id=session_id,
+                messages=session_messages,
+                project_dir=project_dir,
+                mode=effective_mode,
+                approval_callback=approval_callback,
+                model_override=stored_model_override or None,
+            ):
+                if event["type"] == "done" and isinstance(event.get("usage"), dict):
                     usage_payload = event["usage"]
 
                 # Stream event to client
                 yield f"data: {json.dumps(event)}\n\n"
 
-                if event["type"] == "done":
-                    # Save updated session
-                    full_assistant_text = "".join(assistant_parts)
-                    updated_history = list(history) + [
-                        {"role": "user", "content": req.message},
-                        {"role": "assistant", "content": full_assistant_text},
-                    ]
+            run_result = getattr(runner, "_last_result", None)
+            provider_name = run_result.provider if run_result is not None else None
 
-                    # Generate title from first message if new session
-                    title = req.message[:60] + ("..." if len(req.message) > 60 else "")
-                    await memory_manager.save_session(
-                        session_id,
-                        updated_history,
-                        metadata={"title": title, "mode": effective_mode},
+            if usage_payload:
+                try:
+                    usage_event = record_usage_event(
+                        session_id=session_id,
+                        model=str(usage_payload.get("model", "")),
+                        input_tokens=int(usage_payload.get("input_tokens", 0) or 0),
+                        output_tokens=int(usage_payload.get("output_tokens", 0) or 0),
+                        provider=str(provider_name or "unknown"),
                     )
-
-                    if usage_payload:
-                        try:
-                            usage_event = record_usage_event(
-                                session_id=session_id,
-                                model=str(usage_payload.get("model", "")),
-                                input_tokens=int(usage_payload.get("input_tokens", 0) or 0),
-                                output_tokens=int(usage_payload.get("output_tokens", 0) or 0),
-                                provider=agent.provider,
-                            )
-                        except Exception:
-                            usage_event = None
-                        log_audit_event(
-                            "chat_send_completed",
-                            request_id=request_id,
-                            session_id=session_id,
-                            provider=agent.provider,
-                            mode=effective_mode,
-                            usage=usage_event,
-                        )
-                    else:
-                        log_audit_event(
-                            "chat_send_completed",
-                            request_id=request_id,
-                            session_id=session_id,
-                            provider=agent.provider,
-                            mode=effective_mode,
-                            usage=None,
-                        )
+                except Exception:
+                    usage_event = None
+                log_audit_event(
+                    "chat_send_completed",
+                    request_id=request_id,
+                    session_id=session_id,
+                    provider=provider_name,
+                    mode=effective_mode,
+                    usage=usage_event,
+                )
+            else:
+                log_audit_event(
+                    "chat_send_completed",
+                    request_id=request_id,
+                    session_id=session_id,
+                    provider=provider_name,
+                    mode=effective_mode,
+                    usage=None,
+                )
 
         except Exception as e:
             log_audit_event("chat_send_error", request_id=request_id, session_id=session_id, error=str(e))
@@ -537,6 +527,16 @@ async def list_commands_endpoint(request: Request):
             {"name": "/mode list", "description": "List available execution modes"},
             {"name": "/mode set <name>", "description": "Set session execution mode"},
             {"name": "/mode reset", "description": "Reset mode to default"},
+            {"name": "/provider", "description": "Show provider profiles and active provider"},
+            {"name": "/provider list", "description": "List saved provider profiles"},
+            {"name": "/provider set <name>", "description": "Activate a provider profile"},
+            {"name": "/router", "description": "Show smart router status"},
+            {"name": "/router strategy <name>", "description": "Set router strategy"},
+            {"name": "/model", "description": "Show current model and provider"},
+            {"name": "/model set <model>", "description": "Set model override for this session"},
+            {"name": "/doctor", "description": "Run runtime health checks"},
+            {"name": "/doctor report", "description": "Run and save full runtime report"},
+            {"name": "/privacy", "description": "Show telemetry privacy mode status"},
             {"name": "/tasks", "description": "List background tasks"},
             {"name": "/tasks create <prompt>", "description": "Create a background task"},
             {"name": "/tasks get <task_id>", "description": "Get task details"},

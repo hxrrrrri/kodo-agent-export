@@ -1,4 +1,3 @@
-import os
 import json
 import aiofiles
 from datetime import datetime
@@ -83,8 +82,10 @@ class MemoryManager:
             "metadata": merged_metadata,
             "messages": messages,
         }
-        async with aiofiles.open(session_file, "w") as f:
+        tmp_file = session_file.with_suffix(".json.tmp")
+        async with aiofiles.open(tmp_file, "w") as f:
             await f.write(json.dumps(data, indent=2))
+        tmp_file.replace(session_file)
 
     async def load_session(self, session_id: str) -> list[dict]:
         session_file = SESSIONS_DIR / f"{session_id}.json"
@@ -169,10 +170,11 @@ class MemoryManager:
             return True
         return False
 
-    async def append_to_memory(self, content: str):
+    async def append_to_memory(self, content: str, section: str | None = None):
         """Append a note to the global memory file."""
         timestamp = datetime.utcnow().strftime("%Y-%m-%d %H:%M")
-        note = f"\n## Note [{timestamp}]\n{content}\n"
+        heading = section.strip() if isinstance(section, str) and section.strip() else "Note"
+        note = f"\n## {heading} [{timestamp}]\n{content}\n"
         async with aiofiles.open(GLOBAL_MEMORY_FILE, "a") as f:
             await f.write(note)
 

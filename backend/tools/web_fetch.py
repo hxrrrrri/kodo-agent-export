@@ -1,5 +1,7 @@
-import httpx
 import re
+import httpx
+
+from privacy import build_httpx_async_client
 from .base import BaseTool, ToolResult
 
 
@@ -44,7 +46,7 @@ class WebFetchTool(BaseTool):
             url = "https://" + url
 
         try:
-            async with httpx.AsyncClient(
+            async with build_httpx_async_client(
                 follow_redirects=True,
                 timeout=20,
                 headers={"User-Agent": "KODO-Agent/1.0 (personal AI assistant)"},

@@ -1,0 +1,27 @@
+{
+  "name": "kodo-vscode",
+  "displayName": "KODO VS Code",
+  "publisher": "kodo-agent",
+  "version": "0.1.0",
+  "engines": {
+    "vscode": "^1.88.0"
+  },
+  "main": "./out/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "kodo.open",
+        "title": "KODO: Open Agent"
+      }
+    ]
+  },
+  "scripts": {
+    "compile": "tsc -p .",
+    "watch": "tsc -w -p ."
+  },
+  "devDependencies": {
+    "typescript": "^5.4.5",
+    "@types/vscode": "^1.88.0",
+    "@types/node": "^20.11.30"
+  }
+}

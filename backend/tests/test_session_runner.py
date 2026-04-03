@@ -1,0 +1,108 @@
+from __future__ import annotations
+
+import asyncio
+
+import pytest
+
+import agent.session_runner as session_runner_mod
+from agent.session_runner import SessionRunner
+
+
+class FakeAgentLoop:
+    def __init__(self, session_id: str, project_dir=None, mode=None, model_override=None):
+        self.provider = 'openai'
+        self.model = model_override or 'gpt-4o'
+
+    async def run(self, user_message, history, approval_callback=None):
+        yield {'type': 'text', 'content': 'hello '}
+        yield {'type': 'text', 'content': 'world'}
+        yield {'type': 'done', 'usage': {'input_tokens': 10, 'output_tokens': 8, 'model': self.model}}
+
+
+class CancelledAgentLoop:
+    def __init__(self, session_id: str, project_dir=None, mode=None, model_override=None):
+        self.provider = 'openai'
+        self.model = 'gpt-4o'
+
+    async def run(self, user_message, history, approval_callback=None):
+        raise asyncio.CancelledError()
+        yield  # pragma: no cover
+
+
+@pytest.mark.asyncio
+async def test_session_runner_stream_and_save(monkeypatch):
+    monkeypatch.setattr(session_runner_mod, 'AgentLoop', FakeAgentLoop)
+
+    saved: dict[str, object] = {}
+
+    async def fake_save_session(session_id, messages, metadata=None):
+        saved['session_id'] = session_id
+        saved['messages'] = messages
+        saved['metadata'] = metadata
+
+    monkeypatch.setattr(session_runner_mod.memory_manager, 'save_session', fake_save_session)
+
+    runner = SessionRunner()
+    events = []
+    async for event in runner.stream(
+        session_id='s1',
+        messages=[{'role': 'user', 'content': 'hi'}],
+        project_dir=None,
+        mode='execute',
+    ):
+        events.append(event)
+
+    assert any(event['type'] == 'done' for event in events)
+    assert saved['session_id'] == 's1'
+    saved_messages = saved['messages']
+    assert isinstance(saved_messages, list)
+    assert saved_messages[-1]['role'] == 'assistant'
+
+
+@pytest.mark.asyncio
+async def test_session_runner_run_callback(monkeypatch):
+    monkeypatch.setattr(session_runner_mod, 'AgentLoop', FakeAgentLoop)
+
+    async def fake_save_session(session_id, messages, metadata=None):
+        return None
+
+    monkeypatch.setattr(session_runner_mod.memory_manager, 'save_session', fake_save_session)
+
+    seen = []
+
+    async def callback(event):
+        seen.append(event['type'])
+
+    runner = SessionRunner()
+    result = await runner.run(
+        session_id='s2',
+        messages=[{'role': 'user', 'content': 'go'}],
+        project_dir=None,
+        mode='execute',
+        stream_callback=callback,
+    )
+
+    assert result.error is None
+    assert 'done' in seen
+
+
+@pytest.mark.asyncio
+async def test_session_runner_handles_cancellation(monkeypatch):
+    monkeypatch.setattr(session_runner_mod, 'AgentLoop', CancelledAgentLoop)
+
+    async def fake_save_session(session_id, messages, metadata=None):
+        return None
+
+    monkeypatch.setattr(session_runner_mod.memory_manager, 'save_session', fake_save_session)
+
+    runner = SessionRunner()
+    events = []
+    async for event in runner.stream(
+        session_id='s3',
+        messages=[{'role': 'user', 'content': 'stop'}],
+        project_dir=None,
+        mode='execute',
+    ):
+        events.append(event)
+
+    assert any(event['type'] == 'error' for event in events)

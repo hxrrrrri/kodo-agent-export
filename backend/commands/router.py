@@ -1,12 +1,17 @@
 import json
+import os
 import shlex
 from dataclasses import dataclass
 
 from agent.coordinator import agent_coordinator
 from agent.modes import DEFAULT_MODE, get_mode, list_modes, normalize_mode
+from doctor import run_report, run_runtime_checks
 from mcp.registry import mcp_registry
 from memory.manager import memory_manager
 from observability.usage import summarize_usage
+from privacy import telemetry_disabled
+from profiles.manager import profile_manager
+from providers.smart_router import ROUTER_STRATEGIES, get_smart_router, smart_router_enabled
 from skills.registry import skill_registry
 from tasks.manager import task_manager
 
@@ -17,11 +22,33 @@ KNOWN_ROOT_COMMANDS = [
     "/session",
     "/memory",
     "/mode",
+    "/provider",
+    "/doctor",
+    "/router",
+    "/model",
+    "/privacy",
     "/tasks",
     "/mcp",
     "/agents",
     "/skills",
 ]
+
+COMMAND_REGISTRY: dict[str, str] = {
+    "/help": "Show available commands",
+    "/cost": "Show token and estimated cost usage",
+    "/session": "List and inspect sessions",
+    "/memory": "Manage global memory notes",
+    "/mode": "Inspect or set session mode",
+    "/provider": "Inspect and activate provider profiles",
+    "/doctor": "Run runtime health checks",
+    "/router": "Inspect smart router status and strategy",
+    "/model": "Inspect or override current model",
+    "/privacy": "Show no-telemetry privacy status",
+    "/tasks": "Manage background tasks",
+    "/mcp": "Manage and call MCP servers",
+    "/agents": "Manage spawned sub-agents",
+    "/skills": "Inspect bundled skills",
+}
 
 
 @dataclass
@@ -105,6 +132,16 @@ def _help_text() -> str:
         "/mode list - List available execution modes",
         "/mode set <name> - Set session mode",
         "/mode reset - Reset session mode to default",
+        "/provider - Show provider profiles and active provider",
+        "/provider list - List saved provider profiles",
+        "/provider set <name> - Activate provider profile",
+        "/doctor - Run runtime health checks",
+        "/doctor report - Run and save full doctor report",
+        "/router - Show smart router status",
+        "/router strategy <name> - Set smart router strategy",
+        "/model - Show current model/provider",
+        "/model set <model> - Override model for this session",
+        "/privacy - Show no-telemetry mode status",
         "/tasks - List recent tasks",
         "/tasks create <prompt> - Create a background task",
         "/tasks get <task_id> - Show task status",
@@ -242,6 +279,86 @@ async def _format_mode_status(session_id: str) -> str:
     return "\n".join(lines)
 
 
+def _format_doctor_checks(checks: list) -> str:
+    if not checks:
+        return "No doctor checks returned."
+
+    lines: list[str] = []
+    failed = 0
+    for check in checks:
+        marker = "PASS" if check.passed else "FAIL"
+        lines.append(f"[{marker}] {check.name}: {check.message}")
+        if check.fix:
+            lines.append(f"  fix: {check.fix}")
+        if not check.passed:
+            failed += 1
+
+    lines.append("")
+    lines.append(f"Summary: {len(checks) - failed}/{len(checks)} checks passed")
+    return "\n".join(lines)
+
+
+async def _format_provider_profiles() -> str:
+    rows = await profile_manager.list_profiles()
+    active = await profile_manager.get_active_profile()
+    active_name = active.name if active else None
+
+    if not rows:
+        return "No provider profiles saved. Use /provider set <name> after creating profiles via API."
+
+    lines = ["Provider profiles:"]
+    for row in rows:
+        marker = "*" if (row.name or "") == (active_name or "") else " "
+        lines.append(f"{marker} {row.name} | {row.provider} | {row.model} | goal={row.goal}")
+
+    if active:
+        lines.append("")
+        lines.append(f"Active profile: {active.name} ({active.provider}/{active.model})")
+
+    return "\n".join(lines)
+
+
+async def _format_router_status() -> str:
+    if not smart_router_enabled():
+        return "Smart router is disabled (ROUTER_MODE=fixed or KODO_ENABLE_SMART_ROUTER=0)."
+
+    router = await get_smart_router()
+    status = router.get_status()
+    lines = [
+        f"Router strategy: {status.get('strategy')}",
+        f"Fallback enabled: {status.get('fallback_enabled')}",
+        "",
+        "Providers:",
+    ]
+
+    for row in status.get("providers", []):
+        lines.append(
+            f"- {row.get('provider')}: healthy={row.get('healthy')} latency={row.get('latency_ms')}ms errors={row.get('errors')} cost/1k={row.get('cost_per_1k')}"
+        )
+    return "\n".join(lines)
+
+
+async def _format_model_status(session_id: str) -> str:
+    metadata = await memory_manager.get_session_metadata(session_id)
+    override = str(metadata.get("model_override", "")).strip()
+    active = await profile_manager.get_active_profile()
+
+    lines = []
+    if override:
+        lines.append(f"Session model override: {override}")
+    else:
+        lines.append("Session model override: (none)")
+
+    if active:
+        lines.append(f"Active profile model: {active.provider}/{active.model}")
+    else:
+        lines.append("Active profile model: (none)")
+
+    env_model = os.getenv("MODEL", "").strip()
+    lines.append(f"Environment MODEL: {env_model or '(unset)'}")
+    return "\n".join(lines)
+
+
 async def execute_command(message: str, session_id: str, project_dir: str | None = None) -> CommandExecutionResult:
     raw = message.strip()
 
@@ -332,6 +449,107 @@ async def execute_command(message: str, session_id: str, project_dir: str | None
             )
 
         return CommandExecutionResult(name="mode", text="Usage: /mode [list|set|reset]")
+
+    if command == "/provider":
+        if not args:
+            return CommandExecutionResult(name="provider", text=await _format_provider_profiles())
+
+        action = args[0].lower()
+        if action == "list":
+            return CommandExecutionResult(name="provider", text=await _format_provider_profiles())
+
+        if action == "set":
+            if len(args) < 2:
+                return CommandExecutionResult(name="provider", text="Usage: /provider set <name>")
+            try:
+                await profile_manager.activate_profile(args[1])
+            except ValueError as e:
+                return CommandExecutionResult(name="provider", text=str(e))
+
+            active = await profile_manager.get_active_profile()
+            return CommandExecutionResult(
+                name="provider",
+                text=f"Activated profile: {(active.name if active else args[1])}",
+            )
+
+        return CommandExecutionResult(name="provider", text="Usage: /provider [list|set]")
+
+    if command == "/doctor":
+        if not args:
+            checks = await run_runtime_checks()
+            return CommandExecutionResult(name="doctor", text=_format_doctor_checks(checks))
+
+        action = args[0].lower()
+        if action == "report":
+            report = await run_report()
+            summary = report.get("summary", {})
+            return CommandExecutionResult(
+                name="doctor",
+                text=(
+                    f"Doctor report written: {report.get('report_path')}\n"
+                    f"Passed: {summary.get('passed')}/{summary.get('total')}\n"
+                    f"All passed: {summary.get('all_passed')}"
+                ),
+            )
+
+        return CommandExecutionResult(name="doctor", text="Usage: /doctor [report]")
+
+    if command == "/router":
+        if not args:
+            return CommandExecutionResult(name="router", text=await _format_router_status())
+
+        action = args[0].lower()
+        if action == "strategy":
+            if len(args) < 2:
+                return CommandExecutionResult(name="router", text="Usage: /router strategy <name>")
+
+            strategy = args[1].lower().strip()
+            if strategy not in ROUTER_STRATEGIES:
+                return CommandExecutionResult(
+                    name="router",
+                    text=f"Invalid strategy: {strategy}. Valid: {', '.join(sorted(ROUTER_STRATEGIES))}",
+                )
+            if not smart_router_enabled():
+                return CommandExecutionResult(name="router", text="Smart router is disabled.")
+
+            router = await get_smart_router()
+            router.set_strategy(strategy)
+            return CommandExecutionResult(name="router", text=f"Router strategy set to {strategy}")
+
+        return CommandExecutionResult(name="router", text="Usage: /router [strategy]")
+
+    if command == "/model":
+        if not args:
+            return CommandExecutionResult(name="model", text=await _format_model_status(session_id))
+
+        action = args[0].lower()
+        if action == "set":
+            if len(args) < 2:
+                return CommandExecutionResult(name="model", text="Usage: /model set <model>")
+            override = args[1].strip()
+            if not override:
+                return CommandExecutionResult(name="model", text="Usage: /model set <model>")
+
+            await memory_manager.update_session_metadata(
+                session_id,
+                {"model_override": override},
+                create_if_missing=True,
+            )
+            return CommandExecutionResult(name="model", text=f"Session model override set to: {override}")
+
+        return CommandExecutionResult(name="model", text="Usage: /model [set]")
+
+    if command == "/privacy":
+        enabled = telemetry_disabled()
+        return CommandExecutionResult(
+            name="privacy",
+            text=(
+                "No-telemetry mode is ACTIVE (KODO_NO_TELEMETRY=1). "
+                "Audit and usage event writes are disabled."
+                if enabled
+                else "No-telemetry mode is disabled (KODO_NO_TELEMETRY=0)."
+            ),
+        )
 
     if command == "/tasks":
         if not args:

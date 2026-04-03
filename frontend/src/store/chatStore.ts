@@ -34,6 +34,7 @@ export interface UsageSummary {
   totals: {
     input_tokens: number
     output_tokens: number
+    cost_usd_total?: number
     estimated_cost_usd: number
   }
   by_model: Record<
@@ -41,6 +42,7 @@ export interface UsageSummary {
     {
       input_tokens: number
       output_tokens: number
+      cost_usd_total?: number
       estimated_cost_usd: number
     }
   >

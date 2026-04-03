@@ -1,340 +1,313 @@
-# KŌDO — Personal Autonomous AI Agent
+# KODO Agent
 
-> A fully autonomous coding agent built on Claude's architecture principles. Execute bash, read/write files, search code, fetch the web, and chain multi-step tasks — all from a sleek web UI.
+```text
+ _  __   ____    ____    ____
+| |/ /  / __ \  / __ \  / __ \
+|   /  | |  | || |  | || |  | |
+|   \  | |  | || |  | || |  | |
+| |\ \ | |__| || |__| || |__| |
+|_| \_\ \____/  \____/  \____/
+```
 
-![KŌDO Agent](https://img.shields.io/badge/KŌDO-Autonomous_Agent-ff4d21?style=for-the-badge)
-![Python](https://img.shields.io/badge/Python-3.11+-3776AB?style=for-the-badge&logo=python)
-![React](https://img.shields.io/badge/React-18-61DAFB?style=for-the-badge&logo=react)
-![FastAPI](https://img.shields.io/badge/FastAPI-0.110-009688?style=for-the-badge&logo=fastapi)
+KODO is a self-hosted autonomous coding agent with a FastAPI backend, tool-capable execution loop, profile-driven provider system, smart multi-provider routing, persistent memory, and a production-grade web UI for real-time streaming and operator control.
 
----
+## Feature Comparison
 
-## What KŌDO Can Do
-
-- **Execute bash commands** with permission gating
-- **Execute PowerShell commands** for Windows-native workflows
-- **Read, write, and edit files** with diff preview
-- **Run REPL snippets** in python/node sessions for iterative checks
-- **Search codebases** with grep and glob patterns
-- **Fetch web pages** and extract content
-- **Multi-step autonomous task loops** (tool-call → execute → feed result → repeat)
-- **Persistent memory** via `MEMORY.md` files
-- **Full conversation history** with session management
-- **Slash commands**: `/help`, `/cost`, `/session`, `/memory`
-- **Background tasks**: create/list/get/stop async runs (`/tasks ...`)
-- **Multi-agent coordination**: spawn/list/get/stop sub-agents (`/agents ...`)
-- **MCP registry management**: add/list/remove MCP server entries (`/mcp ...`)
-- **Live MCP tool execution**: discover and call MCP tools over stdio (`/mcp tools`, `/mcp call`)
-- **Bridge API sessions** for IDE and external clients (`/api/bridge/...`)
-- **Bundled skills registry** for reusable workflows (`/skills ...`)
-- **Interactive permission approvals** with remember-per-session decisions
-- **Modular prompt architecture** with per-tool guidance contributions
-- **Session execution modes** (`execute`, `plan`, `debug`, `review`) with mode-aware prompting
-- **Request IDs + structured audit logs** in `~/.kodo/audit/events.jsonl`
-- **Usage + estimated cost tracking** in `~/.kodo/usage/events.jsonl`
-- **Beautiful web UI** with real-time streaming
-
----
+| Area | KODO | OpenClaude | Claude Code |
+|---|---|---|---|
+| Primary UX | Web UI + API | Terminal-first CLI | Terminal-first CLI |
+| Multi-provider routing | Yes (`fixed` + `smart`) | Yes | Partial/provider-dependent |
+| Local provider discovery | Yes (Ollama, Atomic Chat) | Yes | Limited |
+| Built-in task + sub-agent APIs | Yes | Yes | Yes |
+| MCP management and calls | Yes | Yes | Yes |
+| Interactive permission hub | Yes (ask/auto/yolo + pending approvals) | Yes | Yes |
+| Browser dashboard for providers/doctor/profiles | Yes | No (CLI-centric) | No (CLI-centric) |
+| No-telemetry local mode | Yes | Build/plugin-oriented | Policy dependent |
 
 ## Architecture
 
+```text
+Browser UI (React + Zustand)
+          |
+          | SSE / REST
+          v
+FastAPI API Layer
+  - /api/chat
+  - /api/providers
+  - /api/doctor
+  - /api/profiles
+          |
+          v
+SessionRunner + AgentLoop
+  - Mode prompts
+  - Permission gating
+  - Tool orchestration
+  - Smart router (optional)
+          |
+          v
+Tools + Providers
+  - File / shell / repl / web / tasks / agents / mcp / skills / memory
+  - OpenAI / Anthropic / Gemini / DeepSeek / Groq / OpenRouter / Ollama / Atomic Chat
+          |
+          v
+Persistence (~/.kodo)
+  - MEMORY.md
+  - sessions/
+  - profiles.json
+  - active-profile.json
+  - audit/events.jsonl
+  - usage/events.jsonl
+  - reports/doctor.json
 ```
-User Prompt
-    ↓
-FastAPI Backend
-    ↓
-Agent Loop (QueryEngine)
-    ↓
-Claude API ←→ Tool Execution Loop
-    ↓              ↓
- Response      [BashTool, PowerShellTool, ReplTool, FileReadTool,
-     ↓           FileEditTool, FileWriteTool, GrepTool, GlobTool, WebFetchTool]
-React Frontend (SSE streaming)
-```
 
----
+## Quick Start (5 Minutes)
 
-## Quick Start
+1. Clone and install backend:
 
-### Prerequisites
-- Python 3.11+
-- Node.js 18+
-- Anthropic API key
-
-### 1. Clone & Setup
-```bash
-git clone https://github.com/yourusername/kodo-agent.git
-cd kodo-agent
-```
-
-### 2. Backend Setup
 ```bash
 cd backend
-python -m venv venv
-source venv/bin/activate  # Windows: venv\Scripts\activate
+python -m venv .venv
+source .venv/bin/activate  # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
-
-# Create your .env file
 cp .env.example .env
-# Edit .env and add your ANTHROPIC_API_KEY
 ```
 
-### 3. Frontend Setup
+2. Add provider credentials in backend/.env.
+
+3. Install frontend:
+
 ```bash
-cd frontend
+cd ../frontend
 npm install
 ```
 
-### 4. Run (Two terminals)
+4. Start backend:
 
-**Terminal 1 — Backend:**
 ```bash
-cd backend
-source venv/bin/activate
+cd ../backend
+source .venv/bin/activate
 uvicorn main:app --reload --port 8000
 ```
 
-**Terminal 2 — Frontend:**
+5. Start frontend:
+
 ```bash
-cd frontend
+cd ../frontend
 npm run dev
 ```
 
-Open **http://localhost:5173** and start chatting.
+Open http://localhost:5173.
 
-### 5. Run with Docker Compose (optional)
+## Provider Setup
+
+### Anthropic
+- Set `ANTHROPIC_API_KEY`.
+- Use `MODEL=claude-sonnet-4-6` (or another Claude model).
+
+### OpenAI
+- Set `OPENAI_API_KEY`.
+- Use `MODEL=gpt-4o` (or `gpt-4o-mini`, `o4-mini`).
+
+### Gemini
+- Set `GEMINI_API_KEY`.
+- Optional: `GEMINI_MODEL=gemini-2.0-flash`.
+
+### DeepSeek
+- Set `DEEPSEEK_API_KEY`.
+- Optional: `DEEPSEEK_BASE_URL=https://api.deepseek.com/v1`.
+
+### Groq
+- Set `GROQ_API_KEY`.
+- Optional: `GROQ_BASE_URL=https://api.groq.com/openai/v1`.
+
+### Ollama (local)
+- Start Ollama locally.
+- Set `OLLAMA_BASE_URL=http://localhost:11434`.
+
+### Atomic Chat (local)
+- Start Atomic Chat locally.
+- Set `ATOMIC_CHAT_BASE_URL=http://127.0.0.1:1337`.
+
+### OpenRouter
+- Set `OPENROUTER_API_KEY`.
+- Optional: `OPENROUTER_BASE_URL=https://openrouter.ai/api/v1`.
+
+### GitHub Models
+- Set `GITHUB_MODELS_TOKEN`.
+- Optional base/model via profile or smart routing defaults.
+
+## Smart Router Guide
+
+Enable smart routing:
+
+```env
+ROUTER_MODE=smart
+ROUTER_STRATEGY=balanced
+ROUTER_FALLBACK=true
+```
+
+Strategies:
+- `latency`: optimize for response speed.
+- `cost`: optimize for lower per-token cost.
+- `balanced`: mixed latency/cost.
+- `quality`: prioritize lower error rate.
+
+Live controls:
+- `GET /api/providers/status`
+- `POST /api/providers/router-strategy`
+- `/router`
+- `/router strategy <name>`
+
+## Memory System Guide
+
+Tiered memory:
+- Global: `~/.kodo/MEMORY.md`
+- Project: `./PROJECT.md`
+- Session inline: `memory_write` tool appends notes without leaving chat
+
+Commands:
+- `/memory <text>`
+- `/memory show`
+
+## Slash Command Reference
+
+- `/help`
+- `/cost [days]`
+- `/session`
+- `/session current`
+- `/memory <text>`
+- `/memory show`
+- `/mode`
+- `/mode list`
+- `/mode set <name>`
+- `/mode reset`
+- `/provider`
+- `/provider list`
+- `/provider set <name>`
+- `/doctor`
+- `/doctor report`
+- `/router`
+- `/router strategy <name>`
+- `/model`
+- `/model set <model>`
+- `/privacy`
+- `/tasks`
+- `/tasks create <prompt>`
+- `/tasks get <task_id>`
+- `/tasks stop <task_id>`
+- `/mcp list`
+- `/mcp add <name> <command> [args...]`
+- `/mcp remove <name>`
+- `/mcp tools <name>`
+- `/mcp call <name> <tool> [json_args]`
+- `/agents`
+- `/agents spawn <goal>`
+- `/agents get <agent_id>`
+- `/agents stop <agent_id>`
+- `/skills`
+- `/skills show <name>`
+
+## Permission System
+
+Modes:
+- `ask`: interactive approval for dangerous operations.
+- `auto`: auto-approve safe operations, gate dangerous ones.
+- `yolo`: allow everything except blocked patterns.
+
+Blocked patterns include destructive disk/system operations for Bash and PowerShell.
+
+## Docker Compose
 
 ```bash
 docker compose up --build
 ```
 
-This starts:
-- Backend on `http://localhost:8000`
-- Frontend on `http://localhost:5173`
+Services:
+- Backend: `http://localhost:8000`
+- Frontend: `http://localhost:5173`
 
----
+## Android / Mobile Install
 
-## Memory System
+See [ANDROID_INSTALL.md](ANDROID_INSTALL.md).
 
-KŌDO uses a file-based memory system inspired by Claude Code's `CLAUDE.md`:
+## VS Code Extension
 
-- `~/.kodo/MEMORY.md` — Your global preferences and facts
-- `./PROJECT.md` — Project-specific context (auto-loaded if present)
-- `~/.kodo/sessions/` — Conversation history
+Stub extension lives in `vscode-extension/kodo-vscode`.
 
-Edit `~/.kodo/MEMORY.md` to tell KŌDO about yourself:
-```markdown
-# My Preferences
-- I prefer TypeScript over JavaScript
-- Always use async/await, never callbacks
-- My projects are in ~/projects/
-```
+Command:
+- `kodo.open` opens `http://localhost:5173` in a Webview panel titled `KODO Agent`.
 
----
+## Contributing
 
-## Permission System
+1. Create feature branch.
+2. Run backend and frontend checks locally.
+3. Add/adjust tests for behavior changes.
+4. Open PR with clear scope and rollout notes.
 
-KŌDO gates dangerous operations:
+## Environment Variable Reference
 
-| Mode | Behavior |
-|------|----------|
-| `ask` | Prompts before destructive operations (default) |
-| `auto` | Auto-approves safe commands |
-| `yolo` | No prompts (use carefully) |
+| Variable | Purpose | Default |
+|---|---|---|
+| `OPENAI_API_KEY` | OpenAI API key | empty |
+| `ANTHROPIC_API_KEY` | Anthropic API key | empty |
+| `GEMINI_API_KEY` | Gemini API key | empty |
+| `GOOGLE_API_KEY` | Gemini alternate key | empty |
+| `DEEPSEEK_API_KEY` | DeepSeek API key | empty |
+| `GROQ_API_KEY` | Groq API key | empty |
+| `OPENROUTER_API_KEY` | OpenRouter API key | empty |
+| `GITHUB_MODELS_TOKEN` | GitHub Models token | empty |
+| `CODEX_API_KEY` | Codex-compatible token | empty |
+| `MODEL` | Fixed-mode model | provider default |
+| `PRIMARY_PROVIDER` | Fixed-mode provider preference | `anthropic` |
+| `OPENAI_BASE_URL` | OpenAI-compatible base URL | `https://api.openai.com/v1` |
+| `ANTHROPIC_BASE_URL` | Anthropic base URL override | empty |
+| `DEEPSEEK_BASE_URL` | DeepSeek base URL | `https://api.deepseek.com/v1` |
+| `GROQ_BASE_URL` | Groq base URL | `https://api.groq.com/openai/v1` |
+| `OPENROUTER_BASE_URL` | OpenRouter base URL | `https://openrouter.ai/api/v1` |
+| `GITHUB_MODELS_BASE_URL` | GitHub Models base URL | `https://models.github.ai/inference` |
+| `CODEX_BASE_URL` | Codex base URL | `https://api.openai.com/v1` |
+| `GEMINI_MODEL` | Gemini model override | `gemini-2.0-flash` |
+| `OPENAI_FALLBACK_MODEL` | OpenAI fallback model | `gpt-4o` |
+| `ANTHROPIC_FALLBACK_MODEL` | Anthropic fallback model | `claude-sonnet-4-6` |
+| `ROUTER_MODE` | Routing mode (`fixed` / `smart`) | `fixed` |
+| `ROUTER_STRATEGY` | Smart strategy | `balanced` |
+| `ROUTER_FALLBACK` | Enable provider fallback | `true` |
+| `ROUTER_HEALTH_INTERVAL_SECONDS` | Smart health ping interval | `60` |
+| `BIG_MODEL` | Smart-router large-model hint | provider default |
+| `SMALL_MODEL` | Smart-router small-model hint | provider default |
+| `OLLAMA_BASE_URL` | Ollama base URL | `http://localhost:11434` |
+| `ATOMIC_CHAT_BASE_URL` | Atomic Chat base URL | `http://127.0.0.1:1337` |
+| `MAX_TOKENS` | Model max output tokens | `8192` |
+| `PERMISSION_MODE` | ask/auto/yolo | `ask` |
+| `PERMISSION_REQUEST_TIMEOUT_SECONDS` | Approval wait timeout | `120` |
+| `STRICT_PATH_ALLOWLIST` | Enforce `ALLOWED_DIRS` strictly | `0` |
+| `ALLOWED_DIRS` | Allowed roots (strict mode) | empty |
+| `BLOCKED_DIRS` | Additional blocked roots | empty |
+| `ALLOW_SYSTEM_DIRS` | Allow system roots | `0` |
+| `MAX_FILE_SIZE_KB` | File read/write guard limit | `500` |
+| `API_AUTH_TOKEN` | Bearer auth for API routes | empty |
+| `ALLOWED_ORIGINS` | CORS origins | localhost defaults |
+| `BRIDGE_SECRET` | Bridge token signing secret | auto/local |
+| `BRIDGE_TOKEN_TTL_SECONDS` | Bridge token TTL | `3600` |
+| `RATE_LIMIT_SEND_PER_MINUTE` | Send endpoint limiter | `30` |
+| `RATE_LIMIT_SESSION_PER_MINUTE` | Session endpoint limiter | `20` |
+| `RATE_LIMIT_MEMORY_PER_MINUTE` | Memory/metadata limiter | `10` |
+| `RATE_LIMIT_COMMANDS_PER_MINUTE` | Commands limiter | `120` |
+| `REPL_SESSION_TIMEOUT_SECONDS` | Idle REPL session timeout | `300` |
+| `KODO_NO_TELEMETRY` | Disable local usage/audit writes | `0` |
+| `COST_CLAUDE_INPUT_PER_M` | Legacy Claude input cost override | `3.0` |
+| `COST_CLAUDE_OUTPUT_PER_M` | Legacy Claude output cost override | `15.0` |
+| `COST_OPENAI_INPUT_PER_M` | Legacy OpenAI input cost override | `2.5` |
+| `COST_OPENAI_OUTPUT_PER_M` | Legacy OpenAI output cost override | `10.0` |
+| `COST_INPUT_PER_M_<PROVIDER>` | Provider input cost override | empty |
+| `COST_OUTPUT_PER_M_<PROVIDER>` | Provider output cost override | empty |
+| `KODO_ENABLE_SMART_ROUTER` | Enable smart routing features | `1` |
+| `KODO_ENABLE_PROVIDER_DISCOVERY` | Enable provider discovery features | `1` |
+| `KODO_ENABLE_DOCTOR` | Enable doctor endpoints/checks | `1` |
+| `KODO_ENABLE_PROFILES` | Enable profile manager | `1` |
+| `KODO_ENABLE_SESSION_RUNNER` | Enable session runner integration | `1` |
+| `KODO_ENABLE_COMMAND_EXPANSION` | Enable extended slash commands | `1` |
+| `KODO_ENABLE_REPL_PERSISTENCE` | Enable persistent REPL enhancements | `1` |
+| `KODO_ENABLE_MEMORY_WRITE` | Enable memory_write tool | `1` |
 
-Dangerous patterns (always blocked): `rm -rf /`, `sudo rm`, `> /dev/sda`
-
-When `PERMISSION_MODE=ask`, dangerous tool calls create an interactive approval challenge.
-The frontend shows a modal where you can approve/deny once, or remember the decision for the current session.
-
----
-
-## Slash Commands
-
-Use these directly in chat input:
-
-- `/help` — list available commands
-- `/cost [days]` — show token and estimated cost summary
-- `/session` — list recent sessions
-- `/session current` — show current session id
-- `/memory <text>` — append a note to global memory
-- `/memory show` — show loaded memory context
-- `/mode` — show current session mode
-- `/mode list` — list available execution modes
-- `/mode set <name>` — set session execution mode
-- `/mode reset` — reset mode to default (`execute`)
-- `/tasks` — list recent tasks
-- `/tasks create <prompt>` — run a background task
-- `/tasks get <task_id>` — show task status
-- `/tasks stop <task_id>` — stop running task
-- `/agents` — list spawned sub-agents
-- `/agents spawn <goal>` — spawn a sub-agent
-- `/agents get <agent_id>` — show sub-agent details
-- `/agents stop <agent_id>` — stop a sub-agent
-- `/skills` — list bundled skills
-- `/skills show <name>` — show skill content
-- `/mcp list` — list MCP server entries
-- `/mcp add <name> <command> [args...]` — add MCP server entry
-- `/mcp remove <name>` — remove MCP server entry
-- `/mcp tools <name>` — list configured MCP tools for a server
-- `/mcp call <name> <tool> [json_args]` — execute an MCP tool with optional JSON args
-
----
-
-## File Structure
-
-```
-kodo-agent/
-├── backend/
-│   ├── main.py              # FastAPI app entrypoint
-│   ├── requirements.txt
-│   ├── .env.example
-│   ├── agent/
-│   │   ├── loop.py          # Core agent tool-call loop
-│   │   ├── modes.py         # Session execution mode definitions
-│   │   ├── prompt_builder.py# Mode/tool/memory system prompt composition
-│   │   ├── permissions.py   # Permission system
-│   │   └── context.py       # Context & token management
-│   ├── tools/
-│   │   ├── base.py          # Tool base class
-│   │   ├── bash.py          # BashTool
-│   │   ├── powershell.py    # PowerShellTool
-│   │   ├── repl.py          # ReplTool
-│   │   ├── file_read.py     # FileReadTool
-│   │   ├── file_write.py    # FileWriteTool
-│   │   ├── file_edit.py     # FileEditTool
-│   │   ├── grep.py          # GrepTool
-│   │   ├── glob_tool.py     # GlobTool
-│   │   └── web_fetch.py     # WebFetchTool
-│   ├── memory/
-│   │   ├── manager.py       # Memory file management
-│   │   └── session.py       # Session storage
-│   └── api/
-│       ├── chat.py          # Chat endpoints + SSE streaming
-│       └── sessions.py      # Session management endpoints
-└── frontend/
-    ├── index.html
-    ├── package.json
-    ├── vite.config.ts
-    └── src/
-        ├── main.tsx
-        ├── App.tsx
-        ├── components/
-        │   ├── ChatWindow.tsx
-        │   ├── MessageBubble.tsx
-        │   ├── ToolCallCard.tsx
-        │   ├── PermissionPrompt.tsx
-        │   ├── StreamingText.tsx
-        │   └── Sidebar.tsx
-        ├── hooks/
-        │   ├── useChat.ts
-        │   └── useSessions.ts
-        └── store/
-            └── chatStore.ts
-```
-
----
-
-## Environment Variables
-
-```env
-ANTHROPIC_API_KEY=sk-ant-...
-OPENAI_API_KEY=sk-proj-...                # optional fallback provider
-PRIMARY_PROVIDER=anthropic                # anthropic | openai
-MODEL=claude-sonnet-4-6
-# OPENAI_FALLBACK_MODEL=gpt-4o
-# ANTHROPIC_FALLBACK_MODEL=claude-sonnet-4-6
-
-# Optional API protection for all /api/chat routes
-# API_AUTH_TOKEN=replace_with_a_long_random_token
-
-# Optional bridge token secret and TTL for /api/bridge
-# BRIDGE_SECRET=replace_with_a_long_random_token
-# BRIDGE_TOKEN_TTL_SECONDS=3600
-
-# If BRIDGE_SECRET is omitted, KODO generates a persistent local secret at ~/.kodo/bridge/secret.key.
-
-# Optional CORS override
-# ALLOWED_ORIGINS=http://localhost:5173,http://localhost:3000
-
-MAX_TOKENS=8192
-PERMISSION_MODE=ask       # ask | auto | yolo
-# PERMISSION_REQUEST_TIMEOUT_SECONDS=120
-# Directory safety defaults:
-# - user-selected directories are allowed
-# - system/harmful folders are blocked
-# To enforce a strict allowlist, enable this and set ALLOWED_DIRS.
-# STRICT_PATH_ALLOWLIST=1
-# ALLOWED_DIRS=~,.
-# Optional extra blocked roots
-# BLOCKED_DIRS=
-MAX_FILE_SIZE_KB=500
-
-# Per-IP limits
-RATE_LIMIT_SEND_PER_MINUTE=30
-RATE_LIMIT_SESSION_PER_MINUTE=20
-RATE_LIMIT_MEMORY_PER_MINUTE=10
-
-# Optional pricing overrides (USD per 1M tokens)
-# COST_CLAUDE_INPUT_PER_M=3.0
-# COST_CLAUDE_OUTPUT_PER_M=15.0
-# COST_OPENAI_INPUT_PER_M=5.0
-# COST_OPENAI_OUTPUT_PER_M=15.0
-```
-
-Frontend token support (optional) in `frontend/.env.local`:
-
-```env
-VITE_API_AUTH_TOKEN=replace_with_same_backend_token
-```
-
-Usage API:
-
-- `GET /api/chat/usage?days=7&limit=100` (protected by optional bearer auth)
-- `GET /api/chat/commands` (list slash commands)
-- `GET /api/chat/modes` (list supported execution modes)
-- `GET /api/chat/sessions/{session_id}/mode` (read session mode)
-- `POST /api/chat/sessions/{session_id}/mode` (set session mode)
-- `GET /api/chat/permissions/pending?session_id=<id>` (list pending permission challenges)
-- `POST /api/chat/permissions/{challenge_id}/decision` (submit approve/deny decision)
-- `GET /api/chat/sessions/{session_id}/export` (export session payload)
-- `POST /api/chat/sessions/import` (import session payload)
-- `POST /api/chat/tasks` (create task)
-- `GET /api/chat/tasks` (list tasks)
-- `GET /api/chat/tasks/{task_id}` (get task)
-- `POST /api/chat/tasks/{task_id}/stop` (stop task)
-- `POST /api/chat/agents` (spawn sub-agent)
-- `GET /api/chat/agents` (list sub-agents)
-- `GET /api/chat/agents/{agent_id}` (get sub-agent)
-- `POST /api/chat/agents/{agent_id}/stop` (stop sub-agent)
-- `GET /api/chat/skills` (list bundled skills)
-- `GET /api/chat/skills/{name}` (get skill)
-- `GET /api/chat/mcp/servers` (list MCP servers)
-- `POST /api/chat/mcp/servers` (add/update MCP server)
-- `DELETE /api/chat/mcp/servers/{name}` (remove MCP server)
-- `GET /api/chat/mcp/servers/{name}/tools` (list configured/discovered tools)
-- `POST /api/chat/mcp/servers/{name}/tools/{tool_name}/call` (execute MCP tool)
-
-Bridge API:
-
-- `POST /api/bridge/session` (create bridge session + token)
-- `GET /api/bridge/sessions` (list bridge sessions)
-- `GET /api/bridge/session/{bridge_session_id}` (session info with bearer token)
-- `POST /api/bridge/message` (bridge-authenticated message relay)
-
-Audit + request IDs:
-
-- Every HTTP response includes `X-Request-ID`
-- Security and chat events are persisted as JSON lines in `~/.kodo/audit/events.jsonl`
-
----
-
-## Built With
-
-- **Claude API** (Anthropic) — The brain
-- **OpenAI API** — Provider fallback support
-- **FastAPI** — Backend framework
-- **Server-Sent Events** — Real-time streaming
-- **React 18** — Frontend
-- **Zustand** — State management
-- **Vite** — Frontend build tool
+For full grouped templates and comments, see `backend/.env.example`.

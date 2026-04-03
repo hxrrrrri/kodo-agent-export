@@ -3,6 +3,7 @@ import { Plus, Trash2, MessageSquare, Cpu } from 'lucide-react'
 import { useChat } from '../hooks/useChat'
 import { Session } from '../store/chatStore'
 import { clearApiAuthToken, getApiAuthToken, setApiAuthToken } from '../lib/api'
+import { ProviderPanel } from './ProviderPanel'
 
 export function Sidebar() {
   const {
@@ -18,6 +19,7 @@ export function Sidebar() {
   } = useChat()
   const [tokenDraft, setTokenDraft] = useState('')
   const [tokenSaved, setTokenSaved] = useState(false)
+  const [activeTab, setActiveTab] = useState<'sessions' | 'providers'>('sessions')
 
   useEffect(() => {
     loadModes()
@@ -49,7 +51,7 @@ export function Sidebar() {
     loadSessions()
   }
 
-  const usageCost = usageSummary?.totals.estimated_cost_usd ?? 0
+  const usageCost = usageSummary?.totals.cost_usd_total ?? usageSummary?.totals.estimated_cost_usd ?? 0
   const usageInput = usageSummary?.totals.input_tokens ?? 0
   const usageOutput = usageSummary?.totals.output_tokens ?? 0
 
@@ -125,27 +127,70 @@ export function Sidebar() {
         </button>
       </div>
 
+      <div style={{ padding: '0 12px 8px', display: 'flex', gap: 6 }}>
+        <button
+          onClick={() => setActiveTab('sessions')}
+          style={{
+            flex: 1,
+            background: activeTab === 'sessions' ? 'var(--bg-3)' : 'var(--bg-2)',
+            border: `1px solid ${activeTab === 'sessions' ? 'var(--border-bright)' : 'var(--border)'}`,
+            color: activeTab === 'sessions' ? 'var(--text-0)' : 'var(--text-1)',
+            borderRadius: 'var(--radius)',
+            cursor: 'pointer',
+            padding: '6px 8px',
+            fontSize: 10,
+            fontFamily: 'var(--font-mono)',
+            letterSpacing: '0.08em',
+          }}
+        >
+          SESSIONS
+        </button>
+        <button
+          onClick={() => setActiveTab('providers')}
+          style={{
+            flex: 1,
+            background: activeTab === 'providers' ? 'var(--bg-3)' : 'var(--bg-2)',
+            border: `1px solid ${activeTab === 'providers' ? 'var(--border-bright)' : 'var(--border)'}`,
+            color: activeTab === 'providers' ? 'var(--text-0)' : 'var(--text-1)',
+            borderRadius: 'var(--radius)',
+            cursor: 'pointer',
+            padding: '6px 8px',
+            fontSize: 10,
+            fontFamily: 'var(--font-mono)',
+            letterSpacing: '0.08em',
+          }}
+        >
+          PROVIDERS
+        </button>
+      </div>
+
       {/* Sessions list */}
       <div style={{
         flex: 1,
         overflowY: 'auto',
-        padding: '4px 8px',
+        padding: activeTab === 'sessions' ? '4px 8px' : '0',
       }}>
-        {sessions.length === 0 && (
-          <div style={{ padding: '16px 8px', color: 'var(--text-2)', fontSize: 12, textAlign: 'center' }}>
-            No sessions yet.<br />Start a conversation.
-          </div>
+        {activeTab === 'sessions' && (
+          <>
+            {sessions.length === 0 && (
+              <div style={{ padding: '16px 8px', color: 'var(--text-2)', fontSize: 12, textAlign: 'center' }}>
+                No sessions yet.<br />Start a conversation.
+              </div>
+            )}
+            {sessions.map((session: Session) => (
+              <SessionItem
+                key={session.session_id}
+                session={session}
+                active={session.session_id === sessionId}
+                onSelect={() => loadSession(session.session_id)}
+                onDelete={() => deleteSession(session.session_id)}
+                formatDate={formatDate}
+              />
+            ))}
+          </>
         )}
-        {sessions.map((session: Session) => (
-          <SessionItem
-            key={session.session_id}
-            session={session}
-            active={session.session_id === sessionId}
-            onSelect={() => loadSession(session.session_id)}
-            onDelete={() => deleteSession(session.session_id)}
-            formatDate={formatDate}
-          />
-        ))}
+
+        {activeTab === 'providers' && <ProviderPanel />}
       </div>
 
       {/* Footer */}

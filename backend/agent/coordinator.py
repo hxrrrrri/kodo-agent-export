@@ -31,8 +31,10 @@ class AgentCoordinator:
         return []
 
     async def _save(self, rows: list[dict[str, Any]]) -> None:
-        async with aiofiles.open(AGENTS_FILE, "w") as f:
+        tmp_file = AGENTS_FILE.with_suffix(".json.tmp")
+        async with aiofiles.open(tmp_file, "w") as f:
             await f.write(json.dumps(rows, indent=2))
+        tmp_file.replace(AGENTS_FILE)
 
     async def _sync_status(self, row: dict[str, Any]) -> dict[str, Any]:
         task_id = str(row.get("task_id", ""))

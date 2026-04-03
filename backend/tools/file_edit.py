@@ -47,7 +47,7 @@ class FileEditTool(BaseTool):
             if count == 0:
                 # Try to give helpful context
                 lines = content.splitlines()
-                preview = "\n".join(f"  {i+1}: {l}" for i, l in enumerate(lines[:20]))
+                preview = "\n".join(f"  {i+1}: {line_text}" for i, line_text in enumerate(lines[:20]))
                 return ToolResult(
                     success=False,
                     output="",
@@ -68,8 +68,8 @@ class FileEditTool(BaseTool):
             # Build a minimal diff preview
             old_lines = old_str.splitlines()
             new_lines = new_str.splitlines()
-            diff_preview = "\n".join(f"- {l}" for l in old_lines[:5])
-            diff_preview += "\n" + "\n".join(f"+ {l}" for l in new_lines[:5])
+            diff_preview = "\n".join(f"- {line_text}" for line_text in old_lines[:5])
+            diff_preview += "\n" + "\n".join(f"+ {line_text}" for line_text in new_lines[:5])
             if len(old_lines) > 5 or len(new_lines) > 5:
                 diff_preview += "\n... (truncated)"
 

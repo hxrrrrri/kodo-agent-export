@@ -35,8 +35,11 @@ class TaskManager:
         if not task_id:
             raise ValueError("task_id missing in payload")
         payload["updated_at"] = _utc_now()
-        async with aiofiles.open(self._task_file(task_id), "w") as f:
+        target = self._task_file(task_id)
+        tmp = target.with_suffix(".json.tmp")
+        async with aiofiles.open(tmp, "w") as f:
             await f.write(json.dumps(payload, indent=2))
+        tmp.replace(target)
 
     async def _load(self, task_id: str) -> dict[str, Any] | None:
         task_file = self._task_file(task_id)

@@ -3,6 +3,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from privacy import telemetry_disabled
 from observability.request_context import get_request_id
 
 KODO_DIR = Path.home() / ".kodo"
@@ -15,6 +16,9 @@ def _utc_now() -> str:
 
 
 def log_audit_event(event_type: str, **fields: Any) -> None:
+    if telemetry_disabled():
+        return
+
     try:
         AUDIT_DIR.mkdir(parents=True, exist_ok=True)
         payload = {
