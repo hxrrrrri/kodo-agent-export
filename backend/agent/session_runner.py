@@ -94,7 +94,7 @@ def _title_from_content(content: Any) -> str:
                 continue
             if str(block.get("type", "")).lower() != "text":
                 continue
-            text = block.get("text")
+            text: str | None = block.get("text")
             if isinstance(text, str) and text.strip():
                 parts.append(text.strip())
         joined = "\n".join(parts).strip()
@@ -224,3 +224,4 @@ class SessionRunner:
                 events_count=0,
             ),
         )
+
