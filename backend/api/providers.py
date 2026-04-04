@@ -12,6 +12,56 @@ from providers.smart_router import ROUTER_STRATEGIES, get_smart_router, smart_ro
 router = APIRouter(prefix="/api/providers", tags=["providers"])
 
 
+def _provider_configured(provider: str) -> bool:
+    name = provider.strip().lower()
+    if name == "openai":
+        return bool(os.getenv("OPENAI_API_KEY", "").strip())
+    if name == "anthropic":
+        return bool(os.getenv("ANTHROPIC_API_KEY", "").strip())
+    if name == "gemini":
+        return bool(os.getenv("GEMINI_API_KEY", "").strip() or os.getenv("GOOGLE_API_KEY", "").strip())
+    if name == "deepseek":
+        return bool(os.getenv("DEEPSEEK_API_KEY", "").strip())
+    if name == "groq":
+        return bool(os.getenv("GROQ_API_KEY", "").strip())
+    if name == "openrouter":
+        return bool(os.getenv("OPENROUTER_API_KEY", "").strip())
+    if name == "github-models":
+        return bool(os.getenv("GITHUB_MODELS_TOKEN", "").strip())
+    if name == "codex":
+        return bool(os.getenv("CODEX_API_KEY", "").strip())
+    if name == "ollama":
+        return bool(os.getenv("OLLAMA_BASE_URL", "").strip())
+    if name == "atomic-chat":
+        return bool(os.getenv("ATOMIC_CHAT_BASE_URL", "").strip())
+    return False
+
+
+def _default_model_for_provider(provider: str) -> str:
+    name = provider.strip().lower()
+    if name == "anthropic":
+        return "claude-sonnet-4-6"
+    if name == "openai":
+        return "gpt-4o"
+    if name == "gemini":
+        return "gemini-2.0-flash"
+    if name == "deepseek":
+        return "deepseek-chat"
+    if name == "groq":
+        return "llama-3.3-70b-versatile"
+    if name == "openrouter":
+        return "anthropic/claude-sonnet-4-6"
+    if name == "github-models":
+        return "gpt-4o"
+    if name == "codex":
+        return "gpt-4o"
+    if name == "ollama":
+        return "llama3"
+    if name == "atomic-chat":
+        return "default"
+    return ""
+
+
 class RouterStrategyRequest(BaseModel):
     strategy: str = Field(min_length=1, max_length=32)
 
@@ -41,10 +91,32 @@ async def providers_status_endpoint(request: Request):
     await enforce_rate_limit(request, MEMORY_RATE_LIMITER, "providers_status")
 
     if not smart_router_enabled():
-        openai_key = bool(os.getenv("OPENAI_API_KEY", "").strip())
-        anthropic_key = bool(os.getenv("ANTHROPIC_API_KEY", "").strip())
-        provider = "openai" if openai_key else ("anthropic" if anthropic_key else "none")
-        model = os.getenv("MODEL", "").strip() or ("gpt-4o" if provider == "openai" else "claude-sonnet-4-6")
+        primary_provider = os.getenv("PRIMARY_PROVIDER", "anthropic").strip().lower() or "anthropic"
+        candidates = [
+            primary_provider,
+            "anthropic",
+            "openai",
+            "gemini",
+            "deepseek",
+            "groq",
+            "openrouter",
+            "github-models",
+            "codex",
+            "ollama",
+            "atomic-chat",
+        ]
+
+        provider = "none"
+        seen: set[str] = set()
+        for candidate in candidates:
+            if candidate in seen:
+                continue
+            seen.add(candidate)
+            if _provider_configured(candidate):
+                provider = candidate
+                break
+
+        model = os.getenv("MODEL", "").strip() or _default_model_for_provider(provider)
         return {
             "mode": "fixed",
             "strategy": "fixed",

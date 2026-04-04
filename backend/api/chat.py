@@ -207,6 +207,30 @@ class TerminalRunRequest(BaseModel):
         return text
 
 
+class NotebookRunRequest(BaseModel):
+    language: str = Field(default="python", max_length=16)
+    code: str = Field(min_length=1, max_length=120000)
+    session_id: str | None = Field(default=None, max_length=128)
+    project_dir: str | None = Field(default=None, max_length=1024)
+    reset: bool = Field(default=False)
+    timeout: int = Field(default=20, ge=1, le=120)
+
+    @field_validator("language")
+    @classmethod
+    def validate_language(cls, value: str) -> str:
+        lang = value.strip().lower()
+        if lang not in {"python", "node"}:
+            raise ValueError("language must be 'python' or 'node'")
+        return lang
+
+    @field_validator("code")
+    @classmethod
+    def validate_code(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("code is required")
+        return value
+
+
 class NewSessionResponse(BaseModel):
     session_id: str
 
@@ -783,6 +807,70 @@ async def run_terminal_command(req: TerminalRunRequest, request: Request):
             "Connection": "keep-alive",
         },
     )
+
+
+@router.post("/notebook/run")
+async def run_notebook_cell(req: NotebookRunRequest, request: Request):
+    require_api_auth(request)
+    await enforce_rate_limit(request, SEND_RATE_LIMITER, "notebook_run")
+
+    request_id = getattr(request.state, "request_id", None)
+
+    safe_project_dir: str | None = None
+    if req.project_dir:
+        try:
+            safe_project_dir = enforce_allowed_path(req.project_dir)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+        if not os.path.isdir(safe_project_dir):
+            raise HTTPException(status_code=400, detail=f"project_dir is not a directory: {safe_project_dir}")
+
+    repl_tool = TOOL_MAP.get("repl")
+    if repl_tool is None:
+        raise HTTPException(status_code=503, detail="REPL tool is not available")
+
+    base_session_id = (req.session_id or "default").strip() or "default"
+    repl_session_id = f"notebook-{req.language}-{base_session_id}"
+
+    try:
+        result = await repl_tool.execute(
+            language=req.language,
+            code=req.code,
+            session_id=repl_session_id,
+            reset=req.reset,
+            timeout=req.timeout,
+            cwd=safe_project_dir,
+        )
+    except Exception as exc:
+        message = _safe_error_message(exc)
+        log_audit_event(
+            "notebook_run_error",
+            request_id=request_id,
+            language=req.language,
+            session_id=req.session_id,
+            error=message,
+        )
+        raise HTTPException(status_code=500, detail=message) from exc
+
+    output = str(result.output or "").strip() or "(no output)"
+
+    log_audit_event(
+        "notebook_run",
+        request_id=request_id,
+        language=req.language,
+        session_id=req.session_id,
+        repl_session_id=repl_session_id,
+        success=result.success,
+        has_error=bool(result.error),
+    )
+
+    return {
+        "success": bool(result.success),
+        "output": output,
+        "error": result.error,
+        "metadata": result.metadata or {},
+    }
 
 
 @router.post("/project-dir/select")

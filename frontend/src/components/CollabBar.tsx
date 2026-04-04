@@ -95,8 +95,8 @@ export function CollabBar({
       </div>
 
       {shareUrl && (
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
-          <div className="truncate" style={{ flex: 1, fontSize: 11, color: 'var(--text-1)', fontFamily: 'var(--font-mono)' }}>
+        <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) auto auto', alignItems: 'center', gap: 8, minWidth: 0 }}>
+          <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: 11, color: 'var(--text-1)', fontFamily: 'var(--font-mono)' }}>
             {shareUrl}
           </div>
           <button
@@ -110,6 +110,7 @@ export function CollabBar({
               ...actionButtonStyle,
               cursor: observerMode ? 'not-allowed' : 'pointer',
               opacity: observerMode ? 0.55 : 1,
+              flexShrink: 0,
             }}
           >
             <Copy size={12} />

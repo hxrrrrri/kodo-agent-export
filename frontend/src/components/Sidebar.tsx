@@ -46,6 +46,13 @@ type RuntimeAgent = {
   task_id?: string
 }
 
+type SessionReplayEvent = {
+  event_index?: number
+  event_type?: string
+  content?: string
+  tool_name?: string
+}
+
 function toGraphStatus(status: string | undefined): AgentNode['status'] {
   const normalized = (status || '').toLowerCase()
   if (normalized === 'running') return 'running'
@@ -59,6 +66,29 @@ function shortId(value: string): string {
   if (!text) return 'unknown'
   if (text.length <= 10) return text
   return text.slice(0, 10)
+}
+
+function summarizeReplayEvent(event: SessionReplayEvent): string {
+  const eventType = String(event.event_type || '').toLowerCase()
+  const toolName = String(event.tool_name || '').trim()
+  const content = String(event.content || '').trim().replace(/\s+/g, ' ')
+  const preview = content ? (content.length > 46 ? `${content.slice(0, 45)}…` : content) : ''
+
+  if (eventType === 'tool_call') {
+    return `tool:${toolName || 'call'}`
+  }
+  if (eventType === 'tool_result') {
+    return `result:${toolName || 'tool'}`
+  }
+  if (eventType === 'assistant_text') {
+    return `assistant: ${preview || 'response'}`
+  }
+  if (eventType === 'user_message') {
+    return `user: ${preview || 'message'}`
+  }
+
+  const title = eventType || 'event'
+  return preview ? `${title}: ${preview}` : title
 }
 
 function escapeRegExp(value: string): string {
@@ -260,11 +290,65 @@ export function Sidebar({ collapsed, onToggleCollapse }: SidebarProps) {
 
         const tasksPayload = await tasksRes.json()
         const agentsPayload = await agentsRes.json()
-        const tasks = (tasksPayload.tasks || []) as RuntimeTask[]
-        const agents = (agentsPayload.agents || []) as RuntimeAgent[]
+        let tasks = (tasksPayload.tasks || []) as RuntimeTask[]
+        let agents = (agentsPayload.agents || []) as RuntimeAgent[]
         const activeSession = sessions.find((item) => item.session_id === sessionId)
 
         const rootId = sessionId
+        let replayNodes: AgentNode[] = []
+
+        if (tasks.length === 0 && agents.length === 0) {
+          try {
+            const [globalTasksRes, globalAgentsRes] = await Promise.all([
+              fetch('/api/chat/tasks?limit=20', { headers: buildApiHeaders(), cache: 'no-store' }),
+              fetch('/api/chat/agents?limit=20', { headers: buildApiHeaders(), cache: 'no-store' }),
+            ])
+            if (globalTasksRes.ok && globalAgentsRes.ok) {
+              const globalTasksPayload = await globalTasksRes.json()
+              const globalAgentsPayload = await globalAgentsRes.json()
+              const globalTasks = (globalTasksPayload.tasks || []) as RuntimeTask[]
+              const globalAgents = (globalAgentsPayload.agents || []) as RuntimeAgent[]
+
+              if (globalTasks.length > 0 || globalAgents.length > 0) {
+                tasks = globalTasks.slice(0, 10)
+                agents = globalAgents.slice(0, 14)
+              }
+            }
+          } catch {
+            // Ignore global fallback fetch failures.
+          }
+        }
+
+        if (tasks.length === 0 && agents.length === 0) {
+          try {
+            const eventsRes = await fetch(`/api/chat/sessions/${encodeURIComponent(sessionId)}/events`, {
+              headers: buildApiHeaders(),
+              cache: 'no-store',
+            })
+            if (eventsRes.ok) {
+              const eventsPayload = await eventsRes.json()
+              const events = Array.isArray(eventsPayload.events)
+                ? (eventsPayload.events as SessionReplayEvent[])
+                : []
+
+              replayNodes = events
+                .slice(-10)
+                .map((event, idx) => {
+                  const eventType = String(event.event_type || '').toLowerCase()
+                  return {
+                    id: `${rootId}-evt-${event.event_index ?? idx}-${idx}`,
+                    type: 'agent' as const,
+                    label: summarizeReplayEvent(event),
+                    status: eventType === 'error' ? 'error' : 'done',
+                    parentId: rootId,
+                  }
+                })
+            }
+          } catch {
+            replayNodes = []
+          }
+        }
+
         const nodes: AgentNode[] = [
           {
             id: rootId,
@@ -286,6 +370,7 @@ export function Sidebar({ collapsed, onToggleCollapse }: SidebarProps) {
             status: toGraphStatus(agent.status),
             parentId: agent.task_id || sessionId,
           })),
+          ...replayNodes,
         ]
 
         if (!cancelled) {

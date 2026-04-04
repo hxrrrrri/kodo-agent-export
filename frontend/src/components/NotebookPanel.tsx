@@ -1,6 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Play, Plus, Trash2 } from 'lucide-react'
-import { ImageAttachment } from '../store/chatStore'
+import CodeMirror from '@uiw/react-codemirror'
+import { oneDark } from '@codemirror/theme-one-dark'
+import { python } from '@codemirror/lang-python'
+import { javascript } from '@codemirror/lang-javascript'
+import { indentWithTab } from '@codemirror/commands'
+import { keymap } from '@codemirror/view'
+import { buildApiHeaders, parseApiError } from '../lib/api'
 
 type CellLanguage = 'python' | 'node'
 
@@ -15,26 +21,9 @@ interface Cell {
   executionCount: number
 }
 
-type StreamEventHandlers = {
-  onToolOutput?: (line: string, event: Record<string, unknown>) => void
-  onToolResult?: (event: Record<string, unknown>) => void
-  onText?: (content: string, event: Record<string, unknown>) => void
-  onDone?: (usage: unknown, event: Record<string, unknown>) => void
-  onError?: (message: string, event: Record<string, unknown>) => void
-  onMeta?: (event: Record<string, unknown>) => void
-}
-
-type SendMessageFn = (
-  content: string,
-  imageAttachment?: ImageAttachment,
-  extraContentBlocks?: Array<Record<string, unknown>>,
-  eventHandlers?: StreamEventHandlers,
-  options?: { silent?: boolean },
-) => Promise<void>
-
 interface NotebookPanelProps {
   sessionId: string | null
-  sendMessage: SendMessageFn
+  projectDir: string
 }
 
 const PANEL_HEIGHT = 360
@@ -54,7 +43,7 @@ function createCell(language: CellLanguage): Cell {
   }
 }
 
-export function NotebookPanel({ sessionId, sendMessage }: NotebookPanelProps) {
+export function NotebookPanel({ sessionId, projectDir }: NotebookPanelProps) {
   const [cells, setCells] = useState<Cell[]>([createCell('python')])
   const executionCounterRef = useRef(0)
   const [runningAll, setRunningAll] = useState(false)
@@ -86,6 +75,8 @@ export function NotebookPanel({ sessionId, sendMessage }: NotebookPanelProps) {
   }, [cells, sessionId])
 
   const runningCount = useMemo(() => cells.filter((cell) => cell.status === 'running').length, [cells])
+  const pythonExtensions = useMemo(() => [python(), keymap.of([indentWithTab])], [])
+  const nodeExtensions = useMemo(() => [javascript({ jsx: true }), keymap.of([indentWithTab])], [])
 
   const setCellPatch = (cellId: string, patch: Partial<Cell>) => {
     setCells((prev) => prev.map((cell) => (cell.id === cellId ? { ...cell, ...patch } : cell)))
@@ -110,66 +101,48 @@ export function NotebookPanel({ sessionId, sendMessage }: NotebookPanelProps) {
       executionCount,
     })
 
-    const replSession = cell.language === 'python'
-      ? `notebook-${sessionId || 'default'}`
-      : `notebook-node-${sessionId || 'default'}`
-
-    const command = [
-      `[Notebook cell ${executionCount}]`,
-      `REPL session key: ${replSession}`,
-      `\`\`\`${cell.language}`,
-      code,
-      '\`\`\`',
-      'Please run this in the REPL and return only the output. Do not explain.',
-    ].join('\n')
-
-    const outputLines: string[] = []
-    let errorText = ''
-
     try {
-      await sendMessage(
-        command,
-        undefined,
-        [],
-        {
-          onToolOutput: (line, event) => {
-            const tool = String(event.tool || '').toLowerCase()
-            if (tool === 'repl') {
-              outputLines.push(line)
-            }
-          },
-          onToolResult: (event) => {
-            const tool = String(event.tool || '').toLowerCase()
-            if (tool !== 'repl') return
-            const output = String(event.output || '').trim()
-            if (output) {
-              outputLines.push(output)
-            }
-            if (event.success === false) {
-              errorText = String(event.error || 'Notebook cell execution failed.')
-            }
-          },
-          onText: (content) => {
-            if (content.trim()) {
-              outputLines.push(content)
-            }
-          },
-          onError: (message) => {
-            errorText = message
-          },
-        },
-        { silent: true },
-      )
+      const response = await fetch('/api/chat/notebook/run', {
+        method: 'POST',
+        headers: buildApiHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify({
+          language: cell.language,
+          code,
+          session_id: sessionId,
+          project_dir: projectDir || null,
+        }),
+      })
 
-      const nextOutput = outputLines.join('\n').trim() || '(no output)'
+      if (!response.ok) {
+        throw new Error(await parseApiError(response))
+      }
+
+      const data = await response.json() as {
+        success?: boolean
+        output?: string
+        error?: string
+      }
+
+      const output = String(data.output || '').trim() || '(no output)'
+      const errorText = String(data.error || '').trim()
+      const success = Boolean(data.success) && !errorText
+
       setCellPatch(cellId, {
-        status: errorText ? 'error' : 'done',
-        output: errorText ? `${errorText}\n${nextOutput}`.trim() : nextOutput,
+        status: success ? 'done' : 'error',
+        output: success ? output : `${errorText || 'Execution failed.'}\n${output}`.trim(),
       })
     } catch (error) {
+      const message = String(error || '')
+      let hint = ''
+      if (message.includes('404')) {
+        hint = 'Notebook runner endpoint not found. Restart backend and refresh the app.'
+      } else if (message.includes('401') || message.includes('403')) {
+        hint = 'Notebook run is unauthorized. Verify API auth token in the UI.'
+      }
+
       setCellPatch(cellId, {
         status: 'error',
-        output: String(error),
+        output: hint ? `${hint}\n${message}` : message,
       })
     }
   }
@@ -255,6 +228,10 @@ export function NotebookPanel({ sessionId, sendMessage }: NotebookPanelProps) {
         >
           RUN ALL
         </button>
+
+        <span style={{ fontSize: 10, color: 'var(--text-2)', fontFamily: 'var(--font-mono)' }}>
+          REPL execution is direct (no agent round trip)
+        </span>
       </div>
 
       {cells.map((cell, index) => (
@@ -321,24 +298,25 @@ export function NotebookPanel({ sessionId, sendMessage }: NotebookPanelProps) {
             </button>
           </div>
 
-          <textarea
-            value={cell.code}
-            onChange={(event) => setCellPatch(cell.id, { code: event.target.value, status: 'idle' })}
-            placeholder={`Write ${cell.language} code...`}
-            style={{
-              minHeight: 120,
-              border: '1px solid var(--border-bright)',
-              borderRadius: 'var(--radius)',
-              background: 'var(--bg-0)',
-              color: 'var(--text-0)',
-              fontSize: 12,
-              fontFamily: 'var(--font-mono)',
-              lineHeight: 1.5,
-              padding: 8,
-              resize: 'vertical',
-              outline: 'none',
-            }}
-          />
+          <div style={{ border: '1px solid var(--border-bright)', borderRadius: 'var(--radius)', overflow: 'hidden' }}>
+            <CodeMirror
+              value={cell.code}
+              onChange={(value) => setCellPatch(cell.id, { code: value, status: 'idle' })}
+              placeholder={`Write ${cell.language} code...`}
+              theme={oneDark}
+              height="220px"
+              extensions={cell.language === 'python' ? pythonExtensions : nodeExtensions}
+              basicSetup={{
+                lineNumbers: true,
+                foldGutter: true,
+                highlightActiveLine: true,
+                autocompletion: true,
+                bracketMatching: true,
+                closeBrackets: true,
+                indentOnInput: true,
+              }}
+            />
+          </div>
 
           <div
             style={{

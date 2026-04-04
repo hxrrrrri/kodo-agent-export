@@ -22,6 +22,7 @@ from tools.path_guard import project_dir_context
 
 DEFAULT_OPENAI_MODEL = "gpt-4o"
 DEFAULT_ANTHROPIC_MODEL = "claude-sonnet-4-6"
+DEFAULT_ANTHROPIC_BASE_URL = "https://api.anthropic.com"
 OPENAI_MODEL_PREFIXES = ("gpt-", "o1", "o3", "o4")
 ANTHROPIC_MODEL_PREFIXES = ("claude",)
 MAX_TOKENS = int(os.getenv("MAX_TOKENS", "8192"))
@@ -39,6 +40,7 @@ def _env_int(name: str, default: int, minimum: int) -> int:
 MAX_CONTEXT_MESSAGES = _env_int("MAX_CONTEXT_MESSAGES", 50, 1)
 ENABLE_PROMPT_CACHE = os.getenv("KODO_ENABLE_PROMPT_CACHE", "0").strip().lower() in {"1", "true", "yes", "on"}
 N_CACHE_MESSAGES = _env_int("N_CACHE_MESSAGES", 4, 1)
+MAX_ANTHROPIC_CACHE_BLOCKS = 4
 
 
 def _streaming_tools_enabled() -> bool:
@@ -85,7 +87,7 @@ def _resolve_provider_config(model_override: str | None = None) -> RuntimeConfig
     openai_key = os.getenv("OPENAI_API_KEY", "").strip()
     anthropic_key = os.getenv("ANTHROPIC_API_KEY", "").strip()
     openai_base_url = os.getenv("OPENAI_BASE_URL", "").strip() or None
-    anthropic_base_url = os.getenv("ANTHROPIC_BASE_URL", "").strip() or None
+    anthropic_base_url = os.getenv("ANTHROPIC_BASE_URL", "").strip() or DEFAULT_ANTHROPIC_BASE_URL
 
     if openai_key and anthropic_key:
         if primary_provider == "openai":
@@ -140,7 +142,7 @@ def _profile_env_key(provider: str) -> str:
 def _profile_default_base_url(provider: str) -> str | None:
     defaults = {
         "openai": os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1"),
-        "anthropic": os.getenv("ANTHROPIC_BASE_URL", ""),
+        "anthropic": os.getenv("ANTHROPIC_BASE_URL", DEFAULT_ANTHROPIC_BASE_URL),
         "deepseek": os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com/v1"),
         "groq": os.getenv("GROQ_BASE_URL", "https://api.groq.com/openai/v1"),
         "openrouter": os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1"),
@@ -383,14 +385,23 @@ def _apply_anthropic_cache_controls(messages: list[dict[str, Any]]) -> list[dict
         return messages
 
     marked: list[dict[str, Any]] = []
-    start_index = max(0, len(messages) - N_CACHE_MESSAGES)
+    # Anthropic allows at most 4 cache_control blocks total in a request.
+    # One block is used by system prompt caching, so message blocks must be capped.
+    max_message_cache_blocks = max(0, MAX_ANTHROPIC_CACHE_BLOCKS - 1)
+    effective_cache_messages = min(N_CACHE_MESSAGES, max_message_cache_blocks)
+    start_index = max(0, len(messages) - effective_cache_messages)
 
     for idx, message in enumerate(messages):
         copied = {
             "role": message.get("role", "user"),
             "content": list(message.get("content", [])) if isinstance(message.get("content"), list) else message.get("content"),
         }
-        if idx >= start_index and isinstance(copied.get("content"), list) and copied["content"]:
+        if (
+            effective_cache_messages > 0
+            and idx >= start_index
+            and isinstance(copied.get("content"), list)
+            and copied["content"]
+        ):
             first_block = copied["content"][0]
             if isinstance(first_block, dict):
                 updated = dict(first_block)
@@ -439,9 +450,10 @@ class AgentLoop:
         self.base_url = config.base_url
 
         if provider == "anthropic":
-            kwargs: dict[str, Any] = {"api_key": config.api_key}
-            if config.base_url:
-                kwargs["base_url"] = config.base_url
+            kwargs: dict[str, Any] = {
+                "api_key": config.api_key,
+                "base_url": (config.base_url or DEFAULT_ANTHROPIC_BASE_URL).strip(),
+            }
             self.client = AsyncAnthropic(**kwargs)
             return
 

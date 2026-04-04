@@ -1685,7 +1685,7 @@ export function ChatWindow({ editorOpen, onToggleEditor }: ChatWindowProps) {
       {showNotebook && (
         <NotebookPanel
           sessionId={sessionId}
-          sendMessage={sendMessage}
+          projectDir={projectDir}
         />
       )}
 

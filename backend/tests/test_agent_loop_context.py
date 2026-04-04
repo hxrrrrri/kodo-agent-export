@@ -52,3 +52,27 @@ def test_apply_anthropic_cache_controls_marks_recent_blocks(monkeypatch):
     assert 'cache_control' not in marked[0]['content'][0]
     assert marked[1]['content'][0]['cache_control'] == {'type': 'ephemeral'}
     assert marked[2]['content'][0]['cache_control'] == {'type': 'ephemeral'}
+
+
+def test_apply_anthropic_cache_controls_respects_max_cache_block_limit(monkeypatch):
+    monkeypatch.setattr(loop_mod, 'ENABLE_PROMPT_CACHE', True)
+    monkeypatch.setattr(loop_mod, 'N_CACHE_MESSAGES', 10)
+    monkeypatch.setattr(loop_mod, 'MAX_ANTHROPIC_CACHE_BLOCKS', 4)
+
+    messages = [
+        {'role': 'user', 'content': [{'type': 'text', 'text': f'msg-{idx}'}]}
+        for idx in range(8)
+    ]
+
+    marked = loop_mod._apply_anthropic_cache_controls(messages)
+    marked_count = sum(
+        1
+        for message in marked
+        if isinstance(message.get('content'), list)
+        and message['content']
+        and isinstance(message['content'][0], dict)
+        and 'cache_control' in message['content'][0]
+    )
+
+    # System prompt uses one cached block, so messages must use at most three.
+    assert marked_count <= 3

@@ -77,8 +77,29 @@ export function ProviderPanel() {
 
   const activeProvider = useMemo(() => {
     const rows = status?.providers || []
+    const activeProfileProvider = String(activeProfile?.provider || '').trim().toLowerCase()
+    if (activeProfileProvider) {
+      const exact = rows.find((row) => String(row.provider || '').trim().toLowerCase() === activeProfileProvider)
+      if (exact) return exact
+
+      if (activeProfile?.model) {
+        return {
+          provider: activeProfileProvider,
+          healthy: true,
+          configured: true,
+          latency_ms: null,
+          errors: 0,
+          requests: 0,
+          error_rate: 0,
+          cost_per_1k: null,
+          big_model: activeProfile.model,
+          small_model: activeProfile.model,
+        } as ProviderRow
+      }
+    }
+
     return rows.find((row) => row.healthy) || rows[0] || null
-  }, [status])
+  }, [activeProfile, status])
 
   const webhookUrl = useMemo(() => {
     if (typeof window === 'undefined') return '/api/webhooks/trigger'
@@ -273,6 +294,15 @@ export function ProviderPanel() {
     void loadStatus()
     void loadProfiles()
     void loadWebhookEvents()
+  }, [])
+
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      void loadStatus()
+      void loadProfiles()
+    }, 7000)
+
+    return () => window.clearInterval(timer)
   }, [])
 
   useEffect(() => {
@@ -564,12 +594,12 @@ export function ProviderPanel() {
           display: 'grid',
           gap: 8,
         }}>
-          <div style={{ display: 'flex', gap: 6 }}>
+          <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) auto', gap: 6, alignItems: 'stretch' }}>
             <input
               value={webhookUrl}
               readOnly
               style={{
-                flex: 1,
+                minWidth: 0,
                 background: 'var(--bg-0)',
                 border: '1px solid var(--border)',
                 color: 'var(--text-1)',
@@ -577,11 +607,15 @@ export function ProviderPanel() {
                 padding: '6px 8px',
                 fontSize: 10,
                 fontFamily: 'var(--font-mono)',
+                lineHeight: '16px',
               }}
             />
             <button
               onClick={() => void copyWebhookUrl()}
               style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                justifyContent: 'center',
                 border: '1px solid var(--border)',
                 background: 'var(--bg-1)',
                 color: copiedWebhook ? 'var(--green)' : 'var(--text-1)',
@@ -591,6 +625,8 @@ export function ProviderPanel() {
                 cursor: 'pointer',
                 fontFamily: 'var(--font-mono)',
                 minWidth: 62,
+                whiteSpace: 'nowrap',
+                flexShrink: 0,
               }}
             >
               {copiedWebhook ? 'COPIED' : 'COPY'}

@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import secrets
 from datetime import datetime, timedelta, timezone
 from typing import Any
+from urllib.parse import urlencode
 
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
@@ -33,13 +35,23 @@ def _iso(dt: datetime) -> str:
 
 
 def _ttl_seconds() -> int:
-    import os
-
     raw = os.getenv("COLLAB_TOKEN_TTL_SECONDS", "3600").strip()
     try:
         return max(60, int(raw))
     except Exception:
         return 3600
+
+
+def _public_app_base_url(request: Request) -> str:
+    configured = os.getenv("KODO_PUBLIC_APP_URL", "").strip() or os.getenv("PUBLIC_APP_URL", "").strip()
+    if configured:
+        return configured.rstrip("/")
+
+    origin = str(request.headers.get("origin", "") or "").strip()
+    if origin.lower().startswith(("http://", "https://")):
+        return origin.rstrip("/")
+
+    return str(request.base_url).rstrip("/")
 
 
 async def _cleanup_tokens() -> None:
@@ -97,7 +109,9 @@ async def create_share_token(session_id: str, request: Request):
         session_tokens = _SESSION_TOKENS.setdefault(session_id, {})
         session_tokens[token] = expires_at
 
-    share_url = f"{request.base_url}?session_id={session_id}&share_token={token}"
+    base_url = _public_app_base_url(request)
+    query = urlencode({"session_id": session_id, "share_token": token})
+    share_url = f"{base_url}/?{query}"
     log_audit_event(
         "collab_share_created",
         request_id=getattr(request.state, "request_id", None),
