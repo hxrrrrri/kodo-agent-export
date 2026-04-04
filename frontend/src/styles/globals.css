@@ -23,8 +23,8 @@
   --blue: #4da6ff;
   --blue-dim: rgba(77, 166, 255, 0.12);
 
-  --logo-primary: #8d939b;
-  --logo-secondary: #8d939b;
+  --logo-primary: #5f646b;
+  --logo-secondary: #5f646b;
 
   --font-mono: 'JetBrains Mono', 'Fira Code', monospace;
   --font-display: 'Syne', sans-serif;
@@ -60,8 +60,8 @@
   --blue: #0f67b7;
   --blue-dim: rgba(15, 103, 183, 0.14);
 
-  --logo-primary: #8d939b;
-  --logo-secondary: #8d939b;
+  --logo-primary: #5f646b;
+  --logo-secondary: #5f646b;
 }
 
 *, *::before, *::after {
