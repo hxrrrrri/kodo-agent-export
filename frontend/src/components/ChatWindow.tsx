@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, KeyboardEvent } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, KeyboardEvent, MouseEvent as ReactMouseEvent } from 'react'
 import { Send, Square, FolderOpen, Zap, ImagePlus, X, Search, Terminal as TerminalIcon, Paperclip, CircleAlert, BookOpen, Mic } from 'lucide-react'
 import { useChat } from '../hooks/useChat'
 import { MessageBubble } from './MessageBubble'
@@ -36,6 +36,15 @@ interface FileAttachment {
   isImage: boolean
   isZip: boolean
   previewUrl?: string
+}
+
+type HeaderHoverOptions = {
+  active?: boolean
+  activeBorder?: string
+  activeColor?: string
+  activeShadow?: string
+  defaultColor?: string
+  disabled?: boolean
 }
 
 const EXAMPLE_PROMPTS = [
@@ -1011,6 +1020,49 @@ export function ChatWindow({ editorOpen, onToggleEditor }: ChatWindowProps) {
   const totalAttachmentCount = pendingFiles.length + (pendingImage ? 1 : 0)
   const hiddenAttachmentCount = Math.max(0, totalAttachmentCount - MAX_VISIBLE_ATTACHMENT_CHIPS)
   const hasProjectDir = projectDir.trim().length > 0
+  const selectedHeaderButtonStyle = {
+    background: 'var(--accent-dim)',
+    borderColor: 'var(--accent)',
+    color: 'var(--text-0)',
+    boxShadow: 'inset 0 0 0 1px var(--accent-glow)',
+  } as const
+
+  const applyHeaderHover = (
+    event: ReactMouseEvent<HTMLElement>,
+    {
+      active = false,
+      activeBorder = 'var(--accent)',
+      activeColor = 'var(--text-0)',
+      activeShadow = 'inset 0 0 0 1px var(--accent-glow)',
+      disabled = false,
+    }: HeaderHoverOptions = {},
+  ) => {
+    if (disabled) return
+    const target = event.currentTarget as HTMLElement
+    target.style.borderColor = active ? activeBorder : 'var(--border-bright)'
+    target.style.color = active ? activeColor : 'var(--text-0)'
+    target.style.transform = 'translateY(-1px)'
+    target.style.boxShadow = active ? activeShadow : '0 4px 12px rgba(0, 0, 0, 0.18)'
+  }
+
+  const resetHeaderHover = (
+    event: ReactMouseEvent<HTMLElement>,
+    {
+      active = false,
+      activeBorder = 'var(--accent)',
+      activeColor = 'var(--text-0)',
+      activeShadow = 'inset 0 0 0 1px var(--accent-glow)',
+      defaultColor = 'var(--text-2)',
+      disabled = false,
+    }: HeaderHoverOptions = {},
+  ) => {
+    if (disabled) return
+    const target = event.currentTarget as HTMLElement
+    target.style.borderColor = active ? activeBorder : 'var(--border)'
+    target.style.color = active ? activeColor : defaultColor
+    target.style.transform = 'translateY(0)'
+    target.style.boxShadow = active ? activeShadow : 'none'
+  }
 
   return (
     <div style={{
@@ -1062,15 +1114,19 @@ export function ChatWindow({ editorOpen, onToggleEditor }: ChatWindowProps) {
             display: 'flex', alignItems: 'center', gap: 5,
             transition: 'all 0.15s',
             maxWidth: 320,
+            transform: 'translateY(0)',
+            outline: 'none',
             boxShadow: hasProjectDir ? 'inset 0 0 0 1px var(--accent-glow)' : 'none',
           }}
           onMouseEnter={e => {
-            (e.currentTarget as HTMLElement).style.borderColor = hasProjectDir ? 'var(--accent)' : 'var(--border-bright)'
-            ;(e.currentTarget as HTMLElement).style.color = 'var(--text-0)'
+            applyHeaderHover(e, {
+              active: hasProjectDir,
+            })
           }}
           onMouseLeave={e => {
-            (e.currentTarget as HTMLElement).style.borderColor = hasProjectDir ? 'var(--accent)' : 'var(--border)'
-            ;(e.currentTarget as HTMLElement).style.color = hasProjectDir ? 'var(--text-0)' : 'var(--text-2)'
+            resetHeaderHover(e, {
+              active: hasProjectDir,
+            })
           }}
         >
           <FolderOpen size={12} />
@@ -1086,7 +1142,7 @@ export function ChatWindow({ editorOpen, onToggleEditor }: ChatWindowProps) {
           onClick={() => setShowProjectInput((prev) => !prev)}
           title="Manually set project path"
           style={{
-            background: showProjectInput ? 'var(--bg-3)' : 'none',
+            background: 'none',
             border: '1px solid var(--border)',
             color: 'var(--text-2)',
             padding: '4px 10px',
@@ -1096,7 +1152,12 @@ export function ChatWindow({ editorOpen, onToggleEditor }: ChatWindowProps) {
             fontFamily: 'var(--font-mono)',
             display: 'flex', alignItems: 'center', gap: 5,
             transition: 'all 0.15s',
+            transform: 'translateY(0)',
+            outline: 'none',
+            ...(showProjectInput ? selectedHeaderButtonStyle : {}),
           }}
+          onMouseEnter={(e) => applyHeaderHover(e, { active: showProjectInput })}
+          onMouseLeave={(e) => resetHeaderHover(e, { active: showProjectInput })}
         >
           PATH
         </button>
@@ -1132,9 +1193,9 @@ export function ChatWindow({ editorOpen, onToggleEditor }: ChatWindowProps) {
           title={showNotebook ? 'Hide notebook' : 'Show notebook'}
           disabled={observerMode}
           style={{
-            background: showNotebook ? 'var(--bg-3)' : 'none',
+            background: 'none',
             border: '1px solid var(--border)',
-            color: showNotebook ? 'var(--text-0)' : 'var(--text-2)',
+            color: 'var(--text-2)',
             padding: '4px 10px',
             borderRadius: 'var(--radius)',
             cursor: observerMode ? 'not-allowed' : 'pointer',
@@ -1144,7 +1205,13 @@ export function ChatWindow({ editorOpen, onToggleEditor }: ChatWindowProps) {
             alignItems: 'center',
             gap: 6,
             opacity: observerMode ? 0.6 : 1,
+            transition: 'all 0.15s',
+            transform: 'translateY(0)',
+            outline: 'none',
+            ...(showNotebook ? selectedHeaderButtonStyle : {}),
           }}
+          onMouseEnter={(e) => applyHeaderHover(e, { active: showNotebook, disabled: observerMode })}
+          onMouseLeave={(e) => resetHeaderHover(e, { active: showNotebook, disabled: observerMode })}
         >
           <BookOpen size={12} />
           NOTEBOOK
@@ -1168,7 +1235,25 @@ export function ChatWindow({ editorOpen, onToggleEditor }: ChatWindowProps) {
             alignItems: 'center',
             gap: 6,
             opacity: observerMode ? 0.6 : 1,
+            transition: 'all 0.15s',
+            transform: 'translateY(0)',
+            outline: 'none',
           }}
+          onMouseEnter={(e) => applyHeaderHover(e, {
+            active: terminalActive,
+            activeBorder: 'var(--border)',
+            activeColor: 'var(--green)',
+            activeShadow: 'none',
+            disabled: observerMode,
+          })}
+          onMouseLeave={(e) => resetHeaderHover(e, {
+            active: terminalActive,
+            activeBorder: 'var(--border)',
+            activeColor: 'var(--green)',
+            activeShadow: 'none',
+            defaultColor: 'var(--text-2)',
+            disabled: observerMode,
+          })}
         >
           <TerminalIcon size={12} />
           TERMINAL
@@ -1245,7 +1330,22 @@ export function ChatWindow({ editorOpen, onToggleEditor }: ChatWindowProps) {
             cursor: 'pointer',
             fontSize: 11,
             fontFamily: 'var(--font-mono)',
+            transition: 'all 0.15s',
+            transform: 'translateY(0)',
+            outline: 'none',
           }}
+          onMouseEnter={(e) => applyHeaderHover(e, {
+            active: showShortcuts,
+            activeBorder: 'var(--border)',
+            activeColor: 'var(--text-2)',
+            activeShadow: 'none',
+          })}
+          onMouseLeave={(e) => resetHeaderHover(e, {
+            active: showShortcuts,
+            activeBorder: 'var(--border)',
+            activeColor: 'var(--text-2)',
+            activeShadow: 'none',
+          })}
         >
           SHORTCUTS
         </button>
@@ -1255,15 +1355,21 @@ export function ChatWindow({ editorOpen, onToggleEditor }: ChatWindowProps) {
           onClick={onToggleEditor}
           title={editorOpen ? 'Hide editor panel' : 'Show editor panel'}
           style={{
-            background: editorOpen ? 'var(--bg-3)' : 'none',
+            background: 'none',
             border: '1px solid var(--border)',
-            color: editorOpen ? 'var(--text-0)' : 'var(--text-2)',
+            color: 'var(--text-2)',
             padding: '4px 10px',
             borderRadius: 'var(--radius)',
             cursor: 'pointer',
             fontSize: 11,
             fontFamily: 'var(--font-mono)',
+            transition: 'all 0.15s',
+            transform: 'translateY(0)',
+            outline: 'none',
+            ...(editorOpen ? selectedHeaderButtonStyle : {}),
           }}
+          onMouseEnter={(e) => applyHeaderHover(e, { active: editorOpen })}
+          onMouseLeave={(e) => resetHeaderHover(e, { active: editorOpen })}
         >
           EDITOR
         </button>
