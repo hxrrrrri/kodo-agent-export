@@ -102,7 +102,7 @@ async def import_pack(request: Request, file: UploadFile = File(...)):
     if len(raw) > 10 * 1024 * 1024:
         raise HTTPException(status_code=413, detail="Pack file too large (max 10MB).")
 
-    imported = {"skills": 0, "prompts": 0, "cron_jobs": 0, "errors": []}
+    imported: dict[str, Any] = {"skills": 0, "prompts": 0, "cron_jobs": 0, "errors": []}
     meta_name = "unknown"
 
     try:

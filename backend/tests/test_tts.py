@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import os
-
 from fastapi.testclient import TestClient
 
 from main import app
