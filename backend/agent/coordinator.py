@@ -87,8 +87,20 @@ class AgentCoordinator:
         await self._save(rows)
         return payload
 
-    async def list_agents(self, limit: int = 100) -> list[dict[str, Any]]:
+    async def list_agents(
+        self,
+        limit: int = 100,
+        parent_session_id: str | None = None,
+    ) -> list[dict[str, Any]]:
         rows = await self._load()
+        session_filter = (parent_session_id or "").strip()
+        if session_filter:
+            rows = [
+                row
+                for row in rows
+                if str(row.get("parent_session_id") or "").strip() == session_filter
+            ]
+
         rows.sort(key=lambda row: str(row.get("updated_at", "")), reverse=True)
         items = rows[: max(1, min(limit, 500))]
 

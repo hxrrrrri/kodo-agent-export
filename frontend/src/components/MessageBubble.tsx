@@ -10,27 +10,40 @@ function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 }
 
+function buildSearchTokens(query: string): string[] {
+  const tokens = query
+    .trim()
+    .split(/\s+/)
+    .map((token) => token.trim())
+    .filter(Boolean)
+
+  return Array.from(new Set(tokens)).sort((a, b) => b.length - a.length)
+}
+
 function renderHighlightedText(text: string, query: string): JSX.Element {
-  const trimmed = query.trim()
-  if (!trimmed) {
+  const tokens = buildSearchTokens(query)
+  if (tokens.length === 0) {
     return <>{text}</>
   }
 
-  const pattern = new RegExp(`(${escapeRegExp(trimmed)})`, 'ig')
+  const tokenSet = new Set(tokens.map((token) => token.toLowerCase()))
+  const pattern = new RegExp(`(${tokens.map((token) => escapeRegExp(token)).join('|')})`, 'ig')
   const parts = text.split(pattern)
 
   return (
     <>
       {parts.map((part, idx) => {
-        if (part.toLowerCase() === trimmed.toLowerCase()) {
+        if (tokenSet.has(part.toLowerCase())) {
           return (
             <mark
               key={`${part}-${idx}`}
               style={{
-                background: 'rgba(255, 215, 0, 0.35)',
-                color: '#1f1c17',
+                background: 'var(--accent-dim)',
+                color: 'var(--text-0)',
+                border: '1px solid var(--accent)',
                 padding: '0 2px',
                 borderRadius: 3,
+                boxShadow: 'inset 0 0 0 1px var(--accent-glow)',
               }}
             >
               {part}
@@ -143,7 +156,7 @@ export function MessageBubble({ message, searchQuery }: { message: Message; sear
           display: 'inline-block',
           animation: message.isStreaming ? 'pulse-accent 1.5s ease-in-out infinite' : 'none',
         }} />
-        KŌDO
+        KODO
         {message.isStreaming && !message.content && !message.toolCalls?.length && (
           <span style={{ color: 'var(--text-2)', fontWeight: 400 }}>thinking...</span>
         )}

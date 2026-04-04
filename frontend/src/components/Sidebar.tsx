@@ -54,6 +54,57 @@ function shortId(value: string): string {
   return text.slice(0, 10)
 }
 
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
+
+function buildSearchTokens(query: string): string[] {
+  const tokens = query
+    .trim()
+    .split(/\s+/)
+    .map((token) => token.trim())
+    .filter(Boolean)
+
+  return Array.from(new Set(tokens)).sort((a, b) => b.length - a.length)
+}
+
+function renderHighlightedText(text: string, query: string): JSX.Element {
+  const tokens = buildSearchTokens(query)
+  if (tokens.length === 0) {
+    return <>{text}</>
+  }
+
+  const tokenSet = new Set(tokens.map((token) => token.toLowerCase()))
+  const pattern = new RegExp(`(${tokens.map((token) => escapeRegExp(token)).join('|')})`, 'ig')
+  const parts = text.split(pattern)
+
+  return (
+    <>
+      {parts.map((part, idx) => {
+        if (tokenSet.has(part.toLowerCase())) {
+          return (
+            <mark
+              key={`${part}-${idx}`}
+              style={{
+                background: 'var(--accent-dim)',
+                color: 'var(--text-0)',
+                border: '1px solid var(--accent)',
+                padding: '0 2px',
+                borderRadius: 3,
+                boxShadow: 'inset 0 0 0 1px var(--accent-glow)',
+              }}
+            >
+              {part}
+            </mark>
+          )
+        }
+
+        return <span key={`${part}-${idx}`}>{part}</span>
+      })}
+    </>
+  )
+}
+
 function formatDate(iso: string): string {
   if (!iso) return ''
   const date = new Date(iso)
@@ -161,6 +212,7 @@ export function Sidebar({ collapsed, onToggleCollapse }: SidebarProps) {
   const [activeView, setActiveView] = useState<SidebarView>('sessions')
   const [agentNodes, setAgentNodes] = useState<AgentNode[]>([])
   const [agentGraphError, setAgentGraphError] = useState<string | null>(null)
+  const [agentGraphLastUpdatedAt, setAgentGraphLastUpdatedAt] = useState<string>('')
   const [agentGraphModalOpen, setAgentGraphModalOpen] = useState(false)
   const searchInputRef = useRef<HTMLInputElement>(null)
   const bootstrappedRef = useRef(false)
@@ -179,9 +231,10 @@ export function Sidebar({ collapsed, onToggleCollapse }: SidebarProps) {
 
     const loadAgentGraph = async () => {
       try {
+        const sessionQuery = sessionId ? `&session_id=${encodeURIComponent(sessionId)}` : ''
         const [tasksRes, agentsRes] = await Promise.all([
-          fetch('/api/chat/tasks?limit=50', { headers: buildApiHeaders() }),
-          fetch('/api/chat/agents?limit=50', { headers: buildApiHeaders() }),
+          fetch(`/api/chat/tasks?limit=50${sessionQuery}`, { headers: buildApiHeaders(), cache: 'no-store' }),
+          fetch(`/api/chat/agents?limit=50${sessionQuery}`, { headers: buildApiHeaders(), cache: 'no-store' }),
         ])
 
         if (!tasksRes.ok) throw new Error(await parseApiError(tasksRes))
@@ -219,6 +272,7 @@ export function Sidebar({ collapsed, onToggleCollapse }: SidebarProps) {
         if (!cancelled) {
           setAgentNodes(nodes)
           setAgentGraphError(null)
+          setAgentGraphLastUpdatedAt(new Date().toLocaleTimeString())
         }
       } catch (error) {
         if (!cancelled) {
@@ -258,13 +312,18 @@ export function Sidebar({ collapsed, onToggleCollapse }: SidebarProps) {
   }, [agentGraphModalOpen])
 
   const visibleSessions = useMemo(() => {
-    const normalizedSearch = searchQuery.trim().toLowerCase()
-    if (!normalizedSearch) return sessions
+    const tokens = searchQuery
+      .trim()
+      .toLowerCase()
+      .split(/\s+/)
+      .filter(Boolean)
+
+    if (tokens.length === 0) return sessions
 
     return sessions.filter((session) => {
       const title = (session.title || '').toLowerCase()
       const sessionKey = session.session_id.toLowerCase()
-      return title.includes(normalizedSearch) || sessionKey.includes(normalizedSearch)
+      return tokens.every((token) => title.includes(token) || sessionKey.includes(token))
     })
   }, [searchQuery, sessions])
 
@@ -358,7 +417,7 @@ export function Sidebar({ collapsed, onToggleCollapse }: SidebarProps) {
         />
 
         <div
-          title="KŌDO"
+          title="KODO"
           style={{
             width: 30,
             height: 30,
@@ -456,22 +515,17 @@ export function Sidebar({ collapsed, onToggleCollapse }: SidebarProps) {
             }}>
               <KodoLogoMark size={20} />
             </div>
-            <div>
-              <div
-                style={{
-                  fontFamily: 'var(--font-display)',
-                  fontSize: 20,
-                  fontWeight: 800,
-                  letterSpacing: '-0.06em',
-                  lineHeight: 0.95,
-                  color: 'var(--text-0)',
-                }}
-              >
-                KŌDO
-              </div>
-              <div style={{ fontSize: 9, color: 'var(--text-2)', letterSpacing: '0.13em' }}>
-                AGENT
-              </div>
+            <div
+              style={{
+                fontFamily: 'var(--font-display)',
+                fontSize: 20,
+                fontWeight: 800,
+                letterSpacing: '-0.06em',
+                lineHeight: 1,
+                color: 'var(--text-0)',
+              }}
+            >
+              KODO
             </div>
           </div>
           <button
@@ -589,6 +643,7 @@ export function Sidebar({ collapsed, onToggleCollapse }: SidebarProps) {
                       key={session.session_id}
                       session={session}
                       active={session.session_id === sessionId}
+                      searchQuery={searchQuery}
                       onSelect={() => loadSession(session.session_id)}
                       onDelete={() => deleteSession(session.session_id)}
                     />
@@ -625,6 +680,9 @@ export function Sidebar({ collapsed, onToggleCollapse }: SidebarProps) {
                 </div>
                 <div style={{ fontSize: 11, color: 'var(--text-2)', lineHeight: 1.4 }}>
                   Status colors: running, done, queued, and error.
+                </div>
+                <div style={{ fontSize: 10, color: 'var(--text-2)' }}>
+                  Auto-refresh: every 5s{agentGraphLastUpdatedAt ? ` • Updated ${agentGraphLastUpdatedAt}` : ''}
                 </div>
               </div>
               {agentGraphError && (
@@ -775,7 +833,7 @@ export function Sidebar({ collapsed, onToggleCollapse }: SidebarProps) {
           }}
         >
           <div style={{ fontSize: 10, color: 'var(--text-2)', letterSpacing: '0.06em' }}>
-            POWERED BY KŌDO
+            POWERED BY KODO
           </div>
           <button
             type="button"
@@ -841,7 +899,14 @@ export function Sidebar({ collapsed, onToggleCollapse }: SidebarProps) {
               }}
             >
               <div style={{ display: 'grid', gap: 2 }}>
-                <div style={{ fontSize: 14, color: 'var(--text-0)', fontFamily: 'var(--font-display)', fontWeight: 700 }}>
+                <div style={{
+                  fontSize: 14,
+                  color: 'var(--text-0)',
+                  fontFamily: 'var(--font-display)',
+                  fontWeight: 700,
+                  lineHeight: 1.3,
+                  paddingBottom: 1,
+                }}>
                   Agent Execution Graph
                 </div>
                 <div style={{ fontSize: 11, color: 'var(--text-2)' }}>
@@ -923,14 +988,20 @@ function PanelNav({
 function SessionRow({
   session,
   active,
+  searchQuery,
   onSelect,
   onDelete,
 }: {
   session: Session
   active: boolean
+  searchQuery: string
   onSelect: () => void
   onDelete: () => void
 }) {
+  const normalizedSearch = searchQuery.trim()
+  const hasSearch = normalizedSearch.length > 0
+  const title = session.title || 'Untitled'
+
   return (
     <div
       style={{
@@ -955,9 +1026,9 @@ function SessionRow({
       <MessageSquare size={13} color={active ? 'var(--text-0)' : 'var(--text-2)'} />
       <div style={{ minWidth: 0, flex: 1 }}>
         <div className="truncate" style={{ fontSize: 12, color: active ? 'var(--text-0)' : 'var(--text-1)' }}>
-          {session.title || 'Untitled'}
+          {hasSearch ? renderHighlightedText(title, normalizedSearch) : title}
         </div>
-        <div style={{ fontSize: 10, color: 'var(--text-2)' }}>
+        <div className="truncate" style={{ fontSize: 10, color: 'var(--text-2)' }}>
           {formatDate(session.updated_at)}
         </div>
       </div>

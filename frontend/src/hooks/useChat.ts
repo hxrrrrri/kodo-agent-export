@@ -22,6 +22,23 @@ type StreamEventHandlers = {
   onToolResult?: (event: Record<string, unknown>) => void
 }
 
+const FALLBACK_MODE_KEYS = ['execute', 'plan', 'debug', 'review']
+
+function normalizeClientMode(mode: string | null | undefined, availableModes: ModeOption[]): string {
+  const fallback = availableModes.find((item) => item.is_default)?.key || 'execute'
+  const key = String(mode || '').trim().toLowerCase()
+  if (!key) {
+    return fallback
+  }
+
+  const allowed = new Set([
+    ...FALLBACK_MODE_KEYS,
+    ...availableModes.map((item) => String(item.key || '').trim().toLowerCase()).filter(Boolean),
+  ])
+
+  return allowed.has(key) ? key : fallback
+}
+
 function extractTextContent(content: unknown): string {
   if (typeof content === 'string') return content
   if (!Array.isArray(content)) return ''
@@ -110,20 +127,29 @@ export function useChat() {
   const activeAssistantIdRef = useRef<string | null>(null)
 
   const filteredMessages = useMemo(() => {
-    const q = store.messageSearchQuery.trim().toLowerCase()
-    if (!q) return store.messages
+    const tokens = store.messageSearchQuery
+      .trim()
+      .toLowerCase()
+      .split(/\s+/)
+      .filter(Boolean)
+
+    if (tokens.length === 0) return store.messages
+
     return store.messages.filter((msg) => {
-      const inContent = msg.content.toLowerCase().includes(q)
-      const inTools = (msg.toolCalls || []).some((tc) => {
+      const contentText = msg.content.toLowerCase()
+      let toolText = ''
+
+      for (const tc of msg.toolCalls || []) {
         let inputText = ''
         try {
           inputText = JSON.stringify(tc.input).toLowerCase()
         } catch {
           inputText = ''
         }
-        return inputText.includes(q) || String(tc.output || '').toLowerCase().includes(q)
-      })
-      return inContent || inTools
+        toolText += ` ${inputText} ${String(tc.output || '').toLowerCase()}`
+      }
+
+      return tokens.every((token) => contentText.includes(token) || toolText.includes(token))
     })
   }, [store.messages, store.messageSearchQuery])
 
@@ -262,7 +288,7 @@ export function useChat() {
         }))
       store.setMessages(messages)
       const metadata = data.metadata as { mode?: string } | undefined
-      const mode = metadata?.mode || 'execute'
+      const mode = normalizeClientMode(metadata?.mode || 'execute', useChatStore.getState().availableModes)
       store.setSessionMode(mode)
 
       try {
@@ -381,7 +407,7 @@ export function useChat() {
   }, [loadCheckpoints, loadSession, store])
 
   const setSessionMode = useCallback(async (mode: string, targetSessionId?: string | null) => {
-    const normalized = mode.trim() || 'execute'
+    const normalized = normalizeClientMode(mode, store.availableModes)
     store.setSessionMode(normalized)
 
     const sid = targetSessionId ?? store.sessionId
@@ -529,7 +555,7 @@ export function useChat() {
           const basePayload: Record<string, unknown> = {
             session_id: sessionId,
             project_dir: store.projectDir || null,
-            mode: store.sessionMode || 'execute',
+            mode: normalizeClientMode(store.sessionMode || 'execute', store.availableModes),
           }
           if (Array.isArray(structured)) {
             basePayload.content = structured
@@ -695,7 +721,8 @@ export function useChat() {
       case 'meta':
         // Metadata event currently includes request/session identifiers.
         if (typeof event.mode === 'string' && event.mode.trim()) {
-          store.setSessionMode(event.mode)
+          const currentModes = useChatStore.getState().availableModes
+          store.setSessionMode(normalizeClientMode(event.mode, currentModes))
         }
         break
 

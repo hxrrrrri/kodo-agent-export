@@ -866,6 +866,12 @@ export function ChatWindow() {
       { key: 'debug', title: 'Debug', summary: 'Hypothesis-driven debugging.', is_default: false },
       { key: 'review', title: 'Review', summary: 'Risk-focused code review.', is_default: false },
     ]
+  const activeMode = useMemo(() => {
+    const normalized = (sessionMode || '').trim().toLowerCase()
+    const fromState = modes.find((mode) => mode.key.toLowerCase() === normalized)
+    if (fromState) return fromState
+    return modes.find((mode) => mode.is_default) || modes[0]
+  }, [modes, sessionMode])
   const totalAttachmentCount = pendingFiles.length + (pendingImage ? 1 : 0)
   const hiddenAttachmentCount = Math.max(0, totalAttachmentCount - MAX_VISIBLE_ATTACHMENT_CHIPS)
   const hasProjectDir = projectDir.trim().length > 0
@@ -960,15 +966,15 @@ export function ChatWindow() {
         </button>
 
         <select
-          value={sessionMode || 'execute'}
+          value={activeMode?.key || 'execute'}
           onChange={(e) => {
             void setSessionMode(e.target.value, sessionId)
           }}
-          title="Session execution mode"
+          title={`Session mode: ${activeMode?.title || 'Execute'} - ${activeMode?.summary || ''}`}
           style={{
             background: 'var(--bg-2)',
             border: '1px solid var(--border)',
-            color: 'var(--text-1)',
+            color: 'var(--text-0)',
             padding: '4px 10px',
             borderRadius: 'var(--radius)',
             fontSize: 11,
@@ -1345,7 +1351,7 @@ export function ChatWindow() {
               letterSpacing: '-1px',
               marginBottom: 8,
             }}>
-              KŌDO AGENT
+              KODO AGENT
             </div>
             <div style={{ color: 'var(--text-2)', fontSize: 13, marginBottom: 32 }}>
               Autonomous. Capable. Yours.
@@ -1633,7 +1639,7 @@ export function ChatWindow() {
             value={input}
             onChange={handleTextareaChange}
             onKeyDown={handleKeyDown}
-            placeholder="Ask KŌDO anything, attach files, or run /help"
+            placeholder="Ask KODO anything, attach files, or run /help"
             rows={1}
             style={{
               flex: 1,

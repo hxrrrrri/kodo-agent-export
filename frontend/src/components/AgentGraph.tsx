@@ -89,24 +89,46 @@ export function AgentGraph({ nodes, variant = 'panel' }: AgentGraphProps) {
   const sessionWidth = isModal ? 250 : 206
   const taskWidth = isModal ? 220 : 184
   const agentWidth = isModal ? 205 : 170
+  const taskGap = isModal ? 30 : 24
+  const agentGap = isModal ? 28 : 22
   const nodeHeight = isModal ? 46 : 40
   const minWidth = isModal ? 940 : 600
   const minHeight = isModal ? 470 : 380
   const rowGap = isModal ? 78 : 62
-  const perRow = isModal ? 4 : 3
+  const perRow = isModal ? 3 : 2
   const marginX = isModal ? 86 : 56
   const taskY = isModal ? 190 : 158
   const agentBaseY = isModal ? 322 : 270
 
-  const width = Math.max(minWidth, tasks.length * (isModal ? 240 : 210), agents.length * (isModal ? 155 : 138))
+  const maxChildrenPerTask = tasks.reduce((acc, task) => {
+    const count = agents.filter((agent) => agent.parentId === task.id).length
+    return Math.max(acc, count)
+  }, 0)
+  const orphanCount = agents.filter((agent) => !agent.parentId || !tasks.some((task) => task.id === agent.parentId)).length
+
+  const taskRowWidth = tasks.length > 0
+    ? tasks.length * taskWidth + Math.max(0, tasks.length - 1) * taskGap
+    : 0
+  const maxAgentColumns = Math.max(1, Math.min(perRow, maxChildrenPerTask, orphanCount || perRow))
+  const agentRowWidth = maxAgentColumns * agentWidth + Math.max(0, maxAgentColumns - 1) * agentGap
+
+  const width = Math.ceil(Math.max(
+    minWidth,
+    taskRowWidth > 0 ? marginX * 2 + taskRowWidth : 0,
+    agents.length > 0 ? marginX * 2 + agentRowWidth : 0,
+  ))
 
   const positions = new Map<string, { x: number; y: number }>()
   positions.set(root.id, { x: width / 2, y: isModal ? 72 : 62 })
 
   if (tasks.length > 0) {
-    const taskSpacing = (width - marginX * 2) / (tasks.length + 1)
+    const rowWidth = tasks.length * taskWidth + Math.max(0, tasks.length - 1) * taskGap
+    const rowStart = (width - rowWidth) * 0.5
     tasks.forEach((task, idx) => {
-      positions.set(task.id, { x: marginX + taskSpacing * (idx + 1), y: taskY })
+      positions.set(task.id, {
+        x: rowStart + taskWidth * 0.5 + idx * (taskWidth + taskGap),
+        y: taskY,
+      })
     })
   }
 
@@ -118,14 +140,14 @@ export function AgentGraph({ nodes, variant = 'panel' }: AgentGraphProps) {
     if (children.length === 0) return
 
     const parentPos = positions.get(task.id) || { x: width / 2, y: taskY }
-    const spacing = isModal ? 170 : 136
 
     children.forEach((agent, childIdx) => {
       const row = Math.floor(childIdx / perRow)
       const indexInRow = childIdx % perRow
       const itemsInRow = Math.min(perRow, children.length - row * perRow)
-      const spread = (itemsInRow - 1) * spacing
-      const x = clamp(parentPos.x - spread * 0.5 + indexInRow * spacing, marginX, width - marginX)
+      const rowWidth = itemsInRow * agentWidth + Math.max(0, itemsInRow - 1) * agentGap
+      const rowStart = clamp(parentPos.x - rowWidth * 0.5, marginX, width - marginX - rowWidth)
+      const x = rowStart + indexInRow * (agentWidth + agentGap) + agentWidth * 0.5
       const y = agentBaseY + row * rowGap
       maxRowIndex = Math.max(maxRowIndex, row)
 
@@ -139,22 +161,26 @@ export function AgentGraph({ nodes, variant = 'panel' }: AgentGraphProps) {
   })
 
   if (unparentedAgents.length > 0) {
-    const fallbackY = tasks.length > 0 ? agentBaseY + (maxRowIndex + 1) * rowGap : taskY
-    const spacing = (width - marginX * 2) / (unparentedAgents.length + 1)
+    const baseRow = tasks.length > 0 ? maxRowIndex + 1 : 0
 
     unparentedAgents.forEach((agent, idx) => {
-      positions.set(agent.id, {
-        x: marginX + spacing * (idx + 1),
-        y: fallbackY,
-      })
-    })
+      const row = Math.floor(idx / perRow)
+      const indexInRow = idx % perRow
+      const itemsInRow = Math.min(perRow, unparentedAgents.length - row * perRow)
+      const rowWidth = itemsInRow * agentWidth + Math.max(0, itemsInRow - 1) * agentGap
+      const rowStart = (width - rowWidth) * 0.5
 
-    if (tasks.length > 0) {
-      maxRowIndex += 1
-    }
+      positions.set(agent.id, {
+        x: rowStart + indexInRow * (agentWidth + agentGap) + agentWidth * 0.5,
+        y: (tasks.length > 0 ? agentBaseY : taskY) + (baseRow + row) * rowGap,
+      })
+
+      maxRowIndex = Math.max(maxRowIndex, baseRow + row)
+    })
   }
 
-  const height = Math.max(minHeight, agentBaseY + Math.max(maxRowIndex, 0) * rowGap + nodeHeight + 78)
+  const maxNodeY = Array.from(positions.values()).reduce((acc, pos) => Math.max(acc, pos.y), taskY)
+  const height = Math.max(minHeight, maxNodeY + nodeHeight * 0.5 + 78)
 
   const lines = nodes
     .filter((node) => node.parentId && positions.has(node.id) && positions.has(node.parentId))

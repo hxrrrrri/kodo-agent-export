@@ -1129,10 +1129,11 @@ async def create_task_endpoint(body: TaskCreateRequest, request: Request):
 async def list_tasks_endpoint(
     request: Request,
     limit: int = Query(default=20, ge=1, le=500),
+    session_id: str | None = Query(default=None, max_length=128),
 ):
     require_api_auth(request)
     await enforce_rate_limit(request, MEMORY_RATE_LIMITER, "list_tasks")
-    tasks = await task_manager.list_tasks(limit=limit)
+    tasks = await task_manager.list_tasks(limit=limit, requested_by_session=session_id)
     return {"tasks": tasks}
 
 
@@ -1285,10 +1286,11 @@ async def spawn_agent_endpoint(body: AgentSpawnRequest, request: Request):
 async def list_agents_endpoint(
     request: Request,
     limit: int = Query(default=20, ge=1, le=500),
+    session_id: str | None = Query(default=None, max_length=128),
 ):
     require_api_auth(request)
     await enforce_rate_limit(request, MEMORY_RATE_LIMITER, "list_agents")
-    return {"agents": await agent_coordinator.list_agents(limit=limit)}
+    return {"agents": await agent_coordinator.list_agents(limit=limit, parent_session_id=session_id)}
 
 
 @router.get("/agents/{agent_id}")

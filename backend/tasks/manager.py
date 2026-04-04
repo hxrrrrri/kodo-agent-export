@@ -130,13 +130,24 @@ class TaskManager:
     async def get_task(self, task_id: str) -> dict[str, Any] | None:
         return await self._load(task_id)
 
-    async def list_tasks(self, limit: int = 100) -> list[dict[str, Any]]:
+    async def list_tasks(
+        self,
+        limit: int = 100,
+        requested_by_session: str | None = None,
+    ) -> list[dict[str, Any]]:
         max_items = max(1, min(limit, 500))
         items: list[tuple[float, dict[str, Any]]] = []
+        session_filter = (requested_by_session or "").strip()
         for task_file in TASKS_DIR.glob("*.json"):
             try:
                 async with aiofiles.open(task_file, "r") as f:
                     payload = json.loads(await f.read())
+
+                if session_filter:
+                    requested = str(payload.get("requested_by_session") or "").strip()
+                    if requested != session_filter:
+                        continue
+
                 items.append((task_file.stat().st_mtime, payload))
             except Exception:
                 continue
