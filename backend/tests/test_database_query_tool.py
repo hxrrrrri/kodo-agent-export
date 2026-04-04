@@ -11,20 +11,23 @@ tool = DatabaseQueryTool()
 
 
 @pytest.mark.asyncio
-async def test_rejects_non_select():
+async def test_rejects_non_select(monkeypatch):
+    monkeypatch.setenv("KODO_ENABLE_DATABASE", "1")
     result = await tool.execute(query="DROP TABLE users")
     assert result.success is False
     assert "SELECT" in (result.error or "")
 
 
 @pytest.mark.asyncio
-async def test_rejects_blocked_keyword():
+async def test_rejects_blocked_keyword(monkeypatch):
+    monkeypatch.setenv("KODO_ENABLE_DATABASE", "1")
     result = await tool.execute(query="SELECT * FROM users; DELETE FROM users")
     assert result.success is False
 
 
 @pytest.mark.asyncio
 async def test_no_db_url_returns_config_error(monkeypatch):
+    monkeypatch.setenv("KODO_ENABLE_DATABASE", "1")
     monkeypatch.delenv("DB_URL", raising=False)
     result = await tool.execute(query="SELECT 1")
     assert result.success is False
@@ -33,6 +36,7 @@ async def test_no_db_url_returns_config_error(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_sqlite_query_returns_markdown_table(monkeypatch, tmp_path):
+    monkeypatch.setenv("KODO_ENABLE_DATABASE", "1")
     db_path = tmp_path / "test.db"
     conn = sqlite3.connect(str(db_path))
     conn.execute("CREATE TABLE fruit (name TEXT, qty INTEGER)")
