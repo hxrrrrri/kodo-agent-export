@@ -79,7 +79,13 @@ def _sqlite_path_from_url(db_url: str) -> str:
     path = parsed.path or ""
     if path.startswith("/") and os.name == "nt" and len(path) > 2 and path[2] == ":":
         return path[1:]
-    return path.lstrip("/") if parsed.netloc in {"", "localhost"} else path
+    if parsed.netloc in {"", "localhost"}:
+        # sqlite:////abs/path → path == "//abs/path" → return "/abs/path"
+        # sqlite:///rel/path  → path == "/rel/path"  → return "rel/path"
+        if path.startswith("//"):
+            return path[1:]
+        return path.lstrip("/")
+    return path
 
 
 def _query_sqlite(db_path: str, query: str, limit: int) -> list[dict[str, Any]]:
