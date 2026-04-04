@@ -1,13 +1,19 @@
-import { useEffect, useState } from 'react'
+import { MouseEvent as ReactMouseEvent, useEffect, useRef, useState } from 'react'
 import { Sidebar } from './components/Sidebar'
 import { ChatWindow } from './components/ChatWindow'
+import { NotificationCenter } from './components/NotificationCenter'
+import { EditorPanel } from './components/EditorPanel'
 import { useChatStore } from './store/chatStore'
+import { requestUiNotificationPermission } from './lib/notifications'
 
 const SIDEBAR_COLLAPSE_STORAGE_KEY = 'kodo_sidebar_collapsed'
 const THEME_STORAGE_KEY = 'kodo_theme'
 
 export default function App() {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
+  const [editorOpen, setEditorOpen] = useState(false)
+  const [editorWidthPercent, setEditorWidthPercent] = useState(40)
+  const rootRef = useRef<HTMLDivElement>(null)
   const theme = useChatStore((state) => state.theme)
   const setTheme = useChatStore((state) => state.setTheme)
 
@@ -16,6 +22,7 @@ export default function App() {
     if (saved === '1') {
       setSidebarCollapsed(true)
     }
+    void requestUiNotificationPermission()
   }, [])
 
   useEffect(() => {
@@ -44,6 +51,32 @@ export default function App() {
     setSidebarCollapsed((prev) => !prev)
   }
 
+  const toggleEditor = () => {
+    setEditorOpen((prev) => !prev)
+  }
+
+  const startResizeEditor = (event: ReactMouseEvent<HTMLDivElement>) => {
+    event.preventDefault()
+    const root = rootRef.current
+    if (!root) return
+
+    const onMove = (moveEvent: MouseEvent) => {
+      const rect = root.getBoundingClientRect()
+      const rightPanePx = rect.right - moveEvent.clientX
+      const next = (rightPanePx / rect.width) * 100
+      const clamped = Math.max(26, Math.min(60, next))
+      setEditorWidthPercent(clamped)
+    }
+
+    const onUp = () => {
+      window.removeEventListener('mousemove', onMove)
+      window.removeEventListener('mouseup', onUp)
+    }
+
+    window.addEventListener('mousemove', onMove)
+    window.addEventListener('mouseup', onUp)
+  }
+
   return (
     <div style={{
       display: 'flex',
@@ -52,10 +85,34 @@ export default function App() {
       overflow: 'hidden',
       background: 'var(--bg-0)',
       position: 'relative',
-    }}>
+    }} ref={rootRef}>
       <Sidebar collapsed={sidebarCollapsed} onToggleCollapse={toggleSidebar} />
 
-      <ChatWindow />
+      <div style={{ flex: 1, minWidth: 0, display: 'flex', height: '100%' }}>
+        <div style={{ width: editorOpen ? `${100 - editorWidthPercent}%` : '100%', minWidth: 0 }}>
+          <ChatWindow editorOpen={editorOpen} onToggleEditor={toggleEditor} />
+        </div>
+
+        {editorOpen && (
+          <>
+            <div
+              role="separator"
+              aria-orientation="vertical"
+              onMouseDown={startResizeEditor}
+              style={{
+                width: 6,
+                cursor: 'col-resize',
+                background: 'var(--bg-2)',
+                borderLeft: '1px solid var(--border)',
+                borderRight: '1px solid var(--border)',
+              }}
+            />
+            <EditorPanel widthPercent={editorWidthPercent} />
+          </>
+        )}
+      </div>
+
+      <NotificationCenter />
     </div>
   )
 }

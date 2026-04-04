@@ -156,9 +156,15 @@ export function ToolCallCard({ tc, isLast, searchQuery }: { tc: ToolCall; isLast
   const hasResult = tc.output !== undefined
   const isRunning = !hasResult && isLast
   const showLiveOutput = isRunning && Boolean(tc.streamLines && tc.streamLines.length > 0)
-  const generatedImageUrl = tc.tool === 'image_gen' && typeof tc.metadata?.url === 'string'
-    ? String(tc.metadata.url)
-    : ''
+  const generatedImageUrl = (() => {
+    if (tc.tool === 'image_gen' && typeof tc.metadata?.url === 'string') {
+      return String(tc.metadata.url)
+    }
+    if (tc.tool === 'screenshot' && typeof tc.metadata?.image_base64 === 'string') {
+      return `data:image/png;base64,${String(tc.metadata.image_base64)}`
+    }
+    return ''
+  })()
 
   useEffect(() => {
     if (!showLiveOutput || !liveOutputRef.current) return

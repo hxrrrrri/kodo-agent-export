@@ -4,7 +4,6 @@ import asyncio
 import hashlib
 import hmac
 import os
-import re
 from collections import deque
 from datetime import datetime, timezone
 from typing import Any
@@ -17,9 +16,9 @@ from observability.audit import log_audit_event
 from privacy import feature_enabled
 from tasks.manager import task_manager
 from tools.path_guard import enforce_allowed_path
+from utils.templates import render_template
 
 router = APIRouter(prefix="/webhooks", tags=["webhooks"])
-_TEMPLATE_PATTERN = re.compile(r"\{\{\s*([a-zA-Z0-9_.]+)\s*\}\}")
 _EVENT_BUFFER: deque[dict[str, Any]] = deque(maxlen=50)
 _EVENT_LOCK = asyncio.Lock()
 
@@ -46,38 +45,9 @@ def _webhooks_enabled() -> bool:
     return feature_enabled("WEBHOOKS")
 
 
-def _lookup_payload(payload: Any, dotted_path: str) -> Any:
-    current: Any = payload
-    for token in dotted_path.split("."):
-        if isinstance(current, dict):
-            if token not in current:
-                return None
-            current = current[token]
-            continue
-
-        if isinstance(current, list) and token.isdigit():
-            index = int(token)
-            if index < 0 or index >= len(current):
-                return None
-            current = current[index]
-            continue
-
-        return None
-
-    return current
-
-
 def _render_template(template: str, payload: dict[str, Any]) -> str:
-    def _replace(match: re.Match[str]) -> str:
-        key_path = match.group(1)
-        value = _lookup_payload(payload, key_path)
-        if value is None:
-            return match.group(0)
-        if isinstance(value, (dict, list)):
-            return str(value)
-        return str(value)
-
-    return _TEMPLATE_PATTERN.sub(_replace, template)
+    """Backward-compatible wrapper kept for existing tests and imports."""
+    return render_template(template, payload)
 
 
 def _verify_signature(raw_body: bytes, signature_header: str, secret: str) -> bool:
@@ -119,7 +89,7 @@ async def trigger_webhook(body: WebhookTriggerRequest, request: Request):
         if not os.path.isdir(project_dir):
             raise HTTPException(status_code=400, detail=f"project_dir is not a directory: {project_dir}")
 
-    rendered_prompt = _render_template(body.prompt_template, body.payload)
+    rendered_prompt = render_template(body.prompt_template, body.payload)
     task = await task_manager.create_task(
         prompt=rendered_prompt,
         project_dir=project_dir,

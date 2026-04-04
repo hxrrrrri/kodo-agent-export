@@ -2,12 +2,15 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   Activity,
   Cpu,
+  FileText,
+  Hammer,
   Maximize2,
   MessageSquare,
   Moon,
   PanelLeftClose,
   PanelLeftOpen,
   Plus,
+  RotateCcw,
   Search,
   Sun,
   Trash2,
@@ -19,13 +22,17 @@ import { buildApiHeaders, parseApiError } from '../lib/api'
 import { ProviderPanel } from './ProviderPanel'
 import { AgentGraph, AgentNode } from './AgentGraph'
 import { KodoLogoMark } from './KodoLogoMark'
+import { ReplayPanel } from './ReplayPanel'
+import { PromptLibraryPanel } from './PromptLibraryPanel'
+import { SkillBuilderPanel } from './SkillBuilderPanel'
+import { CodeReviewPanel } from './CodeReviewPanel'
 
 type SidebarProps = {
   collapsed: boolean
   onToggleCollapse: () => void
 }
 
-type SidebarView = 'sessions' | 'providers' | 'agents' | 'usage'
+type SidebarView = 'sessions' | 'providers' | 'agents' | 'usage' | 'prompts' | 'skills' | 'review'
 
 type RuntimeTask = {
   task_id: string
@@ -203,6 +210,7 @@ export function Sidebar({ collapsed, onToggleCollapse }: SidebarProps) {
     newSession,
     deleteSession,
     usageSummary,
+    projectDir,
     searchQuery,
     setSearchQuery,
     theme,
@@ -214,6 +222,7 @@ export function Sidebar({ collapsed, onToggleCollapse }: SidebarProps) {
   const [agentGraphError, setAgentGraphError] = useState<string | null>(null)
   const [agentGraphLastUpdatedAt, setAgentGraphLastUpdatedAt] = useState<string>('')
   const [agentGraphModalOpen, setAgentGraphModalOpen] = useState(false)
+  const [replaySessionId, setReplaySessionId] = useState<string | null>(null)
   const searchInputRef = useRef<HTMLInputElement>(null)
   const bootstrappedRef = useRef(false)
 
@@ -230,8 +239,17 @@ export function Sidebar({ collapsed, onToggleCollapse }: SidebarProps) {
     let cancelled = false
 
     const loadAgentGraph = async () => {
+      if (!sessionId) {
+        if (!cancelled) {
+          setAgentNodes([])
+          setAgentGraphError(null)
+          setAgentGraphLastUpdatedAt('')
+        }
+        return
+      }
+
       try {
-        const sessionQuery = sessionId ? `&session_id=${encodeURIComponent(sessionId)}` : ''
+        const sessionQuery = `&session_id=${encodeURIComponent(sessionId)}`
         const [tasksRes, agentsRes] = await Promise.all([
           fetch(`/api/chat/tasks?limit=50${sessionQuery}`, { headers: buildApiHeaders(), cache: 'no-store' }),
           fetch(`/api/chat/agents?limit=50${sessionQuery}`, { headers: buildApiHeaders(), cache: 'no-store' }),
@@ -244,13 +262,14 @@ export function Sidebar({ collapsed, onToggleCollapse }: SidebarProps) {
         const agentsPayload = await agentsRes.json()
         const tasks = (tasksPayload.tasks || []) as RuntimeTask[]
         const agents = (agentsPayload.agents || []) as RuntimeAgent[]
+        const activeSession = sessions.find((item) => item.session_id === sessionId)
 
-        const rootId = sessionId || 'session-root'
+        const rootId = sessionId
         const nodes: AgentNode[] = [
           {
             id: rootId,
             type: 'session',
-            label: sessionId ? `Session ${shortId(sessionId)}` : 'Session',
+            label: (activeSession?.title || '').trim() || `Session ${shortId(sessionId)}`,
             status: 'running',
           },
           ...tasks.map((task) => ({
@@ -265,7 +284,7 @@ export function Sidebar({ collapsed, onToggleCollapse }: SidebarProps) {
             type: 'agent' as const,
             label: `${agent.role || 'agent'}:${shortId(agent.agent_id)}`,
             status: toGraphStatus(agent.status),
-            parentId: agent.task_id || rootId,
+            parentId: agent.task_id || sessionId,
           })),
         ]
 
@@ -290,7 +309,7 @@ export function Sidebar({ collapsed, onToggleCollapse }: SidebarProps) {
       cancelled = true
       window.clearInterval(timer)
     }
-  }, [activeView, sessionId])
+  }, [activeView, sessionId, sessions])
 
   useEffect(() => {
     if (activeView !== 'agents') {
@@ -472,6 +491,24 @@ export function Sidebar({ collapsed, onToggleCollapse }: SidebarProps) {
           }}
           active={activeView === 'usage'}
         />
+        <RailButton
+          icon={<FileText size={15} />}
+          label="Prompts"
+          onClick={() => {
+            setActiveView('prompts')
+            if (collapsed) onToggleCollapse()
+          }}
+          active={activeView === 'prompts'}
+        />
+        <RailButton
+          icon={<Hammer size={15} />}
+          label="Skills"
+          onClick={() => {
+            setActiveView('skills')
+            if (collapsed) onToggleCollapse()
+          }}
+          active={activeView === 'skills'}
+        />
 
         <div style={{ flex: 1 }} />
 
@@ -597,6 +634,24 @@ export function Sidebar({ collapsed, onToggleCollapse }: SidebarProps) {
             active={activeView === 'usage'}
             onClick={() => setActiveView('usage')}
           />
+          <PanelNav
+            icon={<FileText size={15} />}
+            label="Prompts"
+            active={activeView === 'prompts'}
+            onClick={() => setActiveView('prompts')}
+          />
+          <PanelNav
+            icon={<Hammer size={15} />}
+            label="Skills"
+            active={activeView === 'skills'}
+            onClick={() => setActiveView('skills')}
+          />
+          <PanelNav
+            icon={<FileText size={15} />}
+            label="Code Review"
+            active={activeView === 'review'}
+            onClick={() => setActiveView('review')}
+          />
         </div>
 
         <div style={{ flex: 1, minHeight: 0, overflow: 'hidden' }}>
@@ -645,6 +700,7 @@ export function Sidebar({ collapsed, onToggleCollapse }: SidebarProps) {
                       active={session.session_id === sessionId}
                       searchQuery={searchQuery}
                       onSelect={() => loadSession(session.session_id)}
+                      onReplay={() => setReplaySessionId(session.session_id)}
                       onDelete={() => deleteSession(session.session_id)}
                     />
                   ))
@@ -661,6 +717,20 @@ export function Sidebar({ collapsed, onToggleCollapse }: SidebarProps) {
 
           {activeView === 'agents' && (
             <div style={{ height: '100%', overflowY: 'auto', padding: '8px 10px 10px', display: 'grid', gap: 8 }}>
+              {!sessionId && (
+                <div
+                  style={{
+                    border: '1px dashed var(--border-bright)',
+                    borderRadius: 10,
+                    background: 'var(--bg-2)',
+                    padding: '10px 12px',
+                    color: 'var(--text-2)',
+                    fontSize: 12,
+                  }}
+                >
+                  Start a session to see the agent graph.
+                </div>
+              )}
               <div
                 style={{
                   border: '1px solid var(--border)',
@@ -703,6 +773,7 @@ export function Sidebar({ collapsed, onToggleCollapse }: SidebarProps) {
               <button
                 type="button"
                 onClick={() => setAgentGraphModalOpen(true)}
+                disabled={!sessionId}
                 style={{
                   border: '1px solid var(--border)',
                   background: 'var(--bg-2)',
@@ -710,7 +781,8 @@ export function Sidebar({ collapsed, onToggleCollapse }: SidebarProps) {
                   padding: '10px 10px 9px',
                   margin: 0,
                   textAlign: 'left',
-                  cursor: 'zoom-in',
+                  cursor: sessionId ? 'zoom-in' : 'not-allowed',
+                  opacity: sessionId ? 1 : 0.6,
                   display: 'grid',
                   gap: 9,
                 }}
@@ -820,6 +892,18 @@ export function Sidebar({ collapsed, onToggleCollapse }: SidebarProps) {
                 })}
               </div>
             </div>
+          )}
+
+          {activeView === 'prompts' && (
+            <PromptLibraryPanel />
+          )}
+
+          {activeView === 'skills' && (
+            <SkillBuilderPanel />
+          )}
+
+          {activeView === 'review' && (
+            <CodeReviewPanel sessionId={sessionId} projectDir={projectDir} />
           )}
         </div>
 
@@ -940,6 +1024,13 @@ export function Sidebar({ collapsed, onToggleCollapse }: SidebarProps) {
           </div>
         </div>
       )}
+
+      {replaySessionId && (
+        <ReplayPanel
+          sessionId={replaySessionId}
+          onClose={() => setReplaySessionId(null)}
+        />
+      )}
     </aside>
   )
 }
@@ -990,12 +1081,14 @@ function SessionRow({
   active,
   searchQuery,
   onSelect,
+  onReplay,
   onDelete,
 }: {
   session: Session
   active: boolean
   searchQuery: string
   onSelect: () => void
+  onReplay: () => void
   onDelete: () => void
 }) {
   const normalizedSearch = searchQuery.trim()
@@ -1032,6 +1125,29 @@ function SessionRow({
           {formatDate(session.updated_at)}
         </div>
       </div>
+      <button
+        type="button"
+        onClick={(event) => {
+          event.stopPropagation()
+          onReplay()
+        }}
+        title="Replay session"
+        aria-label="Replay session"
+        style={{
+          border: 'none',
+          background: 'transparent',
+          color: 'var(--text-2)',
+          width: 20,
+          height: 20,
+          borderRadius: 4,
+          cursor: 'pointer',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+        }}
+      >
+        <RotateCcw size={12} />
+      </button>
       <button
         type="button"
         onClick={(event) => {

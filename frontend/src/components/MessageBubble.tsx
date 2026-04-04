@@ -1,9 +1,11 @@
-import { useState } from 'react'
+import { useRef, useState } from 'react'
+import { Volume2, Square } from 'lucide-react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter'
 import { vscDarkPlus } from 'react-syntax-highlighter/dist/esm/styles/prism'
 import { Message } from '../store/chatStore'
+import { buildApiHeaders, parseApiError } from '../lib/api'
 import { ToolCallCard } from './ToolCallCard'
 
 function escapeRegExp(value: string): string {
@@ -77,6 +79,9 @@ function CursorBlink() {
 
 export function MessageBubble({ message, searchQuery }: { message: Message; searchQuery?: string }) {
   const [copiedIndex, setCopiedIndex] = useState<number | null>(null)
+  const [isSpeaking, setIsSpeaking] = useState(false)
+  const audioRef = useRef<HTMLAudioElement | null>(null)
+  const audioUrlRef = useRef<string>('')
   const isUser = message.role === 'user'
   const normalizedSearch = (searchQuery || '').trim()
   const hasSearch = normalizedSearch.length > 0
@@ -92,6 +97,59 @@ export function MessageBubble({ message, searchQuery }: { message: Message; sear
     }
     return ''
   })()
+
+  const toggleSpeech = async () => {
+    if (!message.content.trim()) return
+
+    if (isSpeaking && audioRef.current) {
+      audioRef.current.pause()
+      audioRef.current.currentTime = 0
+      if (audioUrlRef.current) {
+        URL.revokeObjectURL(audioUrlRef.current)
+        audioUrlRef.current = ''
+      }
+      setIsSpeaking(false)
+      return
+    }
+
+    try {
+      const response = await fetch('/api/tts', {
+        method: 'POST',
+        headers: buildApiHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify({ text: message.content, voice: 'alloy' }),
+      })
+      if (!response.ok) {
+        throw new Error(await parseApiError(response))
+      }
+
+      const blob = await response.blob()
+      const audioUrl = URL.createObjectURL(blob)
+      if (audioUrlRef.current) {
+        URL.revokeObjectURL(audioUrlRef.current)
+      }
+      audioUrlRef.current = audioUrl
+      const audio = new Audio(audioUrl)
+      audioRef.current = audio
+      audio.onended = () => {
+        setIsSpeaking(false)
+        if (audioUrlRef.current) {
+          URL.revokeObjectURL(audioUrlRef.current)
+          audioUrlRef.current = ''
+        }
+      }
+      audio.onerror = () => {
+        setIsSpeaking(false)
+        if (audioUrlRef.current) {
+          URL.revokeObjectURL(audioUrlRef.current)
+          audioUrlRef.current = ''
+        }
+      }
+      setIsSpeaking(true)
+      await audio.play()
+    } catch {
+      setIsSpeaking(false)
+    }
+  }
 
   if (isUser) {
     return (
@@ -159,6 +217,29 @@ export function MessageBubble({ message, searchQuery }: { message: Message; sear
         KODO
         {message.isStreaming && !message.content && !message.toolCalls?.length && (
           <span style={{ color: 'var(--text-2)', fontWeight: 400 }}>thinking...</span>
+        )}
+        {!message.isStreaming && message.content.trim() && (
+          <button
+            type="button"
+            onClick={() => { void toggleSpeech() }}
+            aria-label={isSpeaking ? 'Stop reading aloud' : 'Read message aloud'}
+            title={isSpeaking ? 'Stop' : 'Read aloud'}
+            style={{
+              border: '1px solid var(--border)',
+              background: isSpeaking ? 'var(--green-dim)' : 'var(--bg-2)',
+              color: isSpeaking ? 'var(--green)' : 'var(--text-2)',
+              borderRadius: 6,
+              width: 22,
+              height: 20,
+              display: 'inline-flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              cursor: 'pointer',
+              marginLeft: 2,
+            }}
+          >
+            {isSpeaking ? <Square size={11} /> : <Volume2 size={11} />}
+          </button>
         )}
       </div>
 

@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# KŌDO Agent — First-time setup script
+# KODO Agent - First-time setup script
 set -e
 
 echo ""
-echo "⚡ KŌDO Agent Setup"
+echo "⚡ KODO Agent Setup"
 echo "==================="
 echo ""
 

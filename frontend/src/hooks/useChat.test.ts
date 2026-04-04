@@ -1,11 +1,17 @@
 import { act, renderHook } from '@testing-library/react'
-import { beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { useChat } from './useChat'
 import { useChatStore } from '../store/chatStore'
 
 describe('useChat', () => {
   beforeEach(() => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ modes: [], commands: [], sessions: [] }),
+      body: null,
+    }))
+
     useChatStore.setState({
       messages: [
         {
@@ -32,6 +38,10 @@ describe('useChat', () => {
       isLoading: false,
       error: null,
     })
+  })
+
+  afterEach(() => {
+    vi.restoreAllMocks()
   })
 
   it('returns all messages when messageSearchQuery is empty', () => {

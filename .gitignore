@@ -27,7 +27,7 @@ Thumbs.db
 *.swp
 *.swo
 
-# KŌDO runtime data
+# KODO runtime data
 ~/.kodo/
 
 # Logs

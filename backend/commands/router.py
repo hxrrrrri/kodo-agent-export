@@ -20,6 +20,7 @@ from tools import TOOL_MAP
 
 KNOWN_ROOT_COMMANDS = [
     "/help",
+    "/stop",
     "/cost",
     "/search",
     "/git",
@@ -40,6 +41,7 @@ KNOWN_ROOT_COMMANDS = [
 
 COMMAND_REGISTRY: dict[str, str] = {
     "/help": "Show available commands",
+    "/stop": "Stop current response generation",
     "/cost": "Show token and estimated cost usage",
     "/search": "Search the web via configured providers",
     "/git": "Run safe, read-only git commands",
@@ -132,6 +134,7 @@ def _help_text() -> str:
     return "\n".join([
         "Available commands:",
         "/help - Show this command list",
+        "/stop - Stop current response generation",
         "/cost [days] - Show token and estimated cost usage",
         "/search <query> - Search the web and return top results",
         "/git <subcommand> - Run safe read-only git command",
@@ -403,6 +406,12 @@ async def execute_command(message: str, session_id: str, project_dir: str | None
 
     if command in {"/help", "/?"}:
         return CommandExecutionResult(name="help", text=_help_text())
+
+    if command == "/stop":
+        return CommandExecutionResult(
+            name="stop",
+            text="Stop requested. Use the UI stop control (Esc or stop button) to cancel the active stream immediately.",
+        )
 
     if command in {"/cost", "/usage"}:
         days = 7

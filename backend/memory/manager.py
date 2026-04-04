@@ -11,10 +11,10 @@ GLOBAL_MEMORY_FILE = KODO_DIR / "MEMORY.md"
 SESSIONS_DIR = KODO_DIR / "sessions"
 CHECKPOINTS_DIR = KODO_DIR / "checkpoints"
 
-DEFAULT_MEMORY = """# KŌDO Memory
+DEFAULT_MEMORY = """# KODO Memory
 
 This file is automatically loaded into every conversation as context.
-Edit it to tell KŌDO about your preferences, projects, and workflow.
+Edit it to tell KODO about your preferences, projects, and workflow.
 
 ## My Setup
 - OS: (fill in)
@@ -25,7 +25,7 @@ Edit it to tell KŌDO about your preferences, projects, and workflow.
 - (Add your coding preferences here)
 
 ## Notes
-- (Persistent notes for KŌDO)
+- (Persistent notes for KODO)
 """
 
 

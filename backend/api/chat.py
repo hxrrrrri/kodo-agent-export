@@ -8,12 +8,14 @@ import shutil
 import subprocess
 import uuid
 import zipfile
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 from agent.coordinator import agent_coordinator
 from agent.session_runner import SessionRunner
 from agent.modes import DEFAULT_MODE, list_modes, normalize_mode
+from api.collab import publish_session_event
 from fastapi import APIRouter, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field, field_validator, model_validator
@@ -263,6 +265,27 @@ class TaskCreateRequest(BaseModel):
         return value.strip()
 
 
+class CodeReviewRequest(BaseModel):
+    branch: str = Field(min_length=1, max_length=200)
+    base_branch: str = Field(default="main", max_length=200)
+    project_dir: str | None = Field(default=None, max_length=1024)
+    session_id: str | None = Field(default=None, max_length=128)
+
+    @field_validator("branch")
+    @classmethod
+    def validate_branch(cls, value: str) -> str:
+        text = value.strip()
+        if not text:
+            raise ValueError("branch is required")
+        return text
+
+    @field_validator("base_branch")
+    @classmethod
+    def validate_base_branch(cls, value: str) -> str:
+        text = value.strip() or "main"
+        return text
+
+
 class MCPServerRequest(BaseModel):
     name: str = Field(min_length=1, max_length=120)
     command: str = Field(min_length=1, max_length=1000)
@@ -430,7 +453,9 @@ async def send_message(req: ChatRequest, request: Request):
 
     if req.content is None and is_command_message(user_text):
         async def command_stream():
-            yield f"data: {json.dumps({'type': 'meta', 'request_id': request_id, 'session_id': session_id, 'mode': effective_mode})}\n\n"
+            meta_event = {'type': 'meta', 'request_id': request_id, 'session_id': session_id, 'mode': effective_mode}
+            await publish_session_event(session_id, meta_event)
+            yield f"data: {json.dumps(meta_event)}\n\n"
 
             try:
                 result = await execute_command(user_text, session_id=session_id, project_dir=project_dir)
@@ -441,7 +466,9 @@ async def send_message(req: ChatRequest, request: Request):
                     session_id=session_id,
                     error=str(e),
                 )
-                yield f"data: {json.dumps({'type': 'error', 'message': _safe_error_message(e)})}\n\n"
+                error_event = {'type': 'error', 'message': _safe_error_message(e)}
+                await publish_session_event(session_id, error_event)
+                yield f"data: {json.dumps(error_event)}\n\n"
                 return
 
             updated_history = list(history) + [
@@ -461,7 +488,9 @@ async def send_message(req: ChatRequest, request: Request):
                 usage_payload: dict[str, Any] | None = None
                 run_messages = list(updated_history) + [{"role": "user", "content": result.run_prompt}]
 
-                yield f"data: {json.dumps({'type': 'text', 'content': result.text})}\n\n"
+                text_event = {'type': 'text', 'content': result.text}
+                await publish_session_event(session_id, text_event)
+                yield f"data: {json.dumps(text_event)}\n\n"
 
                 async for event in runner.stream(
                     session_id=session_id,
@@ -472,6 +501,7 @@ async def send_message(req: ChatRequest, request: Request):
                 ):
                     if event.get("type") == "done" and isinstance(event.get("usage"), dict):
                         usage_payload = event["usage"]
+                    await publish_session_event(session_id, event)
                     yield f"data: {json.dumps(event)}\n\n"
 
                 run_result = getattr(runner, "_last_result", None)
@@ -515,8 +545,12 @@ async def send_message(req: ChatRequest, request: Request):
                 mode=latest_mode,
             )
 
-            yield f"data: {json.dumps({'type': 'text', 'content': result.text})}\n\n"
-            yield f"data: {json.dumps({'type': 'done', 'usage': {'input_tokens': 0, 'output_tokens': 0, 'model': 'command-router'}})}\n\n"
+            text_event = {'type': 'text', 'content': result.text}
+            done_event = {'type': 'done', 'usage': {'input_tokens': 0, 'output_tokens': 0, 'model': 'command-router'}}
+            await publish_session_event(session_id, text_event)
+            await publish_session_event(session_id, done_event)
+            yield f"data: {json.dumps(text_event)}\n\n"
+            yield f"data: {json.dumps(done_event)}\n\n"
 
         return StreamingResponse(
             command_stream(),
@@ -534,7 +568,9 @@ async def send_message(req: ChatRequest, request: Request):
 
         session_messages = list(history) + [user_payload]
 
-        yield f"data: {json.dumps({'type': 'meta', 'request_id': request_id, 'session_id': session_id, 'mode': effective_mode})}\n\n"
+        meta_event = {'type': 'meta', 'request_id': request_id, 'session_id': session_id, 'mode': effective_mode}
+        await publish_session_event(session_id, meta_event)
+        yield f"data: {json.dumps(meta_event)}\n\n"
 
         try:
             async for event in runner.stream(
@@ -549,6 +585,7 @@ async def send_message(req: ChatRequest, request: Request):
                     usage_payload = event["usage"]
 
                 # Stream event to client
+                await publish_session_event(session_id, event)
                 yield f"data: {json.dumps(event)}\n\n"
 
             run_result = getattr(runner, "_last_result", None)
@@ -587,7 +624,9 @@ async def send_message(req: ChatRequest, request: Request):
 
         except Exception as e:
             log_audit_event("chat_send_error", request_id=request_id, session_id=session_id, error=str(e))
-            yield f"data: {json.dumps({'type': 'error', 'message': _safe_error_message(e)})}\n\n"
+            error_event = {'type': 'error', 'message': _safe_error_message(e)}
+            await publish_session_event(session_id, error_event)
+            yield f"data: {json.dumps(error_event)}\n\n"
 
     return StreamingResponse(
         event_stream(),
@@ -1070,6 +1109,7 @@ async def list_commands_endpoint(request: Request):
             {"name": "/provider", "description": "Show provider profiles and active provider"},
             {"name": "/provider list", "description": "List saved provider profiles"},
             {"name": "/provider set <name>", "description": "Activate a provider profile"},
+            {"name": "/stop", "description": "Stop current response generation"},
             {"name": "/router", "description": "Show smart router status"},
             {"name": "/router strategy <name>", "description": "Set router strategy"},
             {"name": "/model", "description": "Show current model and provider"},
@@ -1094,6 +1134,80 @@ async def list_commands_endpoint(request: Request):
             {"name": "/skills show <name>", "description": "Show skill content"},
             {"name": "/skills run <name>", "description": "Run bundled skill immediately"},
         ]
+    }
+
+
+@router.post("/code-review")
+async def run_code_review(req: CodeReviewRequest, request: Request):
+    require_api_auth(request)
+    await enforce_rate_limit(request, SEND_RATE_LIMITER, "code_review")
+
+    request_id = getattr(request.state, "request_id", None)
+
+    project_dir = req.project_dir
+    if project_dir:
+        try:
+            project_dir = enforce_allowed_path(project_dir)
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
+
+        if not os.path.isdir(project_dir):
+            raise HTTPException(status_code=400, detail=f"project_dir is not a directory: {project_dir}")
+
+    session_id = req.session_id or str(uuid.uuid4())
+    prompt = (
+        "Perform a risk-first code review for this branch diff.\n"
+        f"Compare `{req.base_branch}` to `{req.branch}` in the current repository.\n"
+        "Use git tooling to inspect the diff, then provide:\n"
+        "1) Findings ordered by severity (critical/high/medium/low)\n"
+        "2) File and line references when possible\n"
+        "3) Missing test coverage and edge cases\n"
+        "4) A concise change summary after findings\n"
+        "If there are no findings, state that explicitly and mention residual risks."
+    )
+
+    parts: list[str] = []
+    usage_payload: dict[str, Any] | None = None
+
+    async def on_event(event: dict[str, Any]) -> None:
+        nonlocal usage_payload
+        event_type = str(event.get("type", ""))
+        if event_type == "text":
+            parts.append(str(event.get("content", "")))
+        elif event_type == "done" and isinstance(event.get("usage"), dict):
+            usage_payload = event.get("usage")
+
+    runner = SessionRunner()
+    result = await runner.run(
+        session_id=session_id,
+        messages=[{"role": "user", "content": prompt}],
+        project_dir=project_dir,
+        mode="review",
+        stream_callback=on_event,
+    )
+
+    review = "".join(parts).strip()
+    if not review and result.error:
+        review = f"Review failed: {result.error}"
+
+    log_audit_event(
+        "code_review_completed",
+        request_id=request_id,
+        session_id=session_id,
+        branch=req.branch,
+        base_branch=req.base_branch,
+        has_error=bool(result.error),
+    )
+
+    return {
+        "session_id": session_id,
+        "branch": req.branch,
+        "base_branch": req.base_branch,
+        "review": review,
+        "error": result.error,
+        "provider": result.provider,
+        "model": result.model,
+        "usage": usage_payload,
     }
 
 
@@ -1363,6 +1477,95 @@ async def get_session(session_id: str, request: Request):
         message_count=len(messages),
     )
     return {"session_id": session_id, "messages": messages, "metadata": metadata}
+
+
+@router.get("/sessions/{session_id}/events")
+async def get_session_events(session_id: str, request: Request):
+    require_api_auth(request)
+    await enforce_rate_limit(request, SESSION_RATE_LIMITER, "get_session_events")
+
+    payload = await memory_manager.load_session_payload(session_id)
+    if payload is None:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    messages = payload.get("messages", [])
+    if not isinstance(messages, list):
+        messages = []
+
+    events: list[dict[str, Any]] = []
+    event_index = 0
+
+    def _push(event_type: str, **kwargs: Any) -> None:
+        nonlocal event_index
+        timestamp = str(kwargs.pop("timestamp", "")).strip() or datetime.utcnow().isoformat()
+        event = {
+            "event_index": event_index,
+            "event_type": event_type,
+            "timestamp": timestamp,
+        }
+        event.update(kwargs)
+        events.append(event)
+        event_index += 1
+
+    def _extract_text(content: Any) -> str:
+        if isinstance(content, str):
+            return content
+        if isinstance(content, list):
+            parts: list[str] = []
+            for block in content:
+                if not isinstance(block, dict):
+                    continue
+                if str(block.get("type", "")).lower() != "text":
+                    continue
+                value = block.get("text")
+                if isinstance(value, str):
+                    parts.append(value)
+            return "\n".join(parts).strip()
+        return str(content or "")
+
+    for message in messages:
+        if not isinstance(message, dict):
+            continue
+        role = str(message.get("role", "")).lower()
+        content = _extract_text(message.get("content", ""))
+        timestamp = str(message.get("timestamp", "")).strip()
+
+        if role == "user":
+            _push("user_message", timestamp=timestamp, content=content)
+            continue
+
+        if role == "assistant":
+            _push("assistant_text", timestamp=timestamp, content=content)
+
+            for tool_call in message.get("tool_calls", []) if isinstance(message.get("tool_calls"), list) else []:
+                if not isinstance(tool_call, dict):
+                    continue
+                tool_name = str(tool_call.get("tool", ""))
+                tool_input = tool_call.get("input", {})
+                tool_output = str(tool_call.get("output", ""))
+                _push(
+                    "tool_call",
+                    timestamp=timestamp,
+                    content=f"Tool call: {tool_name}",
+                    tool_name=tool_name,
+                    tool_input=tool_input,
+                )
+                _push(
+                    "tool_result",
+                    timestamp=timestamp,
+                    content=tool_output,
+                    tool_name=tool_name,
+                    tool_output=tool_output,
+                )
+
+    log_audit_event(
+        "get_session_events",
+        request_id=getattr(request.state, "request_id", None),
+        session_id=session_id,
+        events_count=len(events),
+    )
+
+    return {"session_id": session_id, "events": events}
 
 
 @router.get("/sessions/{session_id}/export")

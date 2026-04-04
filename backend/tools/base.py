@@ -11,7 +11,7 @@ class ToolResult(BaseModel):
 
 
 class BaseTool(ABC):
-    """Base class for all KŌDO tools — mirrors Claude Code's Tool architecture."""
+    """Base class for all KODO tools — mirrors Claude Code's Tool architecture."""
 
     name: str
     description: str

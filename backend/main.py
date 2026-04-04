@@ -18,10 +18,14 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from api.bridge import router as bridge_router
 from api.chat import router as chat_router
+from api.collab import router as collab_router
 from api.doctor import router as doctor_router
+from api.prompts import router as prompts_router
 from api.webhooks import router as webhooks_router
 from api.profiles import router as profiles_router
 from api.providers import router as providers_router
+from api.skills_admin import router as skills_admin_router
+from api.tts import router as tts_router
 from observability.audit import log_audit_event
 from observability.request_context import clear_request_id, set_request_id
 from providers.smart_router import get_smart_router, smart_router_enabled
@@ -39,7 +43,7 @@ def _parse_allowed_origins() -> list[str]:
     return ["http://localhost:5173", "http://localhost:3000"]
 
 app = FastAPI(
-    title="KŌDO Agent API",
+    title="KODO Agent API",
     description="Personal autonomous AI agent powered by Claude",
     version="1.0.0",
 )
@@ -58,6 +62,10 @@ app.include_router(bridge_router)
 app.include_router(providers_router)
 app.include_router(doctor_router)
 app.include_router(profiles_router)
+app.include_router(tts_router)
+app.include_router(prompts_router)
+app.include_router(skills_admin_router)
+app.include_router(collab_router)
 
 
 @app.middleware("http")
@@ -85,7 +93,7 @@ async def request_context_middleware(request: Request, call_next):
 
 @app.get("/")
 async def root():
-    return {"status": "KŌDO Agent running", "version": "1.0.0"}
+    return {"status": "KODO Agent running", "version": "1.0.0"}
 
 
 @app.get("/health")

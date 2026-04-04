@@ -1,11 +1,19 @@
 import { useCallback, useEffect, useMemo, useRef, useState, KeyboardEvent } from 'react'
-import { Send, Square, FolderOpen, Zap, ImagePlus, X, Search, Terminal as TerminalIcon, Paperclip, CircleAlert } from 'lucide-react'
+import { Send, Square, FolderOpen, Zap, ImagePlus, X, Search, Terminal as TerminalIcon, Paperclip, CircleAlert, BookOpen, Mic } from 'lucide-react'
 import { useChat } from '../hooks/useChat'
 import { MessageBubble } from './MessageBubble'
 import { CommandDefinition } from '../store/chatStore'
 import { TerminalPanel } from './TerminalPanel'
+import { NotebookPanel } from './NotebookPanel'
 import { KodoLogoMark } from './KodoLogoMark'
+import { CollabBar } from './CollabBar'
+import { useCollabSession } from '../hooks/useCollabSession'
 import { buildApiHeaders, parseApiError } from '../lib/api'
+
+type ChatWindowProps = {
+  editorOpen: boolean
+  onToggleEditor: () => void
+}
 
 const CONTEXT_TOKEN_BUDGET = Number(import.meta.env.VITE_CONTEXT_TOKEN_BUDGET || 60000)
 const MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024
@@ -32,6 +40,7 @@ interface FileAttachment {
 
 const EXAMPLE_PROMPTS = [
   '/help',
+  '/stop',
   '/cost 7',
   '/session',
   '/memory show',
@@ -52,6 +61,7 @@ const KNOWN_ROOT_COMMANDS: CommandDefinition[] = [
   { name: '/memory', description: 'Read or write memory notes' },
   { name: '/mode', description: 'Inspect or set session mode' },
   { name: '/provider', description: 'Show or switch provider profiles' },
+  { name: '/stop', description: 'Stop current generation immediately' },
   { name: '/doctor', description: 'Run runtime health checks' },
   { name: '/router', description: 'Inspect or set routing strategy' },
   { name: '/model', description: 'Inspect or override model' },
@@ -81,6 +91,7 @@ const FALLBACK_COMMANDS: CommandDefinition[] = [
   { name: '/provider', description: 'Show provider profiles and active provider' },
   { name: '/provider list', description: 'List saved provider profiles' },
   { name: '/provider set <name>', description: 'Activate provider profile' },
+  { name: '/stop', description: 'Stop current response generation' },
   { name: '/doctor', description: 'Run runtime health checks' },
   { name: '/doctor report', description: 'Run and save full doctor report' },
   { name: '/router', description: 'Show smart router status' },
@@ -227,7 +238,7 @@ function decodeBase64ToBytes(data: string): Uint8Array {
   return Uint8Array.from(binary, (char) => char.charCodeAt(0))
 }
 
-export function ChatWindow() {
+export function ChatWindow({ editorOpen, onToggleEditor }: ChatWindowProps) {
   const {
     messages,
     filteredMessages,
@@ -235,6 +246,7 @@ export function ChatWindow() {
     error,
     commands,
     loadCommands,
+    loadSession,
     sendMessage,
     stopGeneration,
     projectDir,
@@ -265,6 +277,7 @@ export function ChatWindow() {
   const [terminalLines, setTerminalLines] = useState<string[]>([])
   const [showTerminal, setShowTerminal] = useState(false)
   const [terminalRunning, setTerminalRunning] = useState(false)
+    const [showNotebook, setShowNotebook] = useState(false)
   const [terminalCwd, setTerminalCwd] = useState('')
   const terminalCwdRef = useRef('')
   const messageListRef = useRef<HTMLDivElement>(null)
@@ -276,6 +289,21 @@ export function ChatWindow() {
   const shouldAutoScrollRef = useRef(true)
   const previousMessageSearchRef = useRef('')
   const commandsRequestedRef = useRef(false)
+  const speechRecognitionRef = useRef<any>(null)
+  const [voiceListening, setVoiceListening] = useState(false)
+  const [showShortcuts, setShowShortcuts] = useState(false)
+  const [installPromptEvent, setInstallPromptEvent] = useState<any>(null)
+
+  const {
+    observerMode,
+    shareUrl,
+    expiresAt,
+    viewerCount,
+    lastEventType,
+    error: collabError,
+    createShare,
+    revokeShare,
+  } = useCollabSession(sessionId)
 
   const activePermission = permissionChallenges.length > 0 ? permissionChallenges[0] : null
 
@@ -289,6 +317,37 @@ export function ChatWindow() {
     commandsRequestedRef.current = true
     void loadCommands()
   }, [loadCommands])
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search)
+    const sharedSession = params.get('session_id') || ''
+    if (!sharedSession) return
+    if (sessionId && sessionId === sharedSession) return
+    void loadSession(sharedSession)
+  }, [loadSession, sessionId])
+
+  useEffect(() => {
+    if (!observerMode || !sessionId) return
+
+    let refreshTimer: number | null = null
+    const onCollabEvent = () => {
+      if (refreshTimer !== null) {
+        window.clearTimeout(refreshTimer)
+      }
+      refreshTimer = window.setTimeout(() => {
+        void loadSession(sessionId)
+        refreshTimer = null
+      }, 500)
+    }
+
+    window.addEventListener('kodo:collab-event', onCollabEvent as EventListener)
+    return () => {
+      if (refreshTimer !== null) {
+        window.clearTimeout(refreshTimer)
+      }
+      window.removeEventListener('kodo:collab-event', onCollabEvent as EventListener)
+    }
+  }, [loadSession, observerMode, sessionId])
 
   const commandCatalog = commands.length > 0 ? commands : FALLBACK_COMMANDS
   const commandSuggestions = useMemo(() => buildCommandSuggestions(input, commandCatalog), [input, commandCatalog])
@@ -378,6 +437,61 @@ export function ChatWindow() {
     }
   }, [messages.length, isLoading])
 
+  useEffect(() => {
+    const onInsertPrompt = (event: Event) => {
+      const custom = event as CustomEvent<{ text?: string }>
+      const text = String(custom.detail?.text || '').trim()
+      if (!text) return
+      setInput(text)
+      requestAnimationFrame(() => {
+        if (!textareaRef.current) return
+        textareaRef.current.style.height = 'auto'
+        textareaRef.current.style.height = Math.min(textareaRef.current.scrollHeight, 200) + 'px'
+        textareaRef.current.focus()
+      })
+    }
+
+    const onReplayHighlight = (event: Event) => {
+      const custom = event as CustomEvent<{ content?: string }>
+      const text = String(custom.detail?.content || '').trim()
+      if (!text) return
+      setMessageSearchQuery(text.slice(0, 80))
+    }
+
+    window.addEventListener('kodo:insert-prompt', onInsertPrompt as EventListener)
+    window.addEventListener('kodo:replay-highlight', onReplayHighlight as EventListener)
+    return () => {
+      window.removeEventListener('kodo:insert-prompt', onInsertPrompt as EventListener)
+      window.removeEventListener('kodo:replay-highlight', onReplayHighlight as EventListener)
+    }
+  }, [setMessageSearchQuery])
+
+  useEffect(() => {
+    if (!observerMode) return
+    setShowNotebook(false)
+    setShowTerminal(false)
+    setTerminalRunning(false)
+  }, [observerMode])
+
+  useEffect(() => {
+    const onBeforeInstall = (event: Event) => {
+      const installEvent = event as any
+      installEvent.preventDefault?.()
+      setInstallPromptEvent(installEvent)
+    }
+
+    const onInstalled = () => {
+      setInstallPromptEvent(null)
+    }
+
+    window.addEventListener('beforeinstallprompt', onBeforeInstall)
+    window.addEventListener('appinstalled', onInstalled)
+    return () => {
+      window.removeEventListener('beforeinstallprompt', onBeforeInstall)
+      window.removeEventListener('appinstalled', onInstalled)
+    }
+  }, [])
+
   const applyCommandSuggestion = (name: string) => {
     const next = `${name}${name.includes('<') ? '' : ' '}`
     setInput(next)
@@ -435,6 +549,12 @@ export function ChatWindow() {
 
   const handleSend = useCallback(async () => {
     const msg = input.trim()
+    if (msg === '/stop') {
+      stopGeneration()
+      setInput('')
+      return
+    }
+    if (observerMode) return
     if ((!msg && !pendingImage && pendingFiles.length === 0) || isLoading || attachmentUploading) return
 
     const imagePayload = pendingImage
@@ -508,126 +628,75 @@ export function ChatWindow() {
     } finally {
       setAttachmentUploading(false)
     }
-  }, [attachmentUploading, input, isLoading, pendingFiles, pendingImage, projectDir, sendMessage, uploadZipAttachment])
+  }, [attachmentUploading, input, isLoading, observerMode, pendingFiles, pendingImage, projectDir, sendMessage, stopGeneration, uploadZipAttachment])
 
   const runTerminalCommand = useCallback(async (command: string): Promise<{ cwd?: string }> => {
     const trimmed = command.trim()
-    if (!trimmed) {
-      return { cwd: terminalCwdRef.current || projectDir || '' }
-    }
-    if (terminalRunning) {
-      setTerminalLines((prev) => [...prev, '[terminal] command already running, wait for completion'])
-      return { cwd: terminalCwdRef.current || projectDir || '' }
+    const activeCwd = terminalCwdRef.current || projectDir || ''
+
+    if (observerMode) {
+      setTerminalLines((prev) => [...prev, '[terminal] observer mode is read-only'])
+      return { cwd: activeCwd }
     }
 
-    let nextCwd = terminalCwdRef.current || projectDir || ''
+    if (!trimmed) {
+      return { cwd: activeCwd }
+    }
+
+    if (terminalRunning || isLoading) {
+      setTerminalLines((prev) => [...prev, '[terminal] command already running, wait for completion'])
+      return { cwd: activeCwd }
+    }
 
     setShowTerminal(true)
     setTerminalRunning(true)
+    setTerminalLines((prev) => [...prev, `> ${trimmed}`])
+
+    const bashMsg = `Run command: \`${trimmed}\``
 
     try {
-      const response = await fetch('/api/chat/terminal/run', {
-        method: 'POST',
-        headers: buildApiHeaders({ 'Content-Type': 'application/json' }),
-        body: JSON.stringify({
-          command: trimmed,
-          cwd: nextCwd || null,
-          timeout: 60,
-        }),
-      })
-
-      if (!response.ok) {
-        throw new Error(await parseApiError(response))
-      }
-      if (!response.body) {
-        throw new Error('No terminal response body')
-      }
-
-      const reader = response.body.getReader()
-      const decoder = new TextDecoder()
-      let buffer = ''
-
-      while (true) {
-        const { done, value } = await reader.read()
-        if (done) break
-
-        buffer += decoder.decode(value, { stream: true })
-        const lines = buffer.split('\n')
-        buffer = lines.pop() || ''
-
-        for (const line of lines) {
-          if (!line.startsWith('data: ')) continue
-          const raw = line.slice(6).trim()
-          if (!raw) continue
-
-          try {
-            const event = JSON.parse(raw) as Record<string, unknown>
-            if (event.type === 'start') {
-              const startedCwd = String(event.cwd || '')
-              if (startedCwd.trim()) {
-                nextCwd = startedCwd.trim()
-              }
-              continue
+      await sendMessage(
+        bashMsg,
+        undefined,
+        [],
+        {
+          onToolOutput: (line, event) => {
+            const toolName = String(event.tool || '').toLowerCase()
+            if (toolName === 'bash' || toolName === 'powershell' || toolName === 'repl') {
+              setTerminalLines((prev) => [...prev, line])
+            }
+          },
+          onToolResult: (event) => {
+            const toolName = String(event.tool || '').toLowerCase()
+            if (!(toolName === 'bash' || toolName === 'powershell' || toolName === 'repl')) {
+              return
             }
 
-            if (event.type === 'line') {
-              const outputLine = String(event.line || '')
-              setTerminalLines((prev) => [...prev, outputLine])
-              continue
+            const output = String(event.output || '').trim()
+            if (output) {
+              setTerminalLines((prev) => [...prev, ...output.split(/\r?\n/).filter(Boolean)])
             }
 
-            if (event.type === 'done') {
-              const success = Boolean(event.success)
-              const error = String(event.error || '')
-              const doneCwd = String(event.cwd_after || '')
-              const metadata = (event.metadata && typeof event.metadata === 'object')
-                ? event.metadata as Record<string, unknown>
-                : {}
-              const exitCode = typeof metadata.exit_code === 'number' ? metadata.exit_code : undefined
-
-              if (doneCwd.trim()) {
-                nextCwd = doneCwd.trim()
-              }
-
-              if (!success && error) {
-                setTerminalLines((prev) => [...prev, `[error] ${error}`])
-              }
-              if (typeof exitCode === 'number' && exitCode !== 0) {
-                setTerminalLines((prev) => [...prev, `[exit ${exitCode}]`])
+            if (event.success === false) {
+              const errorText = String(event.error || '')
+              if (errorText) {
+                setTerminalLines((prev) => [...prev, `[error] ${errorText}`])
               }
             }
-          } catch {
-            // Ignore malformed SSE event payloads.
-          }
-        }
-      }
-
-      if (buffer.startsWith('data: ')) {
-        try {
-          const event = JSON.parse(buffer.slice(6).trim()) as Record<string, unknown>
-          if (event.type === 'line') {
-            const outputLine = String(event.line || '')
-            setTerminalLines((prev) => [...prev, outputLine])
-          } else if (event.type === 'done') {
-            const doneCwd = String(event.cwd_after || '')
-            if (doneCwd.trim()) {
-              nextCwd = doneCwd.trim()
-            }
-          }
-        } catch {
-          // Ignore trailing partial frame.
-        }
-      }
+          },
+        },
+      )
     } catch (error) {
       setTerminalLines((prev) => [...prev, `[error] ${String(error)}`])
     } finally {
       setTerminalRunning(false)
     }
 
+    const nextCwd = projectDir || activeCwd
     terminalCwdRef.current = nextCwd
     setTerminalCwd(nextCwd)
     return { cwd: nextCwd }
-  }, [projectDir, terminalRunning])
+  }, [isLoading, observerMode, projectDir, sendMessage, terminalRunning])
 
   const terminalActive = showTerminal
 
@@ -657,6 +726,7 @@ export function ChatWindow() {
       }
       if (isMeta && event.key === 'Enter' && !commandPaletteOpen) {
         event.preventDefault()
+        if (observerMode) return
         void handleSend()
       }
       if (event.key === 'Escape' && commandPaletteOpen) {
@@ -665,14 +735,27 @@ export function ChatWindow() {
         setPaletteQuery('')
         return
       }
+      if (event.key === '?' && !commandPaletteOpen) {
+        const active = document.activeElement
+        if (active && (active.tagName === 'INPUT' || active.tagName === 'TEXTAREA')) {
+          return
+        }
+        event.preventDefault()
+        setShowShortcuts((prev) => !prev)
+        return
+      }
       if (event.key === 'Escape' && isLoading) {
         event.preventDefault()
         stopGeneration()
       }
+      if (event.key === 'Escape' && showShortcuts) {
+        event.preventDefault()
+        setShowShortcuts(false)
+      }
     }
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
-  }, [commandPaletteOpen, handleSend, input, isLoading, stopGeneration])
+  }, [commandPaletteOpen, handleSend, input, isLoading, observerMode, showShortcuts, stopGeneration])
 
   const handleMessagesScroll = () => {
     const container = messageListRef.current
@@ -680,6 +763,58 @@ export function ChatWindow() {
     const distanceFromBottom = container.scrollHeight - container.scrollTop - container.clientHeight
     shouldAutoScrollRef.current = distanceFromBottom < 80
   }
+
+  const startVoiceInput = useCallback(() => {
+    if (observerMode) return
+
+    const recognitionCtor = (window as unknown as { SpeechRecognition?: any; webkitSpeechRecognition?: any }).SpeechRecognition
+      || (window as unknown as { SpeechRecognition?: any; webkitSpeechRecognition?: any }).webkitSpeechRecognition
+
+    if (!recognitionCtor) {
+      window.alert('Voice input not supported in this browser.')
+      return
+    }
+
+    if (speechRecognitionRef.current) {
+      try {
+        speechRecognitionRef.current.stop()
+      } catch {
+        // Ignore stop errors from stale recognition instances.
+      }
+    }
+
+    const recognition = new recognitionCtor()
+    recognition.continuous = false
+    recognition.interimResults = true
+    recognition.lang = 'en-US'
+
+    recognition.onstart = () => {
+      setVoiceListening(true)
+    }
+
+    recognition.onresult = (event: any) => {
+      const transcript = Array.from(event.results || [])
+        .map((item: any) => item?.[0]?.transcript || '')
+        .join('')
+      setInput(transcript)
+      requestAnimationFrame(() => {
+        if (!textareaRef.current) return
+        textareaRef.current.style.height = 'auto'
+        textareaRef.current.style.height = Math.min(textareaRef.current.scrollHeight, 200) + 'px'
+      })
+    }
+
+    recognition.onend = () => {
+      setVoiceListening(false)
+    }
+
+    recognition.onerror = () => {
+      setVoiceListening(false)
+    }
+
+    speechRecognitionRef.current = recognition
+    recognition.start()
+  }, [observerMode])
 
   const handleKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
     if (showCommandSuggestions && (e.key === 'ArrowDown' || e.key === 'ArrowUp')) {
@@ -699,6 +834,7 @@ export function ChatWindow() {
 
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault()
+      if (observerMode) return
       void handleSend()
     }
   }
@@ -992,20 +1128,46 @@ export function ChatWindow() {
 
         <button
           type="button"
+          onClick={() => setShowNotebook((prev) => !prev)}
+          title={showNotebook ? 'Hide notebook' : 'Show notebook'}
+          disabled={observerMode}
+          style={{
+            background: showNotebook ? 'var(--bg-3)' : 'none',
+            border: '1px solid var(--border)',
+            color: showNotebook ? 'var(--text-0)' : 'var(--text-2)',
+            padding: '4px 10px',
+            borderRadius: 'var(--radius)',
+            cursor: observerMode ? 'not-allowed' : 'pointer',
+            fontSize: 11,
+            fontFamily: 'var(--font-mono)',
+            display: 'flex',
+            alignItems: 'center',
+            gap: 6,
+            opacity: observerMode ? 0.6 : 1,
+          }}
+        >
+          <BookOpen size={12} />
+          NOTEBOOK
+        </button>
+
+        <button
+          type="button"
           onClick={() => setShowTerminal((prev) => !prev)}
           title={terminalActive ? 'Terminal panel active' : 'Open terminal panel'}
+          disabled={observerMode}
           style={{
             background: showTerminal ? 'var(--bg-3)' : 'none',
             border: '1px solid var(--border)',
             color: terminalActive ? 'var(--green)' : 'var(--text-2)',
             padding: '4px 10px',
             borderRadius: 'var(--radius)',
-            cursor: 'pointer',
+            cursor: observerMode ? 'not-allowed' : 'pointer',
             fontSize: 11,
             fontFamily: 'var(--font-mono)',
             display: 'flex',
             alignItems: 'center',
             gap: 6,
+            opacity: observerMode ? 0.6 : 1,
           }}
         >
           <TerminalIcon size={12} />
@@ -1069,7 +1231,84 @@ export function ChatWindow() {
           </svg>
           GITHUB
         </a>
+
+        <button
+          type="button"
+          onClick={() => setShowShortcuts(true)}
+          title="Keyboard shortcuts"
+          style={{
+            background: showShortcuts ? 'var(--bg-3)' : 'none',
+            border: '1px solid var(--border)',
+            color: 'var(--text-2)',
+            padding: '4px 10px',
+            borderRadius: 'var(--radius)',
+            cursor: 'pointer',
+            fontSize: 11,
+            fontFamily: 'var(--font-mono)',
+          }}
+        >
+          SHORTCUTS
+        </button>
+
+        <button
+          type="button"
+          onClick={onToggleEditor}
+          title={editorOpen ? 'Hide editor panel' : 'Show editor panel'}
+          style={{
+            background: editorOpen ? 'var(--bg-3)' : 'none',
+            border: '1px solid var(--border)',
+            color: editorOpen ? 'var(--text-0)' : 'var(--text-2)',
+            padding: '4px 10px',
+            borderRadius: 'var(--radius)',
+            cursor: 'pointer',
+            fontSize: 11,
+            fontFamily: 'var(--font-mono)',
+          }}
+        >
+          EDITOR
+        </button>
+
+        {installPromptEvent && (
+          <button
+            type="button"
+            onClick={() => {
+              const promptEvent = installPromptEvent
+              if (!promptEvent) return
+              void promptEvent.prompt?.()
+              setInstallPromptEvent(null)
+            }}
+            title="Install app"
+            style={{
+              background: 'var(--accent-dim)',
+              border: '1px solid var(--accent)',
+              color: 'var(--accent)',
+              padding: '4px 10px',
+              borderRadius: 'var(--radius)',
+              cursor: 'pointer',
+              fontSize: 11,
+              fontFamily: 'var(--font-mono)',
+            }}
+          >
+            INSTALL APP
+          </button>
+        )}
       </div>
+
+      <CollabBar
+        sessionId={sessionId}
+        observerMode={observerMode}
+        shareUrl={shareUrl}
+        expiresAt={expiresAt}
+        viewerCount={viewerCount}
+        lastEventType={lastEventType}
+        error={collabError}
+        onShare={() => {
+          void createShare()
+        }}
+        onRevoke={() => {
+          void revokeShare()
+        }}
+      />
 
       {projectDirPickerError && (
         <div style={{
@@ -1368,13 +1607,15 @@ export function ChatWindow() {
                 <button
                   key={i}
                   onClick={() => sendMessage(prompt)}
+                  disabled={observerMode}
                   style={{
                     background: 'var(--bg-2)',
                     border: '1px solid var(--border)',
                     color: 'var(--text-1)',
                     padding: '10px 14px',
                     borderRadius: 'var(--radius)',
-                    cursor: 'pointer',
+                    cursor: observerMode ? 'not-allowed' : 'pointer',
+                    opacity: observerMode ? 0.65 : 1,
                     fontSize: 12,
                     fontFamily: 'var(--font-mono)',
                     textAlign: 'left',
@@ -1438,6 +1679,13 @@ export function ChatWindow() {
           cwdHint={terminalCwd || projectDir || 'workspace root'}
           onRunCommand={runTerminalCommand}
           onClose={() => setShowTerminal(false)}
+        />
+      )}
+
+      {showNotebook && (
+        <NotebookPanel
+          sessionId={sessionId}
+          sendMessage={sendMessage}
         />
       )}
 
@@ -1617,6 +1865,7 @@ export function ChatWindow() {
             type="button"
             onClick={() => imageInputRef.current?.click()}
             title="Attach files"
+            disabled={observerMode}
             style={{
               width: 32,
               height: 32,
@@ -1627,11 +1876,37 @@ export function ChatWindow() {
               display: 'flex',
               alignItems: 'center',
               justifyContent: 'center',
-              cursor: 'pointer',
+              cursor: observerMode ? 'not-allowed' : 'pointer',
               flexShrink: 0,
+              opacity: observerMode ? 0.6 : 1,
             }}
           >
             <ImagePlus size={14} />
+          </button>
+
+          <button
+            type="button"
+            onClick={startVoiceInput}
+            title={voiceListening ? 'Listening...' : 'Voice input'}
+            aria-label={voiceListening ? 'Listening for voice input' : 'Start voice input'}
+            disabled={observerMode}
+            style={{
+              width: 32,
+              height: 32,
+              borderRadius: 'var(--radius)',
+              border: `1px solid ${voiceListening ? 'var(--red)' : 'var(--border)'}`,
+              background: voiceListening ? 'var(--red-dim)' : 'var(--bg-3)',
+              color: voiceListening ? 'var(--red)' : 'var(--text-1)',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              cursor: observerMode ? 'not-allowed' : 'pointer',
+              flexShrink: 0,
+              boxShadow: voiceListening ? '0 0 10px var(--red-dim)' : 'none',
+              opacity: observerMode ? 0.6 : 1,
+            }}
+          >
+            <Mic size={14} />
           </button>
 
           <textarea
@@ -1641,6 +1916,7 @@ export function ChatWindow() {
             onKeyDown={handleKeyDown}
             placeholder="Ask KODO anything, attach files, or run /help"
             rows={1}
+            disabled={observerMode}
             style={{
               flex: 1,
               background: 'none',
@@ -1664,7 +1940,7 @@ export function ChatWindow() {
               }
               void handleSend()
             }}
-            disabled={attachmentUploading || (!isLoading && !input.trim() && totalAttachmentCount === 0)}
+            disabled={observerMode || attachmentUploading || (!isLoading && !input.trim() && totalAttachmentCount === 0)}
             style={{
               background: isLoading
                 ? 'var(--red-dim)'
@@ -1683,18 +1959,21 @@ export function ChatWindow() {
                     : 'var(--text-2)',
               width: 36, height: 36,
               borderRadius: 'var(--radius)',
-              cursor: (attachmentUploading || (!isLoading && !input.trim() && totalAttachmentCount === 0)) ? 'not-allowed' : 'pointer',
+              cursor: (observerMode || attachmentUploading || (!isLoading && !input.trim() && totalAttachmentCount === 0)) ? 'not-allowed' : 'pointer',
               display: 'flex', alignItems: 'center', justifyContent: 'center',
               flexShrink: 0,
               transition: 'all 0.15s',
+              opacity: observerMode ? 0.65 : 1,
             }}
           >
             {isLoading ? <Square size={15} /> : <Send size={15} />}
           </button>
         </div>
         </div>
-        <div style={{ fontSize: 10, color: 'var(--text-2)', marginTop: 6, textAlign: 'center' }}>
-          Enter send · Shift+Enter newline · Tab autocomplete · Ctrl/Cmd+K command palette · Esc stop generation
+        <div style={{ fontSize: 10, color: observerMode ? 'var(--yellow)' : 'var(--text-2)', marginTop: 6, textAlign: 'center' }}>
+          {observerMode
+            ? 'Observer mode is active. This shared session is read-only.'
+            : 'Enter send · Shift+Enter newline · Tab autocomplete · Ctrl/Cmd+K command palette · Esc stop generation'}
         </div>
       </div>
 
@@ -1824,6 +2103,77 @@ export function ChatWindow() {
           </div>
         </div>
       )}
+
+      {showShortcuts && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-label="Keyboard shortcuts"
+          onClick={() => setShowShortcuts(false)}
+          style={{
+            position: 'absolute',
+            inset: 0,
+            background: 'rgba(0, 0, 0, 0.45)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 35,
+            padding: 20,
+          }}
+        >
+          <div
+            onClick={(event) => event.stopPropagation()}
+            style={{
+              width: 'min(520px, 96vw)',
+              borderRadius: 10,
+              border: '1px solid var(--border-bright)',
+              background: 'var(--bg-1)',
+              boxShadow: '0 14px 34px rgba(0,0,0,0.35)',
+              padding: 14,
+              display: 'grid',
+              gap: 8,
+            }}
+          >
+            <div style={{ fontSize: 14, color: 'var(--text-0)', fontFamily: 'var(--font-display)', fontWeight: 700 }}>
+              Keyboard shortcuts
+            </div>
+            <ShortcutRow keys="Enter" action="Send message" />
+            <ShortcutRow keys="Shift + Enter" action="New line" />
+            <ShortcutRow keys="Ctrl/Cmd + K" action="Open command palette" />
+            <ShortcutRow keys="Ctrl/Cmd + Enter" action="Send message from anywhere" />
+            <ShortcutRow keys="Esc" action="Stop generation / close overlays" />
+            <ShortcutRow keys="?" action="Toggle shortcuts help" />
+
+            <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+              <button
+                type="button"
+                onClick={() => setShowShortcuts(false)}
+                style={{
+                  border: '1px solid var(--border)',
+                  background: 'var(--bg-2)',
+                  color: 'var(--text-1)',
+                  borderRadius: 8,
+                  padding: '6px 10px',
+                  fontSize: 11,
+                  fontFamily: 'var(--font-mono)',
+                  cursor: 'pointer',
+                }}
+              >
+                CLOSE
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+function ShortcutRow({ keys, action }: { keys: string; action: string }) {
+  return (
+    <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10, fontSize: 12 }}>
+      <span style={{ color: 'var(--accent)', fontFamily: 'var(--font-mono)' }}>{keys}</span>
+      <span style={{ color: 'var(--text-1)' }}>{action}</span>
     </div>
   )
 }

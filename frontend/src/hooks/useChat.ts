@@ -10,6 +10,7 @@ import {
   ToolCall,
 } from '../store/chatStore'
 import { buildApiHeaders, parseApiError } from '../lib/api'
+import { pushUiNotification } from '../lib/notifications'
 
 const API = '/api/chat'
 
@@ -20,6 +21,14 @@ function genId() {
 type StreamEventHandlers = {
   onToolOutput?: (line: string, event: Record<string, unknown>) => void
   onToolResult?: (event: Record<string, unknown>) => void
+  onText?: (content: string, event: Record<string, unknown>) => void
+  onDone?: (usage: Message['usage'] | undefined, event: Record<string, unknown>) => void
+  onError?: (message: string, event: Record<string, unknown>) => void
+  onMeta?: (event: Record<string, unknown>) => void
+}
+
+type SendMessageOptions = {
+  silent?: boolean
 }
 
 const FALLBACK_MODE_KEYS = ['execute', 'plan', 'debug', 'review']
@@ -125,6 +134,7 @@ export function useChat() {
   const store = useChatStore()
   const abortRef = useRef<AbortController | null>(null)
   const activeAssistantIdRef = useRef<string | null>(null)
+  const pendingPermissionCountRef = useRef(0)
 
   const filteredMessages = useMemo(() => {
     const tokens = store.messageSearchQuery
@@ -193,6 +203,7 @@ export function useChat() {
     const sid = (sessionId ?? store.sessionId) || ''
     if (!sid) {
       store.setPermissionChallenges([])
+      pendingPermissionCountRef.current = 0
       return
     }
 
@@ -204,7 +215,14 @@ export function useChat() {
         throw new Error(await parseApiError(res))
       }
       const data = await res.json()
-      store.setPermissionChallenges((data.pending || []) as PermissionChallenge[])
+      const pending = (data.pending || []) as PermissionChallenge[]
+      store.setPermissionChallenges(pending)
+      if (pending.length > pendingPermissionCountRef.current) {
+        const newest = pending[0]
+        const toolName = newest?.tool_name || 'Tool'
+        pushUiNotification('Permission required', `${toolName} is waiting for approval.`, 'warning')
+      }
+      pendingPermissionCountRef.current = pending.length
     } catch (e) {
       console.error('Failed to load pending permissions', e)
     }
@@ -482,8 +500,11 @@ export function useChat() {
     imageAttachment?: ImageAttachment,
     extraContentBlocks: Array<Record<string, unknown>> = [],
     eventHandlers?: StreamEventHandlers,
+    options?: SendMessageOptions,
   ) => {
     if ((!content.trim() && !imageAttachment && extraContentBlocks.length === 0) || store.isLoading) return
+
+    const silent = Boolean(options?.silent)
 
     // Abort previous stream
     abortRef.current?.abort()
@@ -504,44 +525,49 @@ export function useChat() {
 
     const displayContent = content.trim() || attachmentSummary || (imageAttachment ? '[Attached image]' : '')
 
-    const userMsg: Message = {
-      id: genId(),
-      role: 'user',
-      content: displayContent,
-      imageAttachment,
-      timestamp: Date.now(),
+    if (!silent) {
+      const userMsg: Message = {
+        id: genId(),
+        role: 'user',
+        content: displayContent,
+        imageAttachment,
+        timestamp: Date.now(),
+      }
+      store.addMessage(userMsg)
     }
-    store.addMessage(userMsg)
 
     // Placeholder assistant message
-    const assistantId = genId()
-    const assistantMsg: Message = {
-      id: assistantId,
-      role: 'assistant',
-      content: '',
-      isStreaming: true,
-      toolCalls: [],
-      timestamp: Date.now(),
+    const assistantId = silent ? null : genId()
+    if (assistantId) {
+      const assistantMsg: Message = {
+        id: assistantId,
+        role: 'assistant',
+        content: '',
+        isStreaming: true,
+        toolCalls: [],
+        timestamp: Date.now(),
+      }
+      store.addMessage(assistantMsg)
+      activeAssistantIdRef.current = assistantId
     }
-    store.addMessage(assistantMsg)
-    activeAssistantIdRef.current = assistantId
 
     let sessionId = store.sessionId
     let permissionPollTimer: ReturnType<typeof window.setInterval> | null = null
-    if (!sessionId) {
-      const res = await fetch(`${API}/new-session`, {
-        method: 'POST',
-        headers: buildApiHeaders(),
-      })
-      if (!res.ok) {
-        throw new Error(await parseApiError(res))
-      }
-      const data = await res.json()
-      sessionId = data.session_id
-      store.setSessionId(sessionId!)
-    }
 
     try {
+      if (!sessionId) {
+        const res = await fetch(`${API}/new-session`, {
+          method: 'POST',
+          headers: buildApiHeaders(),
+        })
+        if (!res.ok) {
+          throw new Error(await parseApiError(res))
+        }
+        const data = await res.json()
+        sessionId = data.session_id
+        store.setSessionId(sessionId!)
+      }
+
       await loadPendingPermissions(sessionId)
       permissionPollTimer = window.setInterval(() => {
         void loadPendingPermissions(sessionId)
@@ -596,7 +622,7 @@ export function useChat() {
 
           try {
             const event = JSON.parse(raw)
-            handleEvent(event, assistantId, eventHandlers)
+            handleEvent(event, assistantId, eventHandlers, silent)
           } catch {
             // ignore parse errors
           }
@@ -612,6 +638,7 @@ export function useChat() {
           content: msg.content || 'An error occurred.',
         }))
       }
+      eventHandlers?.onError?.(String(e), { type: 'error', message: String(e) })
     } finally {
       if (permissionPollTimer !== null) {
         window.clearInterval(permissionPollTimer)
@@ -620,7 +647,7 @@ export function useChat() {
       if (assistantId) {
         store.updateMessageById(assistantId, (msg) => ({ ...msg, isStreaming: false }))
       }
-      if (activeAssistantIdRef.current === assistantId) {
+      if (assistantId && activeAssistantIdRef.current === assistantId) {
         activeAssistantIdRef.current = null
       }
       loadSessions()
@@ -630,7 +657,12 @@ export function useChat() {
     }
   }, [loadCheckpoints, loadPendingPermissions, loadSessions, loadUsage, store])
 
-  function handleEvent(event: Record<string, unknown>, assistantId: string, eventHandlers?: StreamEventHandlers) {
+  function handleEvent(
+    event: Record<string, unknown>,
+    assistantId: string | null,
+    eventHandlers?: StreamEventHandlers,
+    silent = false,
+  ) {
     const toolUseId = typeof event.tool_use_id === 'string' ? event.tool_use_id : ''
 
     const resolveToolCallIndex = (toolCalls: ToolCall[]): number => {
@@ -643,10 +675,13 @@ export function useChat() {
 
     switch (event.type) {
       case 'text':
-        store.updateMessageById(assistantId, (msg) => ({
-          ...msg,
-          content: msg.content + (event.content as string),
-        }))
+        if (!silent && assistantId) {
+          store.updateMessageById(assistantId, (msg) => ({
+            ...msg,
+            content: msg.content + (event.content as string),
+          }))
+        }
+        eventHandlers?.onText?.(String(event.content || ''), event)
         break
 
       case 'tool_start': {
@@ -657,65 +692,83 @@ export function useChat() {
           tool_use_id: toolUseId || undefined,
           streamLines: [],
         }
-        store.updateMessageById(assistantId, (msg) => ({
-          ...msg,
-          toolCalls: [...(msg.toolCalls || []), tc],
-        }))
+        if (!silent && assistantId) {
+          store.updateMessageById(assistantId, (msg) => ({
+            ...msg,
+            toolCalls: [...(msg.toolCalls || []), tc],
+          }))
+        }
         break
       }
 
       case 'tool_output': {
         const line = String(event.line || '')
         if (!line) break
-        store.updateMessageById(assistantId, (msg) => {
-          const tcs = [...(msg.toolCalls || [])]
-          const idx = resolveToolCallIndex(tcs)
-          if (idx < 0) return msg
-          const target = tcs[idx]
-          tcs[idx] = {
-            ...target,
-            streamLines: [...(target.streamLines || []), line],
-          }
-          return { ...msg, toolCalls: tcs }
-        })
+        if (!silent && assistantId) {
+          store.updateMessageById(assistantId, (msg) => {
+            const tcs = [...(msg.toolCalls || [])]
+            const idx = resolveToolCallIndex(tcs)
+            if (idx < 0) return msg
+            const target = tcs[idx]
+            tcs[idx] = {
+              ...target,
+              streamLines: [...(target.streamLines || []), line],
+            }
+            return { ...msg, toolCalls: tcs }
+          })
+        }
         eventHandlers?.onToolOutput?.(line, event)
         break
       }
 
       case 'tool_result': {
-        store.updateMessageById(assistantId, (msg) => {
-          const tcs = [...(msg.toolCalls || [])]
-          const idx = resolveToolCallIndex(tcs)
-          if (idx >= 0) {
-            tcs[idx] = {
-              ...tcs[idx],
-              tool_use_id: tcs[idx].tool_use_id || toolUseId || undefined,
-              output: String(event.output || ''),
-              success: event.success as boolean,
-              metadata: (event.metadata as Record<string, unknown>) || undefined,
+        if (!silent && assistantId) {
+          store.updateMessageById(assistantId, (msg) => {
+            const tcs = [...(msg.toolCalls || [])]
+            const idx = resolveToolCallIndex(tcs)
+            if (idx >= 0) {
+              tcs[idx] = {
+                ...tcs[idx],
+                tool_use_id: tcs[idx].tool_use_id || toolUseId || undefined,
+                output: String(event.output || ''),
+                success: event.success as boolean,
+                metadata: (event.metadata as Record<string, unknown>) || undefined,
+              }
             }
-          }
-          return { ...msg, toolCalls: tcs }
-        })
+            return { ...msg, toolCalls: tcs }
+          })
+        }
         eventHandlers?.onToolResult?.(event)
         break
       }
 
       case 'done':
-        store.updateMessageById(assistantId, (msg) => ({
-          ...msg,
-          isStreaming: false,
-          usage: event.usage as Message['usage'],
-        }))
+        if (!silent && assistantId) {
+          store.updateMessageById(assistantId, (msg) => ({
+            ...msg,
+            isStreaming: false,
+            usage: event.usage as Message['usage'],
+          }))
+        }
+        eventHandlers?.onDone?.(event.usage as Message['usage'] | undefined, event)
+        if (!silent) {
+          pushUiNotification('Task complete', 'Assistant response finished.', 'success')
+        }
         break
 
       case 'error':
         store.setError(event.message as string)
-        store.updateMessageById(assistantId, (msg) => ({
-          ...msg,
-          isStreaming: false,
-          content: msg.content || `Error: ${event.message}`,
-        }))
+        if (!silent && assistantId) {
+          store.updateMessageById(assistantId, (msg) => ({
+            ...msg,
+            isStreaming: false,
+            content: msg.content || `Error: ${event.message}`,
+          }))
+        }
+        eventHandlers?.onError?.(String(event.message || ''), event)
+        if (!silent) {
+          pushUiNotification('Agent error', String(event.message || 'Unknown error'), 'error')
+        }
         break
 
       case 'meta':
@@ -724,10 +777,12 @@ export function useChat() {
           const currentModes = useChatStore.getState().availableModes
           store.setSessionMode(normalizeClientMode(event.mode, currentModes))
         }
+        eventHandlers?.onMeta?.(event)
         break
 
       case 'permission_request':
         // Reserved for future server-pushed permission events.
+        pushUiNotification('Permission required', 'A tool call requires your approval.', 'warning')
         void loadPendingPermissions(store.sessionId)
         break
     }

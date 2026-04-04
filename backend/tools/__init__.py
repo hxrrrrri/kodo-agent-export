@@ -25,6 +25,9 @@ from .skill_list import SkillListTool
 from .skill_get import SkillGetTool
 from .memory_write import MemoryWriteTool
 from .image_gen import ImageGenTool
+from .screenshot import ScreenshotTool
+from .database_query import DatabaseQueryTool
+from .send_email import SendEmailTool
 from .base import BaseTool, ToolResult
 
 ALL_TOOLS: list[BaseTool] = [
@@ -55,6 +58,9 @@ ALL_TOOLS: list[BaseTool] = [
     SkillGetTool(),
     MemoryWriteTool(),
     ImageGenTool(),
+    ScreenshotTool(),
+    DatabaseQueryTool(),
+    SendEmailTool(),
 ]
 
 TOOL_MAP: dict[str, BaseTool] = {t.name: t for t in ALL_TOOLS}
