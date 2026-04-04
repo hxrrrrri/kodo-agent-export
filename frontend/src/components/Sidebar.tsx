@@ -18,6 +18,7 @@ import { Session } from '../store/chatStore'
 import { buildApiHeaders, parseApiError } from '../lib/api'
 import { ProviderPanel } from './ProviderPanel'
 import { AgentGraph, AgentNode } from './AgentGraph'
+import { KodoLogoMark } from './KodoLogoMark'
 
 type SidebarProps = {
   collapsed: boolean
@@ -361,16 +362,12 @@ export function Sidebar({ collapsed, onToggleCollapse }: SidebarProps) {
           style={{
             width: 30,
             height: 30,
-            borderRadius: 8,
-            border: '1px solid var(--border-bright)',
-            background: 'var(--accent-dim)',
-            color: 'var(--accent)',
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'center',
           }}
         >
-          <Cpu size={15} />
+          <KodoLogoMark size={22} />
         </div>
 
         <div style={{ width: 18, height: 1, background: 'var(--border)' }} />
@@ -453,15 +450,11 @@ export function Sidebar({ collapsed, onToggleCollapse }: SidebarProps) {
             <div style={{
               width: 26,
               height: 26,
-              borderRadius: 6,
-              border: '1px solid var(--border-bright)',
-              background: 'var(--accent-dim)',
-              color: 'var(--accent)',
               display: 'flex',
               alignItems: 'center',
               justifyContent: 'center',
             }}>
-              <Cpu size={14} />
+              <KodoLogoMark size={20} />
             </div>
             <div>
               <div

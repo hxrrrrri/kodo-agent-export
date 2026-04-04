@@ -4,6 +4,7 @@ import { useChat } from '../hooks/useChat'
 import { MessageBubble } from './MessageBubble'
 import { CommandDefinition } from '../store/chatStore'
 import { TerminalPanel } from './TerminalPanel'
+import { KodoLogoMark } from './KodoLogoMark'
 import { buildApiHeaders, parseApiError } from '../lib/api'
 
 const CONTEXT_TOKEN_BUDGET = Number(import.meta.env.VITE_CONTEXT_TOKEN_BUDGET || 60000)
@@ -1255,14 +1256,14 @@ export function ChatWindow() {
             animation: 'fadeIn 0.4s ease',
           }}>
             <div style={{
-              width: 64, height: 64,
-              background: 'var(--accent)',
-              borderRadius: 4,
-              display: 'flex', alignItems: 'center', justifyContent: 'center',
-              marginBottom: 20,
-              fontSize: 28,
+              width: 70,
+              height: 70,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              marginBottom: 18,
             }}>
-              ⚡
+              <KodoLogoMark size={66} decorative={false} title="KODO" />
             </div>
             <div style={{
               fontFamily: 'var(--font-display)',
