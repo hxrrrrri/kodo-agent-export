@@ -251,6 +251,8 @@ export function ChatWindow() {
   } = useChat()
   const [input, setInput] = useState('')
   const [showProjectInput, setShowProjectInput] = useState(false)
+  const [projectDirPicking, setProjectDirPicking] = useState(false)
+  const [projectDirPickerError, setProjectDirPickerError] = useState('')
   const [permissionSubmitting, setPermissionSubmitting] = useState(false)
   const [activeCommandIndex, setActiveCommandIndex] = useState(0)
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false)
@@ -804,6 +806,34 @@ export function ChatWindow() {
     setPermissionSubmitting(false)
   }
 
+  const pickProjectDirectory = useCallback(async () => {
+    if (projectDirPicking) return
+    setProjectDirPickerError('')
+    setProjectDirPicking(true)
+    try {
+      const response = await fetch('/api/chat/project-dir/select', {
+        method: 'POST',
+        headers: buildApiHeaders(),
+      })
+
+      if (!response.ok) {
+        throw new Error(await parseApiError(response))
+      }
+
+      const payload = await response.json() as { project_dir?: string | null }
+      const selected = typeof payload.project_dir === 'string' ? payload.project_dir.trim() : ''
+      if (selected) {
+        setProjectDir(selected)
+        setShowProjectInput(false)
+      }
+    } catch (error) {
+      setProjectDirPickerError(String(error))
+      setShowProjectInput(true)
+    } finally {
+      setProjectDirPicking(false)
+    }
+  }, [projectDirPicking, setProjectDir])
+
   const isEmpty = messages.length === 0
   const isMessageFilteringActive = messageSearchQuery.trim().length > 0
 
@@ -838,6 +868,7 @@ export function ChatWindow() {
     ]
   const totalAttachmentCount = pendingFiles.length + (pendingImage ? 1 : 0)
   const hiddenAttachmentCount = Math.max(0, totalAttachmentCount - MAX_VISIBLE_ATTACHMENT_CHIPS)
+  const hasProjectDir = projectDir.trim().length > 0
 
   return (
     <div style={{
@@ -873,9 +904,47 @@ export function ChatWindow() {
         </div>
 
         <button
-          onClick={() => setShowProjectInput(!showProjectInput)}
+          onClick={() => {
+            void pickProjectDirectory()
+          }}
+          title={hasProjectDir ? projectDir : 'Select project directory'}
           style={{
-            background: 'none',
+            background: hasProjectDir ? 'var(--accent-dim)' : 'none',
+            border: hasProjectDir ? '1px solid var(--accent)' : '1px solid var(--border)',
+            color: hasProjectDir ? 'var(--text-0)' : 'var(--text-2)',
+            padding: '4px 10px',
+            borderRadius: 'var(--radius)',
+            cursor: 'pointer',
+            fontSize: 11,
+            fontFamily: 'var(--font-mono)',
+            display: 'flex', alignItems: 'center', gap: 5,
+            transition: 'all 0.15s',
+            maxWidth: 320,
+            boxShadow: hasProjectDir ? 'inset 0 0 0 1px var(--accent-glow)' : 'none',
+          }}
+          onMouseEnter={e => {
+            (e.currentTarget as HTMLElement).style.borderColor = hasProjectDir ? 'var(--accent)' : 'var(--border-bright)'
+            ;(e.currentTarget as HTMLElement).style.color = 'var(--text-0)'
+          }}
+          onMouseLeave={e => {
+            (e.currentTarget as HTMLElement).style.borderColor = hasProjectDir ? 'var(--accent)' : 'var(--border)'
+            ;(e.currentTarget as HTMLElement).style.color = hasProjectDir ? 'var(--text-0)' : 'var(--text-2)'
+          }}
+        >
+          <FolderOpen size={12} />
+          {projectDirPicking ? 'OPENING...' : (
+            hasProjectDir
+              ? <span className="truncate" style={{ maxWidth: 250 }}>{projectDir}</span>
+              : 'SET PROJECT DIR'
+          )}
+        </button>
+
+        <button
+          type="button"
+          onClick={() => setShowProjectInput((prev) => !prev)}
+          title="Manually set project path"
+          style={{
+            background: showProjectInput ? 'var(--bg-3)' : 'none',
             border: '1px solid var(--border)',
             color: 'var(--text-2)',
             padding: '4px 10px',
@@ -886,17 +955,8 @@ export function ChatWindow() {
             display: 'flex', alignItems: 'center', gap: 5,
             transition: 'all 0.15s',
           }}
-          onMouseEnter={e => {
-            (e.currentTarget as HTMLElement).style.borderColor = 'var(--border-bright)'
-            ;(e.currentTarget as HTMLElement).style.color = 'var(--text-0)'
-          }}
-          onMouseLeave={e => {
-            (e.currentTarget as HTMLElement).style.borderColor = 'var(--border)'
-            ;(e.currentTarget as HTMLElement).style.color = 'var(--text-2)'
-          }}
         >
-          <FolderOpen size={12} />
-          {projectDir ? projectDir.split('/').pop() : 'SET PROJECT DIR'}
+          PATH
         </button>
 
         <select
@@ -1004,6 +1064,19 @@ export function ChatWindow() {
           GITHUB
         </a>
       </div>
+
+      {projectDirPickerError && (
+        <div style={{
+          padding: '8px 24px',
+          borderBottom: '1px solid var(--border)',
+          background: 'var(--red-dim)',
+          color: 'var(--red)',
+          fontSize: 11,
+          fontFamily: 'var(--font-mono)',
+        }}>
+          {projectDirPickerError}
+        </div>
+      )}
 
       <div style={{
         padding: '8px 24px',

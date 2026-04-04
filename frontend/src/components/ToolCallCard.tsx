@@ -22,10 +22,10 @@ function renderHighlightedText(text: string, query: string): JSX.Element {
             <mark
               key={`${part}-${idx}`}
               style={{
-                background: 'var(--yellow-dim)',
-                color: 'var(--yellow)',
-                padding: '0 1px',
-                borderRadius: 2,
+                background: 'rgba(255, 215, 0, 0.35)',
+                color: '#1f1c17',
+                padding: '0 2px',
+                borderRadius: 3,
               }}
             >
               {part}
@@ -203,7 +203,7 @@ export function ToolCallCard({ tc, isLast, searchQuery }: { tc: ToolCall; isLast
 
         {/* Preview */}
         <div className="truncate" style={{ flex: 1, color: 'var(--text-1)', opacity: 0.8 }}>
-          {preview}
+          {normalizedSearch ? renderHighlightedText(preview, normalizedSearch) : preview}
         </div>
 
         {/* Expand toggle */}
@@ -296,7 +296,9 @@ export function ToolCallCard({ tc, isLast, searchQuery }: { tc: ToolCall; isLast
           >
             <div>&gt; {preview}</div>
             {tc.streamLines?.map((line, idx) => (
-              <div key={`${line}-${idx}`}>{line}</div>
+              <div key={`${line}-${idx}`}>
+                {normalizedSearch ? renderHighlightedText(line, normalizedSearch) : line}
+              </div>
             ))}
           </div>
         </div>

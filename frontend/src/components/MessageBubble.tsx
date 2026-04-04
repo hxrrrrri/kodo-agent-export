@@ -6,46 +6,39 @@ import { vscDarkPlus } from 'react-syntax-highlighter/dist/esm/styles/prism'
 import { Message } from '../store/chatStore'
 import { ToolCallCard } from './ToolCallCard'
 
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
+
 function renderHighlightedText(text: string, query: string): JSX.Element {
   const trimmed = query.trim()
   if (!trimmed) {
     return <>{text}</>
   }
 
-  const pattern = new RegExp(trimmed.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi')
-  const parts: Array<string | JSX.Element> = []
-  let lastIndex = 0
-  let match: RegExpExecArray | null
-
-  while ((match = pattern.exec(text)) !== null) {
-    const start = match.index
-    const end = start + match[0].length
-    if (start > lastIndex) {
-      parts.push(text.slice(lastIndex, start))
-    }
-    parts.push(
-      <mark
-        key={`${match[0]}-${start}`}
-        style={{
-          background: 'var(--accent-dim)',
-          color: 'var(--text-0)',
-          padding: '0 1px',
-          borderRadius: 2,
-        }}
-      >
-        {match[0]}
-      </mark>,
-    )
-    lastIndex = end
-  }
-
-  if (lastIndex < text.length) {
-    parts.push(text.slice(lastIndex))
-  }
+  const pattern = new RegExp(`(${escapeRegExp(trimmed)})`, 'ig')
+  const parts = text.split(pattern)
 
   return (
     <>
-      {parts.map((part, idx) => (typeof part === 'string' ? <span key={`${part}-${idx}`}>{part}</span> : part))}
+      {parts.map((part, idx) => {
+        if (part.toLowerCase() === trimmed.toLowerCase()) {
+          return (
+            <mark
+              key={`${part}-${idx}`}
+              style={{
+                background: 'rgba(255, 215, 0, 0.35)',
+                color: '#1f1c17',
+                padding: '0 2px',
+                borderRadius: 3,
+              }}
+            >
+              {part}
+            </mark>
+          )
+        }
+        return <span key={`${part}-${idx}`}>{part}</span>
+      })}
     </>
   )
 }

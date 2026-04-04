@@ -5,6 +5,7 @@ import json
 import os
 import re
 import shutil
+import subprocess
 import uuid
 import zipfile
 from pathlib import Path
@@ -103,6 +104,58 @@ def _extract_zip_to_project(zip_bytes: bytes, project_dir: str) -> list[str]:
             extracted.append(str(target_path))
 
     return extracted
+
+
+def _pick_project_dir_native() -> str | None:
+    # Prefer tkinter for cross-platform native dialogs.
+    try:
+        import tkinter as tk
+        from tkinter import filedialog
+
+        root = tk.Tk()
+        root.withdraw()
+        try:
+            root.attributes("-topmost", True)
+        except Exception:
+            pass
+        selected = filedialog.askdirectory(mustexist=True)
+        root.destroy()
+        text = str(selected or "").strip()
+        if text:
+            return text
+    except Exception:
+        pass
+
+    # Windows fallback using FolderBrowserDialog via PowerShell.
+    if os.name == "nt":
+        script = (
+            "Add-Type -AssemblyName System.Windows.Forms | Out-Null; "
+            "$dialog = New-Object System.Windows.Forms.FolderBrowserDialog; "
+            "$dialog.Description = 'Select project directory'; "
+            "$dialog.ShowNewFolderButton = $false; "
+            "$result = $dialog.ShowDialog(); "
+            "if ($result -eq [System.Windows.Forms.DialogResult]::OK) { $dialog.SelectedPath }"
+        )
+        completed = subprocess.run(
+            [
+                "powershell",
+                "-NoLogo",
+                "-NoProfile",
+                "-NonInteractive",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-Command",
+                script,
+            ],
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+        text = str(completed.stdout or "").strip()
+        if text:
+            return text.splitlines()[-1].strip()
+
+    return None
 
 
 class ChatRequest(BaseModel):
@@ -691,6 +744,27 @@ async def run_terminal_command(req: TerminalRunRequest, request: Request):
             "Connection": "keep-alive",
         },
     )
+
+
+@router.post("/project-dir/select")
+async def select_project_dir(request: Request):
+    require_api_auth(request)
+    await enforce_rate_limit(request, SESSION_RATE_LIMITER, "project_dir_select")
+
+    try:
+        selected = await asyncio.to_thread(_pick_project_dir_native)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Directory picker failed: {exc}") from exc
+
+    if not selected:
+        return {"project_dir": None}
+
+    try:
+        safe_project_dir = enforce_allowed_path(selected)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    return {"project_dir": safe_project_dir}
 
 
 @router.post("/upload-zip")
