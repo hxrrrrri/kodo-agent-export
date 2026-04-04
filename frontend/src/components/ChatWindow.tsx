@@ -38,6 +38,16 @@ interface FileAttachment {
   previewUrl?: string
 }
 
+type PromptTemplate = {
+  name: string
+  content: string
+}
+
+type SuggestionItem = CommandDefinition & {
+  source: 'command' | 'prompt'
+  promptName?: string
+}
+
 type HeaderHoverOptions = {
   active?: boolean
   activeBorder?: string
@@ -270,6 +280,11 @@ export function ChatWindow({ editorOpen, onToggleEditor }: ChatWindowProps) {
     setMessageSearchQuery,
     theme,
     setTheme,
+    clearMessages,
+    checkpoints,
+    createCheckpoint,
+    restoreCheckpoint,
+    newSession,
   } = useChat()
   const [input, setInput] = useState('')
   const [showProjectInput, setShowProjectInput] = useState(false)
@@ -307,6 +322,8 @@ export function ChatWindow({ editorOpen, onToggleEditor }: ChatWindowProps) {
   const [voiceListening, setVoiceListening] = useState(false)
   const [showShortcuts, setShowShortcuts] = useState(false)
   const [installPromptEvent, setInstallPromptEvent] = useState<any>(null)
+  const [activeTool, setActiveTool] = useState<string | null>(null)
+  const [promptTemplates, setPromptTemplates] = useState<PromptTemplate[]>([])
 
   const {
     observerMode,
@@ -331,6 +348,33 @@ export function ChatWindow({ editorOpen, onToggleEditor }: ChatWindowProps) {
     commandsRequestedRef.current = true
     void loadCommands()
   }, [loadCommands])
+
+  useEffect(() => {
+    let cancelled = false
+
+    const loadPromptTemplates = async () => {
+      try {
+        const response = await fetch('/api/prompts', {
+          headers: buildApiHeaders(),
+        })
+        if (!response.ok) return
+        const payload = await response.json()
+        const rows = Array.isArray(payload.prompts) ? payload.prompts as PromptTemplate[] : []
+        if (!cancelled) {
+          setPromptTemplates(rows)
+        }
+      } catch {
+        if (!cancelled) {
+          setPromptTemplates([])
+        }
+      }
+    }
+
+    void loadPromptTemplates()
+    return () => {
+      cancelled = true
+    }
+  }, [])
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search)
@@ -364,7 +408,30 @@ export function ChatWindow({ editorOpen, onToggleEditor }: ChatWindowProps) {
   }, [loadSession, observerMode, sessionId])
 
   const commandCatalog = commands.length > 0 ? commands : FALLBACK_COMMANDS
-  const commandSuggestions = useMemo(() => buildCommandSuggestions(input, commandCatalog), [input, commandCatalog])
+  const promptSuggestions = useMemo(() => {
+    const token = leadingCommandToken(input)
+    if (!token.startsWith('/')) return []
+    const query = token.slice(1).toLowerCase()
+    if (!query) return []
+
+    return promptTemplates
+      .filter((template) => template.name.toLowerCase().includes(query))
+      .slice(0, 8)
+      .map((template) => ({
+        name: `/${template.name}`,
+        description: `Prompt: ${template.content.split('\n')[0].slice(0, 70)}`,
+        source: 'prompt' as const,
+        promptName: template.name,
+      }))
+  }, [input, promptTemplates])
+
+  const commandSuggestions = useMemo<SuggestionItem[]>(() => {
+    const base = buildCommandSuggestions(input, commandCatalog).map((item) => ({
+      ...item,
+      source: 'command' as const,
+    }))
+    return [...promptSuggestions, ...base].slice(0, 8)
+  }, [input, commandCatalog, promptSuggestions])
   const showCommandSuggestions = commandSuggestions.length > 0 && input.trimStart().startsWith('/') && !commandPaletteOpen
   const paletteCommands = useMemo(
     () => filterPaletteCommands(paletteQuery, commands.length > 0 ? commands : KNOWN_ROOT_COMMANDS),
@@ -388,6 +455,7 @@ export function ChatWindow({ editorOpen, onToggleEditor }: ChatWindowProps) {
     setTerminalLines([])
     setShowTerminal(false)
     setTerminalRunning(false)
+    setActiveTool(null)
     setThemeMenuOpen(false)
     dragDepthRef.current = 0
     setDragOverlayVisible(false)
@@ -522,8 +590,52 @@ export function ChatWindow({ editorOpen, onToggleEditor }: ChatWindowProps) {
     }
   }, [])
 
-  const applyCommandSuggestion = (name: string) => {
-    const next = `${name}${name.includes('<') ? '' : ' '}`
+  const applyCommandSuggestion = async (suggestion: SuggestionItem) => {
+    if (suggestion.source === 'prompt' && suggestion.promptName) {
+      try {
+        const response = await fetch(`/api/prompts/${encodeURIComponent(suggestion.promptName)}/render`, {
+          method: 'POST',
+          headers: buildApiHeaders({ 'Content-Type': 'application/json' }),
+          body: JSON.stringify({ variables: {} }),
+        })
+        if (response.ok) {
+          const payload = await response.json()
+          const rendered = String(payload.rendered || '').trim()
+          if (rendered) {
+            setInput(rendered)
+            setActiveCommandIndex(0)
+            requestAnimationFrame(() => {
+              if (!textareaRef.current) return
+              textareaRef.current.style.height = 'auto'
+              textareaRef.current.style.height = Math.min(textareaRef.current.scrollHeight, 200) + 'px'
+              textareaRef.current.focus()
+              textareaRef.current.selectionStart = textareaRef.current.value.length
+              textareaRef.current.selectionEnd = textareaRef.current.value.length
+            })
+            return
+          }
+        }
+      } catch {
+        // Fall through to template content insertion when render API fails.
+      }
+
+      const fallback = promptTemplates.find((item) => item.name === suggestion.promptName)
+      if (fallback?.content) {
+        setInput(fallback.content)
+        setActiveCommandIndex(0)
+        requestAnimationFrame(() => {
+          if (!textareaRef.current) return
+          textareaRef.current.style.height = 'auto'
+          textareaRef.current.style.height = Math.min(textareaRef.current.scrollHeight, 200) + 'px'
+          textareaRef.current.focus()
+          textareaRef.current.selectionStart = textareaRef.current.value.length
+          textareaRef.current.selectionEnd = textareaRef.current.value.length
+        })
+        return
+      }
+    }
+
+    const next = `${suggestion.name}${suggestion.name.includes('<') ? '' : ' '}`
     setInput(next)
     setActiveCommandIndex(0)
     requestAnimationFrame(() => {
@@ -641,16 +753,27 @@ export function ChatWindow({ editorOpen, onToggleEditor }: ChatWindowProps) {
       if (textareaRef.current) textareaRef.current.style.height = 'auto'
 
       sendMessage(msg, imagePayload, attachmentBlocks, {
+        onToolStart: (event) => {
+          const tool = String(event.tool || '').trim()
+          setActiveTool(tool || null)
+        },
         onToolOutput: (line) => {
           setTerminalLines((prev) => [...prev, line])
           setShowTerminal(true)
           setTerminalRunning(true)
         },
         onToolResult: (event) => {
+          setActiveTool(null)
           const toolName = String(event.tool || '').toLowerCase()
           if (toolName === 'bash' || toolName === 'powershell' || toolName === 'repl') {
             setTerminalRunning(false)
           }
+        },
+        onDone: () => {
+          setActiveTool(null)
+        },
+        onError: () => {
+          setActiveTool(null)
         },
       })
     } catch (error) {
@@ -805,7 +928,62 @@ export function ChatWindow({ editorOpen, onToggleEditor }: ChatWindowProps) {
         event.preventDefault()
         if (observerMode) return
         void handleSend()
+        return
       }
+
+      // Ctrl/Cmd+L - Clear messages
+      if (isMeta && event.key.toLowerCase() === 'l' && !observerMode) {
+        event.preventDefault()
+        if (window.confirm('Clear all messages in this session?')) {
+          clearMessages()
+        }
+        return
+      }
+
+      // Ctrl/Cmd+S - Save checkpoint
+      if (isMeta && event.key.toLowerCase() === 's' && !event.shiftKey && !observerMode) {
+        event.preventDefault()
+        void createCheckpoint(undefined, sessionId)
+        return
+      }
+
+      // Ctrl/Cmd+Z - Restore latest checkpoint
+      if (
+        isMeta
+        && event.key.toLowerCase() === 'z'
+        && !event.shiftKey
+        && document.activeElement !== textareaRef.current
+        && !observerMode
+      ) {
+        event.preventDefault()
+        const latest = checkpoints[0]
+        if (latest && window.confirm(`Restore checkpoint "${latest.label || latest.checkpoint_id.slice(0, 8)}"?`)) {
+          void restoreCheckpoint(latest.checkpoint_id, sessionId)
+        }
+        return
+      }
+
+      // Ctrl/Cmd+T - Toggle terminal
+      if (isMeta && event.key.toLowerCase() === 't') {
+        event.preventDefault()
+        setShowTerminal((prev) => !prev)
+        return
+      }
+
+      // Ctrl/Cmd+N - New session
+      if (isMeta && event.key.toLowerCase() === 'n' && !observerMode) {
+        event.preventDefault()
+        void newSession()
+        return
+      }
+
+      // Ctrl/Cmd+B - Toggle sidebar
+      if (isMeta && event.key.toLowerCase() === 'b') {
+        event.preventDefault()
+        window.dispatchEvent(new CustomEvent('kodo:toggle-sidebar'))
+        return
+      }
+
       if (event.key === 'Escape' && commandPaletteOpen) {
         event.preventDefault()
         setCommandPaletteOpen(false)
@@ -832,7 +1010,22 @@ export function ChatWindow({ editorOpen, onToggleEditor }: ChatWindowProps) {
     }
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
-  }, [commandPaletteOpen, handleSend, input, isLoading, observerMode, showShortcuts, stopGeneration])
+  }, [
+    checkpoints,
+    clearMessages,
+    commandPaletteOpen,
+    createCheckpoint,
+    handleSend,
+    input,
+    isLoading,
+    newSession,
+    observerMode,
+    restoreCheckpoint,
+    sessionId,
+    setShowTerminal,
+    showShortcuts,
+    stopGeneration,
+  ])
 
   const handleMessagesScroll = () => {
     const container = messageListRef.current
@@ -905,7 +1098,9 @@ export function ChatWindow({ editorOpen, onToggleEditor }: ChatWindowProps) {
     if (showCommandSuggestions && e.key === 'Tab') {
       e.preventDefault()
       const selected = commandSuggestions[activeCommandIndex]
-      if (selected) applyCommandSuggestion(selected.name)
+      if (selected) {
+        void applyCommandSuggestion(selected)
+      }
       return
     }
 
@@ -1924,6 +2119,9 @@ export function ChatWindow({ editorOpen, onToggleEditor }: ChatWindowProps) {
         padding: '24px 32px',
       }}
         ref={messageListRef}
+        aria-live="polite"
+        aria-label="Chat messages"
+        role="log"
         onScroll={handleMessagesScroll}
       >
         {isEmpty && (
@@ -1969,7 +2167,21 @@ export function ChatWindow({ editorOpen, onToggleEditor }: ChatWindowProps) {
               {EXAMPLE_PROMPTS.map((prompt, i) => (
                 <button
                   key={i}
-                  onClick={() => sendMessage(prompt)}
+                  onClick={() => sendMessage(prompt, undefined, [], {
+                    onToolStart: (event) => {
+                      const tool = String(event.tool || '').trim()
+                      setActiveTool(tool || null)
+                    },
+                    onToolResult: () => {
+                      setActiveTool(null)
+                    },
+                    onDone: () => {
+                      setActiveTool(null)
+                    },
+                    onError: () => {
+                      setActiveTool(null)
+                    },
+                  })}
                   disabled={observerMode}
                   style={{
                     background: 'var(--bg-2)',
@@ -2031,6 +2243,24 @@ export function ChatWindow({ editorOpen, onToggleEditor }: ChatWindowProps) {
           </div>
         )}
 
+        {isLoading && (
+          <div style={{
+            padding: '6px 16px',
+            display: 'flex',
+            alignItems: 'center',
+            gap: 8,
+            fontSize: 11,
+            color: 'var(--text-2)',
+            fontFamily: 'var(--font-mono)',
+            animation: 'fadeIn 0.2s ease',
+          }}>
+            <span className="typing-dots">
+              <span /><span /><span />
+            </span>
+            {activeTool ? `running ${activeTool}...` : 'thinking...'}
+          </div>
+        )}
+
         <div ref={bottomRef} />
       </div>
 
@@ -2079,12 +2309,12 @@ export function ChatWindow({ editorOpen, onToggleEditor }: ChatWindowProps) {
                 const selected = idx === activeCommandIndex
                 return (
                   <button
-                    key={command.name}
+                    key={`${command.source}-${command.name}-${idx}`}
                     type="button"
                     onMouseEnter={() => setActiveCommandIndex(idx)}
                     onMouseDown={(e) => {
                       e.preventDefault()
-                      applyCommandSuggestion(command.name)
+                      void applyCommandSuggestion(command)
                     }}
                     style={{
                       width: '100%',
@@ -2248,6 +2478,7 @@ export function ChatWindow({ editorOpen, onToggleEditor }: ChatWindowProps) {
           </button>
 
           <button
+            className={voiceListening ? 'recording-indicator' : undefined}
             type="button"
             onClick={startVoiceInput}
             title={voiceListening ? 'Listening...' : 'Voice input'}
@@ -2474,13 +2705,13 @@ export function ChatWindow({ editorOpen, onToggleEditor }: ChatWindowProps) {
           aria-label="Keyboard shortcuts"
           onClick={() => setShowShortcuts(false)}
           style={{
-            position: 'absolute',
+            position: 'fixed',
             inset: 0,
-            background: 'rgba(0, 0, 0, 0.45)',
+            background: 'rgba(0, 0, 0, 0.5)',
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'center',
-            zIndex: 35,
+            zIndex: 200,
             padding: 20,
           }}
         >
@@ -2501,11 +2732,17 @@ export function ChatWindow({ editorOpen, onToggleEditor }: ChatWindowProps) {
               Keyboard shortcuts
             </div>
             <ShortcutRow keys="Enter" action="Send message" />
-            <ShortcutRow keys="Shift + Enter" action="New line" />
+            <ShortcutRow keys="Shift + Enter" action="New line in message" />
             <ShortcutRow keys="Ctrl/Cmd + K" action="Open command palette" />
-            <ShortcutRow keys="Ctrl/Cmd + Enter" action="Send message from anywhere" />
+            <ShortcutRow keys="Ctrl/Cmd + Enter" action="Send from anywhere" />
+            <ShortcutRow keys="Ctrl/Cmd + L" action="Clear messages" />
+            <ShortcutRow keys="Ctrl/Cmd + S" action="Save checkpoint" />
+            <ShortcutRow keys="Ctrl/Cmd + Z" action="Restore last checkpoint" />
+            <ShortcutRow keys="Ctrl/Cmd + T" action="Toggle terminal" />
+            <ShortcutRow keys="Ctrl/Cmd + N" action="New session" />
+            <ShortcutRow keys="Ctrl/Cmd + B" action="Toggle sidebar" />
+            <ShortcutRow keys="?" action="Toggle this shortcuts help" />
             <ShortcutRow keys="Esc" action="Stop generation / close overlays" />
-            <ShortcutRow keys="?" action="Toggle shortcuts help" />
 
             <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
               <button

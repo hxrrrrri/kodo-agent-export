@@ -1,4 +1,5 @@
 const API_AUTH_STORAGE_KEY = 'kodo_api_auth_token'
+const API_KEYS_STORAGE_KEY = 'kodo_api_keys'
 
 function readEnvToken(): string {
   const token = import.meta.env.VITE_API_AUTH_TOKEN
@@ -38,11 +39,49 @@ export function clearApiAuthToken(): void {
   window.localStorage.removeItem(API_AUTH_STORAGE_KEY)
 }
 
+function getApiKeyOverrides(): Record<string, string> {
+  if (typeof window === 'undefined') {
+    return {}
+  }
+
+  const raw = window.localStorage.getItem(API_KEYS_STORAGE_KEY)
+  if (!raw) {
+    return {}
+  }
+
+  try {
+    const parsed = JSON.parse(raw)
+    if (!parsed || typeof parsed !== 'object') {
+      return {}
+    }
+
+    const result: Record<string, string> = {}
+    for (const [key, value] of Object.entries(parsed)) {
+      if (typeof value !== 'string') {
+        continue
+      }
+      const trimmed = value.trim()
+      if (!trimmed) {
+        continue
+      }
+      result[key] = trimmed
+    }
+    return result
+  } catch {
+    return {}
+  }
+}
+
 export function buildApiHeaders(extra?: Record<string, string>): Record<string, string> {
   const headers: Record<string, string> = { ...(extra || {}) }
   const token = getApiAuthToken()
   if (token) {
     headers.Authorization = `Bearer ${token}`
+  }
+
+  const keys = getApiKeyOverrides()
+  if (Object.keys(keys).length > 0) {
+    headers['X-Kodo-Keys'] = JSON.stringify(keys)
   }
   return headers
 }

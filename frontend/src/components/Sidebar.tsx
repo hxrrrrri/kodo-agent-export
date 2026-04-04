@@ -12,6 +12,7 @@ import {
   Plus,
   RotateCcw,
   Search,
+  Settings,
   Sun,
   Trash2,
   X,
@@ -33,7 +34,7 @@ type SidebarProps = {
   onToggleCollapse: () => void
 }
 
-type SidebarView = 'sessions' | 'providers' | 'agents' | 'usage' | 'prompts' | 'skills' | 'review'
+type SidebarView = 'sessions' | 'providers' | 'agents' | 'usage' | 'prompts' | 'skills' | 'review' | 'settings'
 
 type RuntimeTask = {
   task_id: string
@@ -53,6 +54,34 @@ type SessionReplayEvent = {
   content?: string
   tool_name?: string
 }
+
+type CronJob = {
+  name: string
+  cron_expr: string
+  prompt: string
+  project_dir?: string | null
+  enabled?: boolean
+  last_run?: string | null
+  last_task_id?: string | null
+}
+
+type CronRun = {
+  job_name?: string
+  task_id?: string
+  fired_at?: string
+}
+
+type SettingsPayload = Record<string, string>
+
+type StoredApiKeys = {
+  OPENAI_API_KEY?: string
+  ANTHROPIC_API_KEY?: string
+  GEMINI_API_KEY?: string
+  DEEPSEEK_API_KEY?: string
+  GROQ_API_KEY?: string
+}
+
+const API_KEY_STORAGE = 'kodo_api_keys'
 
 function toGraphStatus(status: string | undefined): AgentNode['status'] {
   const normalized = (status || '').toLowerCase()
@@ -237,6 +266,7 @@ export function Sidebar({ collapsed, onToggleCollapse }: SidebarProps) {
     sessionId,
     loadModes,
     loadSessions,
+    loadUsage,
     loadSession,
     newSession,
     deleteSession,
@@ -254,6 +284,25 @@ export function Sidebar({ collapsed, onToggleCollapse }: SidebarProps) {
   const [agentGraphLastUpdatedAt, setAgentGraphLastUpdatedAt] = useState<string>('')
   const [agentGraphModalOpen, setAgentGraphModalOpen] = useState(false)
   const [replaySessionId, setReplaySessionId] = useState<string | null>(null)
+  const [usageBreakdown, setUsageBreakdown] = useState<'model' | 'sessions'>('model')
+  const [usageData, setUsageData] = useState<any | null>(null)
+  const [usageLoading, setUsageLoading] = useState(false)
+  const [usageError, setUsageError] = useState('')
+  const [cronJobs, setCronJobs] = useState<CronJob[]>([])
+  const [cronRuns, setCronRuns] = useState<CronRun[]>([])
+  const [cronEnabled, setCronEnabled] = useState(true)
+  const [cronLoading, setCronLoading] = useState(false)
+  const [cronError, setCronError] = useState('')
+  const [cronName, setCronName] = useState('')
+  const [cronExpr, setCronExpr] = useState('every_30_minutes')
+  const [cronPrompt, setCronPrompt] = useState('')
+  const [settingsLoading, setSettingsLoading] = useState(false)
+  const [settingsSaving, setSettingsSaving] = useState(false)
+  const [settingsError, setSettingsError] = useState('')
+  const [settingsData, setSettingsData] = useState<SettingsPayload>({})
+  const [showApiKeys, setShowApiKeys] = useState(false)
+  const [apiKeys, setApiKeys] = useState<StoredApiKeys>({})
+  const [apiKeyStatus, setApiKeyStatus] = useState<Record<string, 'idle' | 'ok' | 'error'>>({})
   const searchInputRef = useRef<HTMLInputElement>(null)
   const bootstrappedRef = useRef(false)
 
@@ -463,10 +512,255 @@ export function Sidebar({ collapsed, onToggleCollapse }: SidebarProps) {
     }
   }, [agentNodes])
 
-  const usageCost = usageSummary?.totals.cost_usd_total ?? usageSummary?.totals.estimated_cost_usd ?? 0
-  const usageInput = usageSummary?.totals.input_tokens ?? 0
-  const usageOutput = usageSummary?.totals.output_tokens ?? 0
-  const usageByModelRows = Object.entries(usageSummary?.by_model || {})
+  const readStoredApiKeys = () => {
+    try {
+      const raw = window.localStorage.getItem(API_KEY_STORAGE)
+      if (!raw) return {}
+      const parsed = JSON.parse(raw)
+      return parsed && typeof parsed === 'object' ? (parsed as StoredApiKeys) : {}
+    } catch {
+      return {}
+    }
+  }
+
+  const saveStoredApiKeys = (next: StoredApiKeys) => {
+    window.localStorage.setItem(API_KEY_STORAGE, JSON.stringify(next))
+  }
+
+  const loadUsageBreakdown = async () => {
+    setUsageLoading(true)
+    setUsageError('')
+    try {
+      const response = await fetch(`/api/chat/usage?days=7&limit=100&breakdown=${usageBreakdown}`, {
+        headers: buildApiHeaders(),
+      })
+      if (!response.ok) {
+        throw new Error(await parseApiError(response))
+      }
+      setUsageData(await response.json())
+    } catch (error) {
+      setUsageError(String(error))
+      setUsageData(null)
+    } finally {
+      setUsageLoading(false)
+    }
+  }
+
+  const loadCronData = async () => {
+    setCronLoading(true)
+    setCronError('')
+    try {
+      const [jobsResponse, runsResponse] = await Promise.all([
+        fetch('/api/cron', { headers: buildApiHeaders() }),
+        fetch('/api/cron/runs', { headers: buildApiHeaders() }),
+      ])
+
+      if (!jobsResponse.ok) {
+        throw new Error(await parseApiError(jobsResponse))
+      }
+      const jobsPayload = await jobsResponse.json()
+      setCronJobs(Array.isArray(jobsPayload.jobs) ? (jobsPayload.jobs as CronJob[]) : [])
+      setCronEnabled(jobsPayload.enabled !== false)
+
+      if (runsResponse.ok) {
+        const runsPayload = await runsResponse.json()
+        setCronRuns(Array.isArray(runsPayload.runs) ? (runsPayload.runs as CronRun[]) : [])
+      } else {
+        setCronRuns([])
+      }
+    } catch (error) {
+      setCronError(String(error))
+      setCronJobs([])
+      setCronRuns([])
+    } finally {
+      setCronLoading(false)
+    }
+  }
+
+  const saveCronJob = async () => {
+    if (!cronName.trim() || !cronPrompt.trim()) {
+      setCronError('Name and prompt are required.')
+      return
+    }
+
+    setCronLoading(true)
+    setCronError('')
+    try {
+      const response = await fetch('/api/cron', {
+        method: 'POST',
+        headers: buildApiHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify({
+          name: cronName.trim(),
+          cron_expr: cronExpr,
+          prompt: cronPrompt.trim(),
+          enabled: true,
+          project_dir: projectDir || null,
+        }),
+      })
+      if (!response.ok) {
+        throw new Error(await parseApiError(response))
+      }
+      setCronName('')
+      setCronPrompt('')
+      await loadCronData()
+    } catch (error) {
+      setCronError(String(error))
+    } finally {
+      setCronLoading(false)
+    }
+  }
+
+  const toggleCronJob = async (job: CronJob) => {
+    setCronLoading(true)
+    setCronError('')
+    try {
+      const response = await fetch('/api/cron', {
+        method: 'POST',
+        headers: buildApiHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify({
+          ...job,
+          enabled: !job.enabled,
+          project_dir: job.project_dir || null,
+        }),
+      })
+      if (!response.ok) {
+        throw new Error(await parseApiError(response))
+      }
+      await loadCronData()
+    } catch (error) {
+      setCronError(String(error))
+    } finally {
+      setCronLoading(false)
+    }
+  }
+
+  const removeCronJob = async (name: string) => {
+    setCronLoading(true)
+    setCronError('')
+    try {
+      const response = await fetch(`/api/cron/${encodeURIComponent(name)}`, {
+        method: 'DELETE',
+        headers: buildApiHeaders(),
+      })
+      if (!response.ok) {
+        throw new Error(await parseApiError(response))
+      }
+      await loadCronData()
+    } catch (error) {
+      setCronError(String(error))
+    } finally {
+      setCronLoading(false)
+    }
+  }
+
+  const loadSettings = async () => {
+    setSettingsLoading(true)
+    setSettingsError('')
+    try {
+      const response = await fetch('/api/settings', { headers: buildApiHeaders() })
+      if (!response.ok) {
+        throw new Error(await parseApiError(response))
+      }
+      const payload = await response.json()
+      setSettingsData((payload.settings || {}) as SettingsPayload)
+    } catch (error) {
+      setSettingsError(String(error))
+      setSettingsData({})
+    } finally {
+      setSettingsLoading(false)
+    }
+  }
+
+  const patchSettings = async () => {
+    setSettingsSaving(true)
+    setSettingsError('')
+    try {
+      const toBool = (value: string | undefined) => {
+        return ['1', 'true', 'yes', 'on'].includes(String(value || '').toLowerCase())
+      }
+      const response = await fetch('/api/settings', {
+        method: 'PATCH',
+        headers: buildApiHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify({
+          permission_mode: settingsData.permission_mode,
+          router_mode: settingsData.router_mode,
+          router_strategy: settingsData.router_strategy,
+          max_tokens: Number(settingsData.max_tokens || 8192),
+          max_context_messages: Number(settingsData.max_context_messages || 50),
+          kodo_no_telemetry: toBool(settingsData.kodo_no_telemetry),
+          kodo_enable_image_gen: toBool(settingsData.kodo_enable_image_gen),
+          kodo_enable_tts: toBool(settingsData.kodo_enable_tts),
+          kodo_enable_screenshot: toBool(settingsData.kodo_enable_screenshot),
+          kodo_enable_email: toBool(settingsData.kodo_enable_email),
+          kodo_enable_collab: toBool(settingsData.kodo_enable_collab),
+          kodo_enable_cron: toBool(settingsData.kodo_enable_cron),
+          kodo_enable_streaming_tools: toBool(settingsData.kodo_enable_streaming_tools),
+          kodo_enable_prompt_cache: toBool(settingsData.kodo_enable_prompt_cache),
+          kodo_enable_auto_title: toBool(settingsData.kodo_enable_auto_title),
+        }),
+      })
+      if (!response.ok) {
+        throw new Error(await parseApiError(response))
+      }
+      await Promise.all([loadSettings(), loadUsage(), loadSessions()])
+    } catch (error) {
+      setSettingsError(String(error))
+    } finally {
+      setSettingsSaving(false)
+    }
+  }
+
+  const testApiKey = async (envName: keyof StoredApiKeys) => {
+    setApiKeyStatus((prev) => ({ ...prev, [envName]: 'idle' }))
+    try {
+      const response = await fetch('/api/providers/discover', { headers: buildApiHeaders() })
+      if (!response.ok) {
+        throw new Error(await parseApiError(response))
+      }
+      const payload = await response.json()
+      const keyStatus = (payload.key_status || {}) as Record<string, boolean>
+
+      const map: Record<keyof StoredApiKeys, string> = {
+        OPENAI_API_KEY: 'openai',
+        ANTHROPIC_API_KEY: 'anthropic',
+        GEMINI_API_KEY: 'gemini',
+        DEEPSEEK_API_KEY: 'deepseek',
+        GROQ_API_KEY: 'groq',
+      }
+      setApiKeyStatus((prev) => ({
+        ...prev,
+        [envName]: keyStatus[map[envName]] ? 'ok' : 'error',
+      }))
+    } catch {
+      setApiKeyStatus((prev) => ({ ...prev, [envName]: 'error' }))
+    }
+  }
+
+  useEffect(() => {
+    if (activeView === 'usage') {
+      void loadUsageBreakdown()
+    }
+  }, [activeView, usageBreakdown])
+
+  useEffect(() => {
+    if (activeView === 'agents') {
+      void loadCronData()
+    }
+  }, [activeView])
+
+  useEffect(() => {
+    if (activeView === 'settings') {
+      setApiKeys(readStoredApiKeys())
+      void loadSettings()
+    }
+  }, [activeView])
+
+  const usageSource = usageData || usageSummary
+  const usageCost = usageSource?.totals?.cost_usd_total ?? usageSource?.totals?.estimated_cost_usd ?? 0
+  const usageInput = usageSource?.totals?.input_tokens ?? 0
+  const usageOutput = usageSource?.totals?.output_tokens ?? 0
+  const usageByModelRows = Object.entries((usageSource?.by_model || {}) as Record<string, any>)
+  const usageBySessionRows = Object.entries((usageSource?.by_session || {}) as Record<string, any>)
 
   const openSearch = () => {
     setActiveView('sessions')
@@ -786,6 +1080,12 @@ export function Sidebar({ collapsed, onToggleCollapse }: SidebarProps) {
             active={activeView === 'review'}
             onClick={() => setActiveView('review')}
           />
+          <PanelNav
+            icon={<Settings size={15} />}
+            label="Settings"
+            active={activeView === 'settings'}
+            onClick={() => setActiveView('settings')}
+          />
         </div>
 
         <div style={{ flex: 1, minHeight: 0, overflow: 'hidden' }}>
@@ -991,22 +1291,226 @@ export function Sidebar({ collapsed, onToggleCollapse }: SidebarProps) {
                   </div>
                 )}
               </button>
+
+              <div style={{ border: '1px solid var(--border)', borderRadius: 10, background: 'var(--bg-2)', padding: 8, display: 'grid', gap: 8 }}>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+                  <div style={{ fontSize: 12, color: 'var(--text-0)' }}>Scheduled Jobs</div>
+                  <button
+                    type="button"
+                    onClick={() => void loadCronData()}
+                    style={{
+                      border: '1px solid var(--border)',
+                      borderRadius: 8,
+                      background: 'var(--bg-3)',
+                      color: 'var(--text-1)',
+                      fontSize: 10,
+                      fontFamily: 'var(--font-mono)',
+                      cursor: 'pointer',
+                      padding: '4px 7px',
+                    }}
+                  >
+                    Refresh
+                  </button>
+                </div>
+
+                {!cronEnabled && (
+                  <div style={{ fontSize: 11, color: 'var(--yellow)' }}>
+                    Cron scheduler is disabled (KODO_ENABLE_CRON=0).
+                  </div>
+                )}
+
+                <div style={{ display: 'grid', gap: 6 }}>
+                  <input
+                    value={cronName}
+                    onChange={(event) => setCronName(event.target.value)}
+                    placeholder="Job name"
+                    style={{
+                      width: '100%',
+                      background: 'var(--bg-1)',
+                      border: '1px solid var(--border)',
+                      borderRadius: 8,
+                      color: 'var(--text-0)',
+                      padding: '6px 8px',
+                      fontSize: 11,
+                    }}
+                  />
+                  <select
+                    value={cronExpr}
+                    onChange={(event) => setCronExpr(event.target.value)}
+                    style={{
+                      width: '100%',
+                      background: 'var(--bg-1)',
+                      border: '1px solid var(--border)',
+                      borderRadius: 8,
+                      color: 'var(--text-0)',
+                      padding: '6px 8px',
+                      fontSize: 11,
+                    }}
+                  >
+                    <option value="every_5_minutes">every_5_minutes</option>
+                    <option value="every_30_minutes">every_30_minutes</option>
+                    <option value="every_1_hour">every_1_hour</option>
+                    <option value="every_6_hours">every_6_hours</option>
+                    <option value="daily_09:00">daily_09:00</option>
+                  </select>
+                  <textarea
+                    value={cronPrompt}
+                    onChange={(event) => setCronPrompt(event.target.value)}
+                    placeholder="Prompt to run on schedule"
+                    rows={3}
+                    style={{
+                      width: '100%',
+                      background: 'var(--bg-1)',
+                      border: '1px solid var(--border)',
+                      borderRadius: 8,
+                      color: 'var(--text-0)',
+                      padding: '6px 8px',
+                      fontSize: 11,
+                      resize: 'vertical',
+                    }}
+                  />
+                  <button
+                    type="button"
+                    onClick={() => void saveCronJob()}
+                    disabled={cronLoading || !cronEnabled}
+                    style={{
+                      border: '1px solid var(--border)',
+                      borderRadius: 8,
+                      background: 'var(--bg-3)',
+                      color: 'var(--text-0)',
+                      fontSize: 11,
+                      fontFamily: 'var(--font-mono)',
+                      cursor: cronLoading || !cronEnabled ? 'not-allowed' : 'pointer',
+                      padding: '6px 8px',
+                      opacity: cronLoading || !cronEnabled ? 0.6 : 1,
+                    }}
+                  >
+                    New job
+                  </button>
+                </div>
+
+                <div style={{ display: 'grid', gap: 5 }}>
+                  {cronJobs.length === 0 && (
+                    <div style={{ fontSize: 11, color: 'var(--text-2)' }}>
+                      {cronLoading ? 'Loading jobs...' : 'No scheduled jobs yet.'}
+                    </div>
+                  )}
+                  {cronJobs.map((job) => (
+                    <div key={job.name} style={{ border: '1px solid var(--border)', borderRadius: 8, background: 'var(--bg-1)', padding: 7, display: 'grid', gap: 5 }}>
+                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 6 }}>
+                        <div style={{ fontSize: 11, color: 'var(--text-0)' }}>{job.name}</div>
+                        <div style={{ fontSize: 10, color: job.enabled ? 'var(--green)' : 'var(--text-2)' }}>
+                          {job.enabled ? 'enabled' : 'disabled'}
+                        </div>
+                      </div>
+                      <div style={{ fontSize: 10, color: 'var(--text-2)' }}>{job.cron_expr}</div>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                        <button
+                          type="button"
+                          onClick={() => void toggleCronJob(job)}
+                          style={{
+                            border: '1px solid var(--border)',
+                            borderRadius: 6,
+                            background: 'var(--bg-3)',
+                            color: 'var(--text-1)',
+                            fontSize: 10,
+                            cursor: 'pointer',
+                            padding: '4px 6px',
+                          }}
+                        >
+                          {job.enabled ? 'Disable' : 'Enable'}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => void removeCronJob(job.name)}
+                          style={{
+                            border: '1px solid var(--border)',
+                            borderRadius: 6,
+                            background: 'var(--bg-3)',
+                            color: 'var(--red)',
+                            fontSize: 10,
+                            cursor: 'pointer',
+                            padding: '4px 6px',
+                          }}
+                        >
+                          Delete
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+
+                <div style={{ borderTop: '1px solid var(--border)', paddingTop: 6, display: 'grid', gap: 4 }}>
+                  <div style={{ fontSize: 11, color: 'var(--text-2)' }}>Recent runs</div>
+                  {cronRuns.length === 0 && <div style={{ fontSize: 10, color: 'var(--text-2)' }}>No runs yet.</div>}
+                  {cronRuns.slice(0, 5).map((run, idx) => (
+                    <div key={`${run.task_id || 'run'}-${idx}`} style={{ fontSize: 10, color: 'var(--text-1)' }}>
+                      {(run.job_name || 'job')} - {(run.task_id || 'task')} - {run.fired_at ? formatDate(run.fired_at) : 'n/a'}
+                    </div>
+                  ))}
+                </div>
+
+                {cronError && <div style={{ fontSize: 11, color: 'var(--red)' }}>{cronError}</div>}
+              </div>
             </div>
           )}
 
           {activeView === 'usage' && (
             <div style={{ height: '100%', overflowY: 'auto', padding: '10px 10px 12px', display: 'grid', gap: 8 }}>
+              <div style={{ display: 'flex', gap: 6 }}>
+                <button
+                  type="button"
+                  onClick={() => setUsageBreakdown('model')}
+                  style={{
+                    border: '1px solid var(--border)',
+                    borderRadius: 8,
+                    background: usageBreakdown === 'model' ? 'var(--bg-3)' : 'var(--bg-2)',
+                    color: usageBreakdown === 'model' ? 'var(--text-0)' : 'var(--text-2)',
+                    fontSize: 11,
+                    fontFamily: 'var(--font-mono)',
+                    cursor: 'pointer',
+                    padding: '5px 8px',
+                  }}
+                >
+                  By model
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setUsageBreakdown('sessions')}
+                  style={{
+                    border: '1px solid var(--border)',
+                    borderRadius: 8,
+                    background: usageBreakdown === 'sessions' ? 'var(--bg-3)' : 'var(--bg-2)',
+                    color: usageBreakdown === 'sessions' ? 'var(--text-0)' : 'var(--text-2)',
+                    fontSize: 11,
+                    fontFamily: 'var(--font-mono)',
+                    cursor: 'pointer',
+                    padding: '5px 8px',
+                  }}
+                >
+                  By session
+                </button>
+              </div>
+
               <UsageCard label="Estimated cost (7D)" value={`$${usageCost.toFixed(4)}`} />
               <UsageCard label="Input tokens" value={usageInput.toLocaleString()} />
               <UsageCard label="Output tokens" value={usageOutput.toLocaleString()} />
 
               <div style={{ border: '1px solid var(--border)', borderRadius: 10, background: 'var(--bg-2)', padding: 8 }}>
-                <div style={{ fontSize: 11, color: 'var(--text-2)', marginBottom: 6 }}>By model</div>
-                {usageByModelRows.length === 0 && (
+                <div style={{ fontSize: 11, color: 'var(--text-2)', marginBottom: 6 }}>
+                  {usageBreakdown === 'sessions' ? 'By session' : 'By model'}
+                </div>
+
+                {usageLoading && <div style={{ fontSize: 11, color: 'var(--text-2)' }}>Loading usage...</div>}
+                {usageError && <div style={{ fontSize: 11, color: 'var(--red)' }}>{usageError}</div>}
+
+                {usageBreakdown === 'model' && usageByModelRows.length === 0 && (
                   <div style={{ fontSize: 11, color: 'var(--text-2)' }}>No usage events yet.</div>
                 )}
-                {usageByModelRows.map(([model, row]) => {
-                  const cost = row.cost_usd_total ?? row.estimated_cost_usd ?? 0
+
+                {usageBreakdown === 'model' && usageByModelRows.map(([model, row]) => {
+                  const entry = row as Record<string, number>
+                  const cost = Number(entry.cost_usd_total ?? entry.estimated_cost_usd ?? 0)
                   return (
                     <div
                       key={model}
@@ -1019,9 +1523,49 @@ export function Sidebar({ collapsed, onToggleCollapse }: SidebarProps) {
                       }}
                     >
                       <div style={{ color: 'var(--text-0)', marginBottom: 2 }}>{model}</div>
-                      <div>In {row.input_tokens.toLocaleString()} / Out {row.output_tokens.toLocaleString()}</div>
+                      <div>
+                        In {Number(entry.input_tokens || 0).toLocaleString()} / Out {Number(entry.output_tokens || 0).toLocaleString()}
+                      </div>
                       <div>${cost.toFixed(4)}</div>
                     </div>
+                  )
+                })}
+
+                {usageBreakdown === 'sessions' && usageBySessionRows.length === 0 && (
+                  <div style={{ fontSize: 11, color: 'var(--text-2)' }}>No session usage yet.</div>
+                )}
+
+                {usageBreakdown === 'sessions' && usageBySessionRows.map(([sid, row]) => {
+                  const entry = row as Record<string, number>
+                  const cost = Number(entry.cost_usd_total ?? entry.estimated_cost_usd ?? 0)
+                  return (
+                    <button
+                      key={sid}
+                      type="button"
+                      onClick={() => {
+                        if (!sid || sid === 'unknown') return
+                        void loadSession(sid)
+                        setActiveView('sessions')
+                      }}
+                      style={{
+                        width: '100%',
+                        border: '1px solid var(--border)',
+                        borderRadius: 8,
+                        background: 'var(--bg-1)',
+                        color: 'var(--text-1)',
+                        textAlign: 'left',
+                        cursor: sid === 'unknown' ? 'default' : 'pointer',
+                        padding: '6px 8px',
+                        display: 'grid',
+                        gap: 2,
+                        marginTop: 6,
+                      }}
+                    >
+                      <span style={{ color: 'var(--text-0)', fontSize: 11 }}>{sid}</span>
+                      <span style={{ fontSize: 10 }}>
+                        In {Number(entry.input_tokens || 0).toLocaleString()} / Out {Number(entry.output_tokens || 0).toLocaleString()} - ${cost.toFixed(4)}
+                      </span>
+                    </button>
                   )
                 })}
               </div>
@@ -1038,6 +1582,250 @@ export function Sidebar({ collapsed, onToggleCollapse }: SidebarProps) {
 
           {activeView === 'review' && (
             <CodeReviewPanel sessionId={sessionId} projectDir={projectDir} />
+          )}
+
+          {activeView === 'settings' && (
+            <div style={{ height: '100%', overflowY: 'auto', padding: '10px 10px 12px', display: 'grid', gap: 8 }}>
+              <div style={{ border: '1px solid var(--border)', borderRadius: 10, background: 'var(--bg-2)', padding: 8, display: 'grid', gap: 8 }}>
+                <div style={{ fontSize: 12, color: 'var(--text-0)' }}>Feature flags</div>
+                {[
+                  ['kodo_enable_image_gen', 'Image generation'],
+                  ['kodo_enable_tts', 'Text to speech'],
+                  ['kodo_enable_screenshot', 'Screenshot tool'],
+                  ['kodo_enable_email', 'Email tool'],
+                  ['kodo_enable_collab', 'Collaboration'],
+                  ['kodo_enable_cron', 'Cron scheduler'],
+                  ['kodo_enable_streaming_tools', 'Streaming tools'],
+                  ['kodo_enable_prompt_cache', 'Prompt cache'],
+                  ['kodo_enable_auto_title', 'Auto title'],
+                  ['kodo_no_telemetry', 'Disable telemetry'],
+                ].map(([key, label]) => {
+                  const value = String(settingsData[key] || '').toLowerCase()
+                  const enabled = ['1', 'true', 'yes', 'on'].includes(value)
+                  return (
+                    <label key={key} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, fontSize: 11, color: 'var(--text-1)' }}>
+                      <span>{label}</span>
+                      <input
+                        type="checkbox"
+                        checked={enabled}
+                        onChange={(event) => {
+                          setSettingsData((prev) => ({ ...prev, [key]: event.target.checked ? '1' : '0' }))
+                        }}
+                      />
+                    </label>
+                  )
+                })}
+              </div>
+
+              <div style={{ border: '1px solid var(--border)', borderRadius: 10, background: 'var(--bg-2)', padding: 8, display: 'grid', gap: 7 }}>
+                <div style={{ fontSize: 12, color: 'var(--text-0)' }}>Agent behavior</div>
+                <label style={{ display: 'grid', gap: 4, fontSize: 11, color: 'var(--text-2)' }}>
+                  Permission mode
+                  <select
+                    value={settingsData.permission_mode || 'ask'}
+                    onChange={(event) => setSettingsData((prev) => ({ ...prev, permission_mode: event.target.value }))}
+                    style={{
+                      width: '100%',
+                      background: 'var(--bg-1)',
+                      border: '1px solid var(--border)',
+                      borderRadius: 8,
+                      color: 'var(--text-0)',
+                      padding: '6px 8px',
+                      fontSize: 11,
+                    }}
+                  >
+                    <option value="ask">ask</option>
+                    <option value="auto">auto</option>
+                    <option value="yolo">yolo</option>
+                  </select>
+                </label>
+
+                <label style={{ display: 'grid', gap: 4, fontSize: 11, color: 'var(--text-2)' }}>
+                  Max tokens
+                  <input
+                    type="number"
+                    value={settingsData.max_tokens || '8192'}
+                    onChange={(event) => setSettingsData((prev) => ({ ...prev, max_tokens: event.target.value }))}
+                    style={{
+                      width: '100%',
+                      background: 'var(--bg-1)',
+                      border: '1px solid var(--border)',
+                      borderRadius: 8,
+                      color: 'var(--text-0)',
+                      padding: '6px 8px',
+                      fontSize: 11,
+                    }}
+                  />
+                </label>
+
+                <label style={{ display: 'grid', gap: 4, fontSize: 11, color: 'var(--text-2)' }}>
+                  Max context messages
+                  <input
+                    type="number"
+                    value={settingsData.max_context_messages || '50'}
+                    onChange={(event) => setSettingsData((prev) => ({ ...prev, max_context_messages: event.target.value }))}
+                    style={{
+                      width: '100%',
+                      background: 'var(--bg-1)',
+                      border: '1px solid var(--border)',
+                      borderRadius: 8,
+                      color: 'var(--text-0)',
+                      padding: '6px 8px',
+                      fontSize: 11,
+                    }}
+                  />
+                </label>
+              </div>
+
+              <div style={{ border: '1px solid var(--border)', borderRadius: 10, background: 'var(--bg-2)', padding: 8, display: 'grid', gap: 7 }}>
+                <div style={{ fontSize: 12, color: 'var(--text-0)' }}>Router</div>
+                <label style={{ display: 'grid', gap: 4, fontSize: 11, color: 'var(--text-2)' }}>
+                  Router mode
+                  <select
+                    value={settingsData.router_mode || 'fixed'}
+                    onChange={(event) => setSettingsData((prev) => ({ ...prev, router_mode: event.target.value }))}
+                    style={{
+                      width: '100%',
+                      background: 'var(--bg-1)',
+                      border: '1px solid var(--border)',
+                      borderRadius: 8,
+                      color: 'var(--text-0)',
+                      padding: '6px 8px',
+                      fontSize: 11,
+                    }}
+                  >
+                    <option value="fixed">fixed</option>
+                    <option value="smart">smart</option>
+                  </select>
+                </label>
+
+                <label style={{ display: 'grid', gap: 4, fontSize: 11, color: 'var(--text-2)' }}>
+                  Router strategy
+                  <select
+                    value={settingsData.router_strategy || 'balanced'}
+                    onChange={(event) => setSettingsData((prev) => ({ ...prev, router_strategy: event.target.value }))}
+                    style={{
+                      width: '100%',
+                      background: 'var(--bg-1)',
+                      border: '1px solid var(--border)',
+                      borderRadius: 8,
+                      color: 'var(--text-0)',
+                      padding: '6px 8px',
+                      fontSize: 11,
+                    }}
+                  >
+                    <option value="balanced">balanced</option>
+                    <option value="speed">speed</option>
+                    <option value="quality">quality</option>
+                    <option value="cost">cost</option>
+                  </select>
+                </label>
+              </div>
+
+              <div style={{ border: '1px solid var(--border)', borderRadius: 10, background: 'var(--bg-2)', padding: 8, display: 'grid', gap: 7 }}>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+                  <div style={{ fontSize: 12, color: 'var(--text-0)' }}>API keys</div>
+                  <button
+                    type="button"
+                    onClick={() => setShowApiKeys((prev) => !prev)}
+                    style={{
+                      border: '1px solid var(--border)',
+                      borderRadius: 8,
+                      background: 'var(--bg-3)',
+                      color: 'var(--text-1)',
+                      fontSize: 10,
+                      fontFamily: 'var(--font-mono)',
+                      cursor: 'pointer',
+                      padding: '4px 7px',
+                    }}
+                  >
+                    {showApiKeys ? 'Hide' : 'Show'}
+                  </button>
+                </div>
+
+                {([
+                  ['OPENAI_API_KEY', 'OpenAI'],
+                  ['ANTHROPIC_API_KEY', 'Anthropic'],
+                  ['GEMINI_API_KEY', 'Gemini'],
+                  ['DEEPSEEK_API_KEY', 'DeepSeek'],
+                  ['GROQ_API_KEY', 'Groq'],
+                ] as Array<[keyof StoredApiKeys, string]>).map(([key, label]) => (
+                  <div key={key} style={{ display: 'grid', gap: 4 }}>
+                    <div style={{ fontSize: 11, color: 'var(--text-2)' }}>{label}</div>
+                    <div style={{ display: 'flex', gap: 6 }}>
+                      <input
+                        type={showApiKeys ? 'text' : 'password'}
+                        value={String(apiKeys[key] || '')}
+                        onChange={(event) => setApiKeys((prev) => ({ ...prev, [key]: event.target.value }))}
+                        placeholder={`Enter ${label} key`}
+                        style={{
+                          flex: 1,
+                          background: 'var(--bg-1)',
+                          border: '1px solid var(--border)',
+                          borderRadius: 8,
+                          color: 'var(--text-0)',
+                          padding: '6px 8px',
+                          fontSize: 11,
+                        }}
+                      />
+                      <button
+                        type="button"
+                        onClick={() => void testApiKey(key)}
+                        style={{
+                          border: '1px solid var(--border)',
+                          borderRadius: 8,
+                          background: 'var(--bg-3)',
+                          color: apiKeyStatus[key] === 'ok' ? 'var(--green)' : apiKeyStatus[key] === 'error' ? 'var(--red)' : 'var(--text-1)',
+                          fontSize: 10,
+                          cursor: 'pointer',
+                          padding: '4px 7px',
+                        }}
+                      >
+                        {apiKeyStatus[key] === 'ok' ? 'OK' : apiKeyStatus[key] === 'error' ? 'Fail' : 'Test'}
+                      </button>
+                    </div>
+                  </div>
+                ))}
+
+                <button
+                  type="button"
+                  onClick={() => saveStoredApiKeys(apiKeys)}
+                  style={{
+                    border: '1px solid var(--border)',
+                    borderRadius: 8,
+                    background: 'var(--bg-3)',
+                    color: 'var(--text-0)',
+                    fontSize: 11,
+                    fontFamily: 'var(--font-mono)',
+                    cursor: 'pointer',
+                    padding: '6px 8px',
+                  }}
+                >
+                  Save API keys locally
+                </button>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => void patchSettings()}
+                disabled={settingsLoading || settingsSaving}
+                style={{
+                  border: '1px solid var(--border)',
+                  borderRadius: 8,
+                  background: 'var(--bg-3)',
+                  color: 'var(--text-0)',
+                  fontSize: 11,
+                  fontFamily: 'var(--font-mono)',
+                  cursor: settingsLoading || settingsSaving ? 'not-allowed' : 'pointer',
+                  padding: '7px 8px',
+                  opacity: settingsLoading || settingsSaving ? 0.6 : 1,
+                }}
+              >
+                {settingsSaving ? 'Saving...' : 'Save settings'}
+              </button>
+
+              {settingsError && <div style={{ fontSize: 11, color: 'var(--red)' }}>{settingsError}</div>}
+            </div>
           )}
         </div>
 

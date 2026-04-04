@@ -100,7 +100,7 @@ def estimate_cache_cost_usd(provider: str, model: str, input_cache_read_tokens: 
 
 def record_usage_event(
     *,
-    session_id: str,
+    session_id: str | None,
     model: str,
     input_tokens: int,
     output_tokens: int,
@@ -110,7 +110,7 @@ def record_usage_event(
 ) -> dict[str, Any]:
     event = {
         "ts": _utc_now().isoformat(),
-        "session_id": session_id,
+        "session_id": str(session_id or ""),
         "provider": provider,
         "model": model,
         "input_tokens": int(input_tokens),

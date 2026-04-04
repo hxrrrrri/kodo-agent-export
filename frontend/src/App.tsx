@@ -48,6 +48,16 @@ export default function App() {
     window.localStorage.setItem(THEME_STORAGE_KEY, theme)
   }, [theme])
 
+  useEffect(() => {
+    const handler = () => {
+      setSidebarCollapsed((prev) => !prev)
+    }
+    window.addEventListener('kodo:toggle-sidebar', handler)
+    return () => {
+      window.removeEventListener('kodo:toggle-sidebar', handler)
+    }
+  }, [])
+
   const toggleSidebar = () => {
     setSidebarCollapsed((prev) => !prev)
   }

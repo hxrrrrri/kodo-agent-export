@@ -199,7 +199,7 @@ export function MessageBubble({ message, searchQuery }: { message: Message; sear
   if (isUser) {
     return (
       <div
-        className="fade-in"
+        className="fade-in message-enter"
         style={{
           display: 'flex',
           justifyContent: 'flex-end',
@@ -240,7 +240,7 @@ export function MessageBubble({ message, searchQuery }: { message: Message; sear
   }
 
   return (
-    <div className="fade-in" style={{ marginBottom: 24 }}>
+    <div className="fade-in message-enter" style={{ marginBottom: 24 }}>
       {/* Agent label */}
       <div style={{
         fontSize: 10,

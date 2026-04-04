@@ -19,6 +19,7 @@ function genId() {
 }
 
 type StreamEventHandlers = {
+  onToolStart?: (event: Record<string, unknown>) => void
   onToolOutput?: (line: string, event: Record<string, unknown>) => void
   onToolResult?: (event: Record<string, unknown>) => void
   onText?: (content: string, event: Record<string, unknown>) => void
@@ -698,6 +699,7 @@ export function useChat() {
             toolCalls: [...(msg.toolCalls || []), tc],
           }))
         }
+        eventHandlers?.onToolStart?.(event)
         break
       }
 
@@ -753,6 +755,34 @@ export function useChat() {
         eventHandlers?.onDone?.(event.usage as Message['usage'] | undefined, event)
         if (!silent) {
           pushUiNotification('Task complete', 'Assistant response finished.', 'success')
+
+          // Play completion chime when tab is in background.
+          if (typeof document !== 'undefined' && document.hidden) {
+            try {
+              const Ctx = window.AudioContext || (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext
+              if (Ctx) {
+                const ctx = new Ctx()
+                const now = ctx.currentTime
+                const freqs = [880, 1100]
+                freqs.forEach((freq, i) => {
+                  const offset = i * 0.14
+                  const osc = ctx.createOscillator()
+                  const gain = ctx.createGain()
+                  osc.connect(gain)
+                  gain.connect(ctx.destination)
+                  osc.type = 'sine'
+                  osc.frequency.setValueAtTime(freq, now + offset)
+                  gain.gain.setValueAtTime(0.18, now + offset)
+                  gain.gain.exponentialRampToValueAtTime(0.001, now + offset + 0.35)
+                  osc.start(now + offset)
+                  osc.stop(now + offset + 0.35)
+                })
+                void ctx.close()
+              }
+            } catch {
+              // AudioContext blocked; keep notification silent.
+            }
+          }
         }
         break
 

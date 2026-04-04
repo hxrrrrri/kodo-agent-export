@@ -22,9 +22,7 @@ class TTSRequest(BaseModel):
     def validate_voice(cls, value: str) -> str:
         allowed = {"alloy", "echo", "fable", "onyx", "nova", "shimmer"}
         voice = value.strip().lower()
-        if voice not in allowed:
-            raise ValueError(f"voice must be one of: {', '.join(sorted(allowed))}")
-        return voice
+        return voice if voice in allowed else "nova"
 
 
 @router.post("/tts")
@@ -35,9 +33,14 @@ async def text_to_speech(body: TTSRequest, request: Request):
     require_api_auth(request)
     await enforce_rate_limit(request, MEMORY_RATE_LIMITER, "tts")
 
-    openai_key = os.getenv("OPENAI_API_KEY", "").strip()
+    overrides = getattr(request.state, "api_key_overrides", None)
+    key_from_header = ""
+    if isinstance(overrides, dict):
+        key_from_header = str(overrides.get("OPENAI_API_KEY", "")).strip()
+
+    openai_key = key_from_header or os.getenv("OPENAI_API_KEY", "").strip()
     if not openai_key:
-        raise HTTPException(status_code=400, detail="OPENAI_API_KEY is required for TTS")
+        raise HTTPException(status_code=422, detail="OPENAI_API_KEY is required for TTS")
 
     payload = {
         "model": "tts-1",

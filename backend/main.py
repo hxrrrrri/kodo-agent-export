@@ -19,8 +19,12 @@ from fastapi.responses import JSONResponse
 from api.bridge import router as bridge_router
 from api.chat import router as chat_router
 from api.collab import router as collab_router
+from api.cron import router as cron_router, start_cron_loop
 from api.doctor import router as doctor_router
+from api.marketplace import router as marketplace_router
 from api.prompts import router as prompts_router
+from api.security import extract_api_keys_from_header
+from api.settings import router as settings_router
 from api.webhooks import router as webhooks_router
 from api.profiles import router as profiles_router
 from api.providers import router as providers_router
@@ -42,10 +46,35 @@ def _parse_allowed_origins() -> list[str]:
             return origins
     return ["http://localhost:5173", "http://localhost:3000"]
 
+
+tags_metadata = [
+    {"name": "chat", "description": "Core agent chat and streaming"},
+    {"name": "providers", "description": "Smart router and provider management"},
+    {"name": "webhooks", "description": "External trigger endpoints"},
+    {"name": "cron", "description": "Scheduled agent runs"},
+    {"name": "prompts", "description": "Prompt library"},
+    {"name": "skills", "description": "Custom skill management"},
+    {"name": "marketplace", "description": "Pack export/import"},
+    {"name": "settings", "description": "Runtime configuration"},
+    {"name": "tts", "description": "Text-to-speech"},
+    {"name": "collaboration", "description": "Real-time collaboration"},
+    {"name": "doctor", "description": "Health checks"},
+]
+
 app = FastAPI(
     title="KODO Agent API",
-    description="Personal autonomous AI agent powered by Claude",
+    description=(
+        "Personal autonomous AI coding agent. "
+        "Self-hosted, multi-provider, tool-capable. "
+        "See https://github.com/yourname/kodo-agent for setup."
+    ),
     version="1.0.0",
+    docs_url="/docs",
+    redoc_url="/redoc",
+    openapi_url="/openapi.json",
+    contact={"name": "KODO", "url": "https://github.com/yourname/kodo-agent"},
+    license_info={"name": "MIT"},
+    openapi_tags=tags_metadata,
 )
 
 app.add_middleware(
@@ -53,7 +82,7 @@ app.add_middleware(
     allow_origins=_parse_allowed_origins(),
     allow_credentials=True,
     allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
-    allow_headers=["Authorization", "Content-Type", "Accept"],
+    allow_headers=["Authorization", "Content-Type", "Accept", "X-Kodo-Keys"],
 )
 
 app.include_router(chat_router)
@@ -66,6 +95,15 @@ app.include_router(tts_router)
 app.include_router(prompts_router)
 app.include_router(skills_admin_router)
 app.include_router(collab_router)
+app.include_router(cron_router, prefix="/api")
+app.include_router(settings_router, prefix="/api")
+app.include_router(marketplace_router, prefix="/api")
+
+
+@app.middleware("http")
+async def inject_header_api_keys(request: Request, call_next):
+    request.state.api_key_overrides = extract_api_keys_from_header(request)
+    return await call_next(request)
 
 
 @app.middleware("http")
@@ -135,6 +173,11 @@ async def health_ready():
         "status": "ok" if has_provider_key else "degraded",
         "ready": has_provider_key,
     }
+
+
+@app.on_event("startup")
+async def startup_event():
+    start_cron_loop()
 
 
 @app.on_event("shutdown")

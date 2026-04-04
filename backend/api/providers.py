@@ -12,24 +12,37 @@ from providers.smart_router import ROUTER_STRATEGIES, get_smart_router, smart_ro
 router = APIRouter(prefix="/api/providers", tags=["providers"])
 
 
-def _provider_configured(provider: str) -> bool:
+def _request_overrides(request: Request) -> dict[str, str]:
+    raw = getattr(request.state, "api_key_overrides", None)
+    return raw if isinstance(raw, dict) else {}
+
+
+def _env_or_override(request: Request, key: str) -> str:
+    overrides = _request_overrides(request)
+    value = str(overrides.get(key, "")).strip()
+    if value:
+        return value
+    return os.getenv(key, "").strip()
+
+
+def _provider_configured(provider: str, request: Request) -> bool:
     name = provider.strip().lower()
     if name == "openai":
-        return bool(os.getenv("OPENAI_API_KEY", "").strip())
+        return bool(_env_or_override(request, "OPENAI_API_KEY"))
     if name == "anthropic":
-        return bool(os.getenv("ANTHROPIC_API_KEY", "").strip())
+        return bool(_env_or_override(request, "ANTHROPIC_API_KEY"))
     if name == "gemini":
-        return bool(os.getenv("GEMINI_API_KEY", "").strip() or os.getenv("GOOGLE_API_KEY", "").strip())
+        return bool(_env_or_override(request, "GEMINI_API_KEY") or _env_or_override(request, "GOOGLE_API_KEY"))
     if name == "deepseek":
-        return bool(os.getenv("DEEPSEEK_API_KEY", "").strip())
+        return bool(_env_or_override(request, "DEEPSEEK_API_KEY"))
     if name == "groq":
-        return bool(os.getenv("GROQ_API_KEY", "").strip())
+        return bool(_env_or_override(request, "GROQ_API_KEY"))
     if name == "openrouter":
-        return bool(os.getenv("OPENROUTER_API_KEY", "").strip())
+        return bool(_env_or_override(request, "OPENROUTER_API_KEY"))
     if name == "github-models":
-        return bool(os.getenv("GITHUB_MODELS_TOKEN", "").strip())
+        return bool(_env_or_override(request, "GITHUB_MODELS_TOKEN"))
     if name == "codex":
-        return bool(os.getenv("CODEX_API_KEY", "").strip())
+        return bool(_env_or_override(request, "CODEX_API_KEY"))
     if name == "ollama":
         return bool(os.getenv("OLLAMA_BASE_URL", "").strip())
     if name == "atomic-chat":
@@ -82,6 +95,13 @@ async def discover_providers_endpoint(request: Request):
     return {
         "providers": local,
         "models": models,
+        "key_status": {
+            "openai": bool(_env_or_override(request, "OPENAI_API_KEY")),
+            "anthropic": bool(_env_or_override(request, "ANTHROPIC_API_KEY")),
+            "gemini": bool(_env_or_override(request, "GEMINI_API_KEY") or _env_or_override(request, "GOOGLE_API_KEY")),
+            "deepseek": bool(_env_or_override(request, "DEEPSEEK_API_KEY")),
+            "groq": bool(_env_or_override(request, "GROQ_API_KEY")),
+        },
     }
 
 
@@ -112,7 +132,7 @@ async def providers_status_endpoint(request: Request):
             if candidate in seen:
                 continue
             seen.add(candidate)
-            if _provider_configured(candidate):
+            if _provider_configured(candidate, request):
                 provider = candidate
                 break
 

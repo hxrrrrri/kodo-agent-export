@@ -18,6 +18,8 @@ def _normalize_url(url: str) -> str:
     text = url.strip()
     if not text:
         return ""
+    if "://" in text and not text.startswith(("http://", "https://")):
+        return ""
     if not text.startswith(("http://", "https://")):
         text = f"https://{text}"
     parsed = urlparse(text)
@@ -120,7 +122,7 @@ class ScreenshotTool(BaseTool):
 
         target = _normalize_url(url)
         if not target:
-            return ToolResult(success=False, output="", error="Invalid URL")
+            return ToolResult(success=False, output="", error="Invalid URL. Use http:// or https://")
 
         width = max(320, min(int(width or 1280), 3840))
         height = max(240, min(int(height or 800), 2160))

@@ -1,4 +1,5 @@
 import asyncio
+import json
 import os
 import time
 from collections import deque
@@ -112,3 +113,29 @@ async def enforce_rate_limit(request: Request, limiter: SlidingWindowRateLimiter
         detail=f"Rate limit exceeded. Retry in {retry_after}s.",
         headers={"Retry-After": str(retry_after)},
     )
+
+
+def extract_api_keys_from_header(request: Request) -> dict[str, str]:
+    """Extract API key overrides from the X-Kodo-Keys JSON header."""
+    raw = request.headers.get("x-kodo-keys", "")
+    if not raw:
+        return {}
+
+    try:
+        payload = json.loads(raw)
+    except Exception:
+        return {}
+
+    if not isinstance(payload, dict):
+        return {}
+
+    result: dict[str, str] = {}
+    for key, value in payload.items():
+        if not isinstance(key, str):
+            continue
+        if not isinstance(value, str):
+            continue
+        if not value.strip():
+            continue
+        result[key.strip()] = value.strip()
+    return result

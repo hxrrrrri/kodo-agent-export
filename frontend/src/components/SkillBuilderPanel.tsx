@@ -1,5 +1,5 @@
 import { CSSProperties, ChangeEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { Plus, RefreshCw, Save, Trash2, Upload } from 'lucide-react'
+import { Download, Plus, RefreshCw, Save, Trash2, Upload } from 'lucide-react'
 import { buildApiHeaders, parseApiError } from '../lib/api'
 
 type CustomSkill = {
@@ -17,6 +17,7 @@ export function SkillBuilderPanel() {
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
   const uploadInputRef = useRef<HTMLInputElement>(null)
+  const importPackInputRef = useRef<HTMLInputElement>(null)
 
   const selectedSkill = useMemo(
     () => skills.find((row) => row.name === selectedName) || null,
@@ -127,6 +128,63 @@ export function SkillBuilderPanel() {
     event.target.value = ''
   }
 
+  const exportMarketplacePack = async () => {
+    setSaving(true)
+    setError('')
+    try {
+      const response = await fetch('/api/marketplace/export', {
+        method: 'POST',
+        headers: buildApiHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify({
+          name: 'kodo-skills-pack',
+          description: 'Exported skills pack from KODO Skill Builder',
+          author: 'kodo-user',
+        }),
+      })
+      if (!response.ok) {
+        throw new Error(await parseApiError(response))
+      }
+
+      const blob = await response.blob()
+      const url = URL.createObjectURL(blob)
+      const anchor = document.createElement('a')
+      anchor.href = url
+      anchor.download = 'kodo-skills-pack.kodopack'
+      anchor.click()
+      URL.revokeObjectURL(url)
+    } catch (err) {
+      setError(String(err))
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const importMarketplacePack = async (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0]
+    if (!file) return
+
+    setSaving(true)
+    setError('')
+    try {
+      const form = new FormData()
+      form.append('file', file)
+      const response = await fetch('/api/marketplace/import', {
+        method: 'POST',
+        headers: buildApiHeaders(),
+        body: form,
+      })
+      if (!response.ok) {
+        throw new Error(await parseApiError(response))
+      }
+      await loadSkills()
+    } catch (err) {
+      setError(String(err))
+    } finally {
+      setSaving(false)
+      event.target.value = ''
+    }
+  }
+
   return (
     <div style={{ height: '100%', overflowY: 'auto', padding: '10px 10px 12px', display: 'grid', gap: 8 }}>
       <div style={{
@@ -194,6 +252,12 @@ export function SkillBuilderPanel() {
         <button type="button" onClick={() => uploadInputRef.current?.click()} style={miniButtonStyle}>
           <Upload size={12} /> Upload .md
         </button>
+        <button type="button" onClick={() => void exportMarketplacePack()} disabled={saving} style={miniButtonStyle}>
+          <Download size={12} /> Export pack
+        </button>
+        <button type="button" onClick={() => importPackInputRef.current?.click()} disabled={saving} style={miniButtonStyle}>
+          <Upload size={12} /> Import pack
+        </button>
       </div>
 
       <input
@@ -202,6 +266,14 @@ export function SkillBuilderPanel() {
         accept=".md,text/markdown,text/plain"
         style={{ display: 'none' }}
         onChange={handleUpload}
+      />
+
+      <input
+        ref={importPackInputRef}
+        type="file"
+        accept=".kodopack,.zip,application/zip"
+        style={{ display: 'none' }}
+        onChange={importMarketplacePack}
       />
 
       {selectedSkill?.description && (

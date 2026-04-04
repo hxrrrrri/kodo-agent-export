@@ -1748,15 +1748,57 @@ async def usage_summary(
     request: Request,
     days: int = Query(default=7, ge=1, le=365),
     limit: int = Query(default=100, ge=1, le=500),
+    breakdown: str = Query(default="model", pattern="^(model|sessions)$"),
 ):
     require_api_auth(request)
     await enforce_rate_limit(request, MEMORY_RATE_LIMITER, "usage")
     data = summarize_usage(days=days, limit=limit)
+
+    if breakdown == "sessions":
+        by_session: dict[str, dict[str, float | int]] = {}
+        for event in data.get("events", []):
+            if not isinstance(event, dict):
+                continue
+            session_id = str(event.get("session_id", "")).strip() or "unknown"
+            row = by_session.setdefault(
+                session_id,
+                {
+                    "input_tokens": 0,
+                    "output_tokens": 0,
+                    "input_cache_read_tokens": 0,
+                    "input_cache_write_tokens": 0,
+                    "cost_usd_total": 0.0,
+                },
+            )
+
+            inp = int(event.get("input_tokens", 0) or 0)
+            outp = int(event.get("output_tokens", 0) or 0)
+            cache_read = int(event.get("input_cache_read_tokens", 0) or 0)
+            cache_write = int(event.get("input_cache_write_tokens", 0) or 0)
+            cost = float(event.get("cost_usd_estimated", event.get("estimated_cost_usd", 0.0)) or 0.0)
+
+            row["input_tokens"] = int(row["input_tokens"]) + inp
+            row["output_tokens"] = int(row["output_tokens"]) + outp
+            row["input_cache_read_tokens"] = int(row["input_cache_read_tokens"]) + cache_read
+            row["input_cache_write_tokens"] = int(row["input_cache_write_tokens"]) + cache_write
+            row["cost_usd_total"] = round(float(row["cost_usd_total"]) + cost, 8)
+
+        data["by_session"] = {
+            sid: {
+                **row,
+                "estimated_cost_usd": row.get("cost_usd_total", 0.0),
+            }
+            for sid, row in by_session.items()
+        }
+    else:
+        data["by_session"] = {}
+
     log_audit_event(
         "usage_summary",
         request_id=getattr(request.state, "request_id", None),
         days=days,
         limit=limit,
+        breakdown=breakdown,
         events=data.get("events_count", 0),
     )
     return data

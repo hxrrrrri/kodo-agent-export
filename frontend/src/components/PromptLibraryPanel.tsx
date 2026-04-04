@@ -1,5 +1,5 @@
-import { CSSProperties, useCallback, useEffect, useMemo, useState } from 'react'
-import { Plus, RefreshCw, Trash2, Sparkles, Send } from 'lucide-react'
+import { CSSProperties, ChangeEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { Download, Plus, RefreshCw, Trash2, Sparkles, Send, Upload } from 'lucide-react'
 import { buildApiHeaders, parseApiError } from '../lib/api'
 
 type PromptRow = {
@@ -20,6 +20,7 @@ export function PromptLibraryPanel() {
   const [loading, setLoading] = useState(false)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
+  const importInputRef = useRef<HTMLInputElement>(null)
 
   const selectedPrompt = useMemo(
     () => prompts.find((row) => row.name === selectedName) || null,
@@ -155,6 +156,63 @@ export function PromptLibraryPanel() {
     window.dispatchEvent(new CustomEvent('kodo:insert-prompt', { detail: { text: rendered } }))
   }
 
+  const exportMarketplacePack = async () => {
+    setSaving(true)
+    setError('')
+    try {
+      const response = await fetch('/api/marketplace/export', {
+        method: 'POST',
+        headers: buildApiHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify({
+          name: 'kodo-prompts-pack',
+          description: 'Exported prompt pack from KODO Prompt Library',
+          author: 'kodo-user',
+        }),
+      })
+      if (!response.ok) {
+        throw new Error(await parseApiError(response))
+      }
+
+      const blob = await response.blob()
+      const url = URL.createObjectURL(blob)
+      const anchor = document.createElement('a')
+      anchor.href = url
+      anchor.download = 'kodo-prompts-pack.kodopack'
+      anchor.click()
+      URL.revokeObjectURL(url)
+    } catch (err) {
+      setError(String(err))
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const importMarketplacePack = async (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0]
+    if (!file) return
+
+    setSaving(true)
+    setError('')
+    try {
+      const form = new FormData()
+      form.append('file', file)
+      const response = await fetch('/api/marketplace/import', {
+        method: 'POST',
+        headers: buildApiHeaders(),
+        body: form,
+      })
+      if (!response.ok) {
+        throw new Error(await parseApiError(response))
+      }
+      await loadPrompts()
+    } catch (err) {
+      setError(String(err))
+    } finally {
+      setSaving(false)
+      event.target.value = ''
+    }
+  }
+
   return (
     <div style={{ height: '100%', overflowY: 'auto', padding: '10px 10px 12px', display: 'grid', gap: 8 }}>
       <div style={{
@@ -186,6 +244,23 @@ export function PromptLibraryPanel() {
           </button>
         </div>
       </div>
+
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+        <button type="button" onClick={() => void exportMarketplacePack()} disabled={saving} style={miniButtonStyle}>
+          <Download size={12} /> Export pack
+        </button>
+        <button type="button" onClick={() => importInputRef.current?.click()} disabled={saving} style={miniButtonStyle}>
+          <Upload size={12} /> Import pack
+        </button>
+      </div>
+
+      <input
+        ref={importInputRef}
+        type="file"
+        accept=".kodopack,.zip,application/zip"
+        onChange={importMarketplacePack}
+        style={{ display: 'none' }}
+      />
 
       <select
         value={selectedName}
