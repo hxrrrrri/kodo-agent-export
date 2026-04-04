@@ -480,6 +480,18 @@ export function Sidebar({ collapsed, onToggleCollapse }: SidebarProps) {
     if (collapsed) onToggleCollapse()
   }
 
+  const routeToSelf = () => {
+    setActiveView('sessions')
+    setAgentGraphModalOpen(false)
+    setReplaySessionId(null)
+    if (collapsed) onToggleCollapse()
+
+    if (typeof window !== 'undefined' && (window.location.search || window.location.hash)) {
+      const nextUrl = window.location.pathname || '/'
+      window.history.replaceState({}, '', nextUrl)
+    }
+  }
+
   const toggleTheme = () => {
     setTheme(THEME_TONES[theme] === 'dark' ? 'light' : 'dark')
   }
@@ -523,18 +535,26 @@ export function Sidebar({ collapsed, onToggleCollapse }: SidebarProps) {
           onClick={onToggleCollapse}
         />
 
-        <div
-          title="KODO"
+        <button
+          type="button"
+          title="KODO home"
+          aria-label="KODO home"
+          onClick={routeToSelf}
           style={{
             width: 30,
             height: 30,
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'center',
+            border: 'none',
+            background: 'transparent',
+            cursor: 'pointer',
+            color: 'inherit',
+            borderRadius: 8,
           }}
         >
           <KodoLogoMark size={22} />
-        </div>
+        </button>
 
         <div style={{ width: 18, height: 1, background: 'var(--border)' }} />
 
@@ -630,7 +650,22 @@ export function Sidebar({ collapsed, onToggleCollapse }: SidebarProps) {
             padding: '0 14px',
           }}
         >
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+          <button
+            type="button"
+            onClick={routeToSelf}
+            title="KODO home"
+            aria-label="KODO home"
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 10,
+              border: 'none',
+              background: 'transparent',
+              padding: 0,
+              cursor: 'pointer',
+              color: 'inherit',
+            }}
+          >
             <div style={{
               width: 26,
               height: 26,
@@ -652,7 +687,7 @@ export function Sidebar({ collapsed, onToggleCollapse }: SidebarProps) {
             >
               KODO
             </div>
-          </div>
+          </button>
           <button
             type="button"
             title="Collapse sidebar"
