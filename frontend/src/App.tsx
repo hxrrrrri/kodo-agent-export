@@ -4,6 +4,7 @@ import ChatWindow from './components/ChatWindow'
 import { NotificationCenter } from './components/NotificationCenter'
 import { EditorPanel } from './components/EditorPanel'
 import { useChatStore } from './store/chatStore'
+import { THEME_KEYS, THEME_TONES, ThemeKey } from './store/chatStore'
 import { requestUiNotificationPermission } from './lib/notifications'
 
 const SIDEBAR_COLLAPSE_STORAGE_KEY = 'kodo_sidebar_collapsed'
@@ -31,8 +32,8 @@ export default function App() {
 
   useEffect(() => {
     const saved = window.localStorage.getItem(THEME_STORAGE_KEY)
-    if (saved === 'light' || saved === 'dark') {
-      setTheme(saved)
+    if (saved && (THEME_KEYS as readonly string[]).includes(saved)) {
+      setTheme(saved as ThemeKey)
       return
     }
 
@@ -43,7 +44,7 @@ export default function App() {
   useEffect(() => {
     const root = document.documentElement
     root.setAttribute('data-theme', theme)
-    root.style.colorScheme = theme
+    root.style.colorScheme = THEME_TONES[theme]
     window.localStorage.setItem(THEME_STORAGE_KEY, theme)
   }, [theme])
 

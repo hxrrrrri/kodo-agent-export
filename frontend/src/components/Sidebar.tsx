@@ -17,6 +17,7 @@ import {
   X,
 } from 'lucide-react'
 import { useChat } from '../hooks/useChat'
+import { THEME_TONES } from '../store/chatStore'
 import { Session } from '../store/chatStore'
 import { buildApiHeaders, parseApiError } from '../lib/api'
 import { ProviderPanel } from './ProviderPanel'
@@ -480,8 +481,10 @@ export function Sidebar({ collapsed, onToggleCollapse }: SidebarProps) {
   }
 
   const toggleTheme = () => {
-    setTheme(theme === 'dark' ? 'light' : 'dark')
+    setTheme(THEME_TONES[theme] === 'dark' ? 'light' : 'dark')
   }
+
+  const isLightTheme = THEME_TONES[theme] === 'light'
 
   return (
     <aside
@@ -598,7 +601,7 @@ export function Sidebar({ collapsed, onToggleCollapse }: SidebarProps) {
         <div style={{ flex: 1 }} />
 
         <RailButton
-          icon={theme === 'dark' ? <Sun size={15} /> : <Moon size={15} />}
+          icon={isLightTheme ? <Moon size={15} /> : <Sun size={15} />}
           label="Toggle theme"
           onClick={toggleTheme}
         />
@@ -676,9 +679,9 @@ export function Sidebar({ collapsed, onToggleCollapse }: SidebarProps) {
             onClick={() => void handleNewChat()}
             style={{
               width: '100%',
-              background: 'var(--accent-dim)',
-              border: '1px solid var(--accent)',
-              color: 'var(--accent)',
+              background: 'var(--bg-2)',
+              border: '1px solid var(--border-bright)',
+              color: 'var(--text-0)',
               borderRadius: 8,
               fontSize: 12,
               fontFamily: 'var(--font-mono)',
@@ -688,6 +691,17 @@ export function Sidebar({ collapsed, onToggleCollapse }: SidebarProps) {
               alignItems: 'center',
               justifyContent: 'center',
               gap: 7,
+              transition: 'all 140ms ease',
+            }}
+            onMouseEnter={(event) => {
+              event.currentTarget.style.borderColor = 'var(--border-bright)'
+              event.currentTarget.style.background = 'var(--bg-3)'
+              event.currentTarget.style.transform = 'translateY(-1px)'
+            }}
+            onMouseLeave={(event) => {
+              event.currentTarget.style.borderColor = 'var(--border-bright)'
+              event.currentTarget.style.background = 'var(--bg-2)'
+              event.currentTarget.style.transform = 'translateY(0)'
             }}
           >
             <Plus size={14} /> NEW SESSION
@@ -1007,7 +1021,7 @@ export function Sidebar({ collapsed, onToggleCollapse }: SidebarProps) {
           <button
             type="button"
             onClick={toggleTheme}
-            title={theme === 'dark' ? 'Switch to light theme' : 'Switch to dark theme'}
+            title={isLightTheme ? 'Switch to dark theme' : 'Switch to light theme'}
             aria-label="Toggle theme"
             style={{
               width: 28,
@@ -1022,7 +1036,7 @@ export function Sidebar({ collapsed, onToggleCollapse }: SidebarProps) {
               cursor: 'pointer',
             }}
           >
-            {theme === 'dark' ? <Sun size={14} /> : <Moon size={14} />}
+            {isLightTheme ? <Moon size={14} /> : <Sun size={14} />}
           </button>
         </div>
       </div>

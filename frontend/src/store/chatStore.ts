@@ -1,5 +1,50 @@
 import { create } from 'zustand'
 
+export const THEME_KEYS = [
+  'dark',
+  'light',
+  'ocean',
+  'forest',
+  'midnight',
+  'rose',
+  'sunrise',
+  'nord',
+  'mono',
+  'glass',
+] as const
+
+export type ThemeKey = (typeof THEME_KEYS)[number]
+
+export const THEME_TONES: Record<ThemeKey, 'dark' | 'light'> = {
+  dark: 'dark',
+  light: 'light',
+  ocean: 'dark',
+  forest: 'dark',
+  midnight: 'dark',
+  rose: 'light',
+  sunrise: 'light',
+  nord: 'light',
+  mono: 'dark',
+  glass: 'dark',
+}
+
+export const THEME_OPTIONS: Array<{
+  key: ThemeKey
+  label: string
+  description: string
+}> = [
+  { key: 'dark', label: 'Ember Night', description: 'Warm contrast for focused coding.' },
+  { key: 'light', label: 'Warm Paper', description: 'Soft daylight palette with clean readability.' },
+  { key: 'ocean', label: 'Ocean Deep', description: 'Teal and cyan with calm dark surfaces.' },
+  { key: 'forest', label: 'Forest Signal', description: 'Green-led theme with earthy depth.' },
+  { key: 'midnight', label: 'Midnight Indigo', description: 'Cool indigo tones with crisp accents.' },
+  { key: 'rose', label: 'Rose Quartz', description: 'Balanced light theme with subtle rose highlights.' },
+  { key: 'sunrise', label: 'Sunrise Coral', description: 'Bright warm palette for daytime work.' },
+  { key: 'nord', label: 'Arctic Nord', description: 'Blue-gray minimal theme with high clarity.' },
+  { key: 'mono', label: 'Monochrome Slate', description: 'Neutral grayscale with restrained accents.' },
+  { key: 'glass', label: 'Glassy Aurora', description: 'Premium glassmorphism with layered depth.' },
+]
+
 export type MessageRole = 'user' | 'assistant' | 'system'
 
 export interface ToolCall {
@@ -111,7 +156,7 @@ interface ChatState {
   sessionMode: string
   availableModes: ModeOption[]
   commands: CommandDefinition[]
-  theme: 'dark' | 'light'
+  theme: ThemeKey
   searchQuery: string
   messageSearchQuery: string
 
@@ -130,7 +175,7 @@ interface ChatState {
   setSessionMode: (mode: string) => void
   setAvailableModes: (modes: ModeOption[]) => void
   setCommands: (commands: CommandDefinition[]) => void
-  setTheme: (theme: 'dark' | 'light') => void
+  setTheme: (theme: ThemeKey) => void
   setSearchQuery: (query: string) => void
   setMessageSearchQuery: (query: string) => void
   clearMessages: () => void

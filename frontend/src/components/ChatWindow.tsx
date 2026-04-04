@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState, KeyboardEvent, MouseEvent as ReactMouseEvent } from 'react'
-import { Send, Square, FolderOpen, Zap, ImagePlus, X, Search, Terminal as TerminalIcon, Paperclip, CircleAlert, BookOpen, Mic } from 'lucide-react'
+import { Send, Square, FolderOpen, Zap, ImagePlus, X, Search, Terminal as TerminalIcon, Paperclip, CircleAlert, BookOpen, Mic, Palette, Check } from 'lucide-react'
 import { useChat } from '../hooks/useChat'
 import { MessageBubble } from './MessageBubble'
-import { CommandDefinition } from '../store/chatStore'
+import { CommandDefinition, THEME_OPTIONS, ThemeKey } from '../store/chatStore'
 import { TerminalPanel } from './TerminalPanel'
 import { NotebookPanel } from './NotebookPanel'
 import { KodoLogoMark } from './KodoLogoMark'
@@ -269,6 +269,7 @@ export function ChatWindow({ editorOpen, onToggleEditor }: ChatWindowProps) {
     messageSearchQuery,
     setMessageSearchQuery,
     theme,
+    setTheme,
   } = useChat()
   const [input, setInput] = useState('')
   const [showProjectInput, setShowProjectInput] = useState(false)
@@ -286,7 +287,9 @@ export function ChatWindow({ editorOpen, onToggleEditor }: ChatWindowProps) {
   const [terminalLines, setTerminalLines] = useState<string[]>([])
   const [showTerminal, setShowTerminal] = useState(false)
   const [terminalRunning, setTerminalRunning] = useState(false)
-    const [showNotebook, setShowNotebook] = useState(false)
+  const [showNotebook, setShowNotebook] = useState(false)
+  const [themeMenuOpen, setThemeMenuOpen] = useState(false)
+  const [dragOverlayVisible, setDragOverlayVisible] = useState(false)
   const [terminalCwd, setTerminalCwd] = useState('')
   const terminalCwdRef = useRef('')
   const messageListRef = useRef<HTMLDivElement>(null)
@@ -295,6 +298,8 @@ export function ChatWindow({ editorOpen, onToggleEditor }: ChatWindowProps) {
   const paletteRef = useRef<HTMLDivElement>(null)
   const paletteInputRef = useRef<HTMLInputElement>(null)
   const imageInputRef = useRef<HTMLInputElement>(null)
+  const themeMenuRef = useRef<HTMLDivElement>(null)
+  const dragDepthRef = useRef(0)
   const shouldAutoScrollRef = useRef(true)
   const previousMessageSearchRef = useRef('')
   const commandsRequestedRef = useRef(false)
@@ -383,6 +388,9 @@ export function ChatWindow({ editorOpen, onToggleEditor }: ChatWindowProps) {
     setTerminalLines([])
     setShowTerminal(false)
     setTerminalRunning(false)
+    setThemeMenuOpen(false)
+    dragDepthRef.current = 0
+    setDragOverlayVisible(false)
     const resetCwd = projectDir || ''
     terminalCwdRef.current = resetCwd
     setTerminalCwd(resetCwd)
@@ -429,6 +437,19 @@ export function ChatWindow({ editorOpen, onToggleEditor }: ChatWindowProps) {
     window.addEventListener('mousedown', onDocumentMouseDown)
     return () => window.removeEventListener('mousedown', onDocumentMouseDown)
   }, [commandPaletteOpen])
+
+  useEffect(() => {
+    if (!themeMenuOpen) return
+
+    const onDocumentMouseDown = (event: MouseEvent) => {
+      if (!themeMenuRef.current) return
+      if (themeMenuRef.current.contains(event.target as Node)) return
+      setThemeMenuOpen(false)
+    }
+
+    window.addEventListener('mousedown', onDocumentMouseDown)
+    return () => window.removeEventListener('mousedown', onDocumentMouseDown)
+  }, [themeMenuOpen])
 
   useEffect(() => {
     const previous = previousMessageSearchRef.current
@@ -886,14 +907,12 @@ export function ChatWindow({ editorOpen, onToggleEditor }: ChatWindowProps) {
     e.target.style.height = Math.min(e.target.scrollHeight, 200) + 'px'
   }
 
-  const handleFilePick = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const files = Array.from(e.target.files || [])
+  const processPickedFiles = useCallback(async (files: File[]) => {
     if (files.length === 0) return
 
     const incomingBytes = files.reduce((total, file) => total + file.size, 0)
     if (attachmentTotalBytes + incomingBytes > MAX_ATTACHMENT_BYTES) {
       setAttachmentError('Total attachment size exceeds 10MB limit')
-      e.target.value = ''
       return
     }
 
@@ -940,8 +959,60 @@ export function ChatWindow({ editorOpen, onToggleEditor }: ChatWindowProps) {
     } catch {
       setAttachmentError('Failed to read one or more attachments')
     }
+  }, [attachmentTotalBytes, pendingImage])
+
+  const handleFilePick = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(e.target.files || [])
+    await processPickedFiles(files)
 
     e.target.value = ''
+  }
+
+  const handleThemeSelect = (nextTheme: ThemeKey) => {
+    setTheme(nextTheme)
+    setThemeMenuOpen(false)
+  }
+
+  const hasFilePayload = (event: React.DragEvent<HTMLElement>) => {
+    return Array.from(event.dataTransfer?.types || []).includes('Files')
+  }
+
+  const handleChatDragEnter = (event: React.DragEvent<HTMLDivElement>) => {
+    if (observerMode || !hasFilePayload(event)) return
+    event.preventDefault()
+    event.stopPropagation()
+    dragDepthRef.current += 1
+    setDragOverlayVisible(true)
+  }
+
+  const handleChatDragOver = (event: React.DragEvent<HTMLDivElement>) => {
+    if (observerMode || !hasFilePayload(event)) return
+    event.preventDefault()
+    event.stopPropagation()
+    event.dataTransfer.dropEffect = 'copy'
+    if (!dragOverlayVisible) {
+      setDragOverlayVisible(true)
+    }
+  }
+
+  const handleChatDragLeave = (event: React.DragEvent<HTMLDivElement>) => {
+    if (observerMode) return
+    event.preventDefault()
+    event.stopPropagation()
+    dragDepthRef.current = Math.max(0, dragDepthRef.current - 1)
+    if (dragDepthRef.current === 0) {
+      setDragOverlayVisible(false)
+    }
+  }
+
+  const handleChatDrop = (event: React.DragEvent<HTMLDivElement>) => {
+    if (observerMode) return
+    event.preventDefault()
+    event.stopPropagation()
+    const files = Array.from(event.dataTransfer.files || [])
+    dragDepthRef.current = 0
+    setDragOverlayVisible(false)
+    void processPickedFiles(files)
   }
 
   const handlePermissionDecision = async (approve: boolean, remember: boolean) => {
@@ -1020,6 +1091,10 @@ export function ChatWindow({ editorOpen, onToggleEditor }: ChatWindowProps) {
   const totalAttachmentCount = pendingFiles.length + (pendingImage ? 1 : 0)
   const hiddenAttachmentCount = Math.max(0, totalAttachmentCount - MAX_VISIBLE_ATTACHMENT_CHIPS)
   const hasProjectDir = projectDir.trim().length > 0
+  const activeTheme = useMemo(
+    () => THEME_OPTIONS.find((option) => option.key === theme) || THEME_OPTIONS[0],
+    [theme],
+  )
   const selectedHeaderButtonStyle = {
     background: 'var(--accent-dim)',
     borderColor: 'var(--accent)',
@@ -1065,15 +1140,21 @@ export function ChatWindow({ editorOpen, onToggleEditor }: ChatWindowProps) {
   }
 
   return (
-    <div style={{
-      flex: 1,
-      display: 'flex',
-      flexDirection: 'column',
-      height: '100%',
-      overflow: 'hidden',
-      background: 'var(--bg-0)',
-      position: 'relative',
-    }}>
+    <div
+      style={{
+        flex: 1,
+        display: 'flex',
+        flexDirection: 'column',
+        height: '100%',
+        overflow: 'hidden',
+        background: 'var(--bg-0)',
+        position: 'relative',
+      }}
+      onDragEnter={handleChatDragEnter}
+      onDragOver={handleChatDragOver}
+      onDragLeave={handleChatDragLeave}
+      onDrop={handleChatDrop}
+    >
       {/* Header */}
       <div style={{
         padding: '12px 24px',
@@ -1350,6 +1431,100 @@ export function ChatWindow({ editorOpen, onToggleEditor }: ChatWindowProps) {
           SHORTCUTS
         </button>
 
+        <div ref={themeMenuRef} style={{ position: 'relative' }}>
+          <button
+            type="button"
+            onClick={() => setThemeMenuOpen((prev) => !prev)}
+            title={`Theme: ${activeTheme.label}`}
+            style={{
+              background: themeMenuOpen ? 'var(--accent-dim)' : 'none',
+              border: `1px solid ${themeMenuOpen ? 'var(--accent)' : 'var(--border)'}`,
+              color: themeMenuOpen ? 'var(--text-0)' : 'var(--text-2)',
+              padding: '4px 10px',
+              borderRadius: 'var(--radius)',
+              cursor: 'pointer',
+              fontSize: 11,
+              fontFamily: 'var(--font-mono)',
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: 6,
+              transition: 'all 0.15s',
+              transform: 'translateY(0)',
+              outline: 'none',
+              boxShadow: themeMenuOpen ? 'inset 0 0 0 1px var(--accent-glow)' : 'none',
+            }}
+            onMouseEnter={(e) => applyHeaderHover(e, { active: themeMenuOpen })}
+            onMouseLeave={(e) => resetHeaderHover(e, { active: themeMenuOpen })}
+          >
+            <Palette size={12} />
+            THEME
+          </button>
+
+          {themeMenuOpen && (
+            <div
+              style={{
+                position: 'absolute',
+                top: 'calc(100% + 8px)',
+                right: 0,
+                width: 260,
+                maxHeight: 360,
+                overflowY: 'auto',
+                border: '1px solid var(--border-bright)',
+                borderRadius: 10,
+                background: 'var(--bg-1)',
+                boxShadow: '0 16px 34px rgba(0, 0, 0, 0.36)',
+                zIndex: 40,
+                padding: 6,
+                display: 'grid',
+                gap: 4,
+              }}
+            >
+              {THEME_OPTIONS.map((option) => {
+                const selected = option.key === theme
+                return (
+                  <button
+                    key={option.key}
+                    type="button"
+                    onClick={() => handleThemeSelect(option.key)}
+                    style={{
+                      border: `1px solid ${selected ? 'var(--accent)' : 'var(--border)'}`,
+                      background: selected ? 'var(--accent-dim)' : 'var(--bg-2)',
+                      borderRadius: 8,
+                      cursor: 'pointer',
+                      color: selected ? 'var(--text-0)' : 'var(--text-1)',
+                      textAlign: 'left',
+                      padding: '8px 10px',
+                      display: 'grid',
+                      gap: 3,
+                      transition: 'all 0.14s ease',
+                    }}
+                    onMouseEnter={(event) => {
+                      if (selected) return
+                      event.currentTarget.style.borderColor = 'var(--border-bright)'
+                      event.currentTarget.style.background = 'var(--bg-3)'
+                    }}
+                    onMouseLeave={(event) => {
+                      if (selected) return
+                      event.currentTarget.style.borderColor = 'var(--border)'
+                      event.currentTarget.style.background = 'var(--bg-2)'
+                    }}
+                  >
+                    <span style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+                      <span style={{ fontSize: 11, color: selected ? 'var(--text-0)' : 'var(--text-0)', fontWeight: 600 }}>
+                        {option.label}
+                      </span>
+                      {selected && <Check size={12} color="var(--accent)" />}
+                    </span>
+                    <span style={{ fontSize: 10, color: 'var(--text-2)', lineHeight: 1.3 }}>
+                      {option.description}
+                    </span>
+                  </button>
+                )
+              })}
+            </div>
+          )}
+        </div>
+
         <button
           type="button"
           onClick={onToggleEditor}
@@ -1399,6 +1574,41 @@ export function ChatWindow({ editorOpen, onToggleEditor }: ChatWindowProps) {
           </button>
         )}
       </div>
+
+      {dragOverlayVisible && !observerMode && (
+        <div
+          style={{
+            position: 'absolute',
+            inset: 10,
+            border: '2px dashed var(--accent)',
+            borderRadius: 12,
+            background: 'color-mix(in srgb, var(--accent-dim) 60%, transparent)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 45,
+            pointerEvents: 'none',
+            backdropFilter: 'blur(1px)',
+            boxShadow: '0 0 0 1px var(--accent-glow) inset',
+          }}
+        >
+          <div
+            style={{
+              background: 'var(--bg-1)',
+              border: '1px solid var(--accent)',
+              borderRadius: 10,
+              padding: '12px 16px',
+              color: 'var(--text-0)',
+              fontFamily: 'var(--font-mono)',
+              fontSize: 12,
+              letterSpacing: '0.04em',
+              textTransform: 'uppercase',
+            }}
+          >
+            Drop files to attach
+          </div>
+        </div>
+      )}
 
       <CollabBar
         sessionId={sessionId}

@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Volume2, Square } from 'lucide-react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
@@ -82,6 +82,7 @@ export function MessageBubble({ message, searchQuery }: { message: Message; sear
   const [isSpeaking, setIsSpeaking] = useState(false)
   const audioRef = useRef<HTMLAudioElement | null>(null)
   const audioUrlRef = useRef<string>('')
+  const synthUtteranceRef = useRef<SpeechSynthesisUtterance | null>(null)
   const isUser = message.role === 'user'
   const normalizedSearch = (searchQuery || '').trim()
   const hasSearch = normalizedSearch.length > 0
@@ -98,16 +99,36 @@ export function MessageBubble({ message, searchQuery }: { message: Message; sear
     return ''
   })()
 
+  const stopSpeechPlayback = () => {
+    if (audioRef.current) {
+      audioRef.current.pause()
+      audioRef.current.currentTime = 0
+      audioRef.current = null
+    }
+
+    if (audioUrlRef.current) {
+      URL.revokeObjectURL(audioUrlRef.current)
+      audioUrlRef.current = ''
+    }
+
+    if (typeof window !== 'undefined' && window.speechSynthesis) {
+      window.speechSynthesis.cancel()
+    }
+    synthUtteranceRef.current = null
+  }
+
+  useEffect(() => {
+    return () => {
+      stopSpeechPlayback()
+      setIsSpeaking(false)
+    }
+  }, [])
+
   const toggleSpeech = async () => {
     if (!message.content.trim()) return
 
-    if (isSpeaking && audioRef.current) {
-      audioRef.current.pause()
-      audioRef.current.currentTime = 0
-      if (audioUrlRef.current) {
-        URL.revokeObjectURL(audioUrlRef.current)
-        audioUrlRef.current = ''
-      }
+    if (isSpeaking) {
+      stopSpeechPlayback()
       setIsSpeaking(false)
       return
     }
@@ -139,13 +160,37 @@ export function MessageBubble({ message, searchQuery }: { message: Message; sear
       }
       audio.onerror = () => {
         setIsSpeaking(false)
-        if (audioUrlRef.current) {
-          URL.revokeObjectURL(audioUrlRef.current)
-          audioUrlRef.current = ''
-        }
+        stopSpeechPlayback()
       }
       setIsSpeaking(true)
       await audio.play()
+      return
+    } catch {
+      // Fall back to browser speech synthesis when API TTS is unavailable.
+    }
+
+    try {
+      if (typeof window === 'undefined' || !window.speechSynthesis) {
+        setIsSpeaking(false)
+        return
+      }
+
+      const utterance = new SpeechSynthesisUtterance(message.content)
+      utterance.rate = 1
+      utterance.pitch = 1
+      utterance.onend = () => {
+        synthUtteranceRef.current = null
+        setIsSpeaking(false)
+      }
+      utterance.onerror = () => {
+        synthUtteranceRef.current = null
+        setIsSpeaking(false)
+      }
+
+      window.speechSynthesis.cancel()
+      synthUtteranceRef.current = utterance
+      setIsSpeaking(true)
+      window.speechSynthesis.speak(utterance)
     } catch {
       setIsSpeaking(false)
     }

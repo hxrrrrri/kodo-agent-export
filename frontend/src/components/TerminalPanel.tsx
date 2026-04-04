@@ -1,12 +1,13 @@
 import { useEffect, useRef, useState } from 'react'
 import type { FitAddon } from '@xterm/addon-fit'
 import type { Terminal as XTerm } from '@xterm/xterm'
+import { ThemeKey } from '../store/chatStore'
 import '@xterm/xterm/css/xterm.css'
 
 interface TerminalPanelProps {
   lines: string[]
   isRunning: boolean
-  themeMode: 'dark' | 'light'
+  themeMode: ThemeKey
   cwdHint?: string
   onRunCommand: (command: string) => Promise<{ cwd?: string } | void> | { cwd?: string } | void
   onClose: () => void
@@ -24,21 +25,18 @@ function promptText(cwd: string): string {
   return `PS ${cwd}> `
 }
 
-function terminalTheme(mode: 'dark' | 'light') {
-  if (mode === 'light') {
-    return {
-      background: '#f7f6f2',
-      foreground: '#1f1c17',
-      cursor: '#cf3b00',
-      selectionBackground: 'rgba(207, 59, 0, 0.18)',
-    }
-  }
+function readThemeCssVar(name: string, fallback: string): string {
+  if (typeof window === 'undefined') return fallback
+  const value = window.getComputedStyle(document.documentElement).getPropertyValue(name).trim()
+  return value || fallback
+}
 
+function terminalTheme() {
   return {
-    background: '#0a0a0b',
-    foreground: '#a8a8b8',
-    cursor: '#ff4d21',
-    selectionBackground: 'rgba(255, 77, 33, 0.2)',
+    background: readThemeCssVar('--terminal-bg', readThemeCssVar('--bg-0', '#0a0a0b')),
+    foreground: readThemeCssVar('--terminal-fg', readThemeCssVar('--text-1', '#a8a8b8')),
+    cursor: readThemeCssVar('--terminal-cursor', readThemeCssVar('--accent', '#ff4d21')),
+    selectionBackground: readThemeCssVar('--terminal-selection', 'rgba(255, 77, 33, 0.2)'),
   }
 }
 
@@ -91,7 +89,7 @@ export function TerminalPanel({
         if (cancelled || !containerRef.current) return
 
         const term = new Terminal({
-          theme: terminalTheme(themeMode),
+          theme: terminalTheme(),
           fontSize: 12,
           fontFamily: 'JetBrains Mono, Fira Code, monospace',
           cursorBlink: isRunning,
@@ -348,7 +346,7 @@ export function TerminalPanel({
 
   useEffect(() => {
     if (!termRef.current) return
-    termRef.current.options.theme = terminalTheme(themeMode)
+    termRef.current.options.theme = terminalTheme()
   }, [themeMode])
 
   useEffect(() => {
@@ -411,7 +409,7 @@ export function TerminalPanel({
     <div
       style={{
         borderTop: '1px solid var(--border)',
-        background: themeMode === 'light' ? 'var(--bg-0)' : '#0a0a0b',
+        background: 'var(--terminal-bg, var(--bg-0))',
         flexShrink: 0,
         height: panelHeight,
         display: 'flex',
