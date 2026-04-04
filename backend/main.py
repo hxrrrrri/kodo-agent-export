@@ -19,7 +19,7 @@ from fastapi.responses import JSONResponse
 from api.bridge import router as bridge_router
 from api.chat import router as chat_router
 from api.collab import router as collab_router
-from api.cron import router as cron_router, start_cron_loop
+from api.cron import router as cron_router
 from api.doctor import router as doctor_router
 from api.marketplace import router as marketplace_router
 from api.prompts import router as prompts_router
@@ -176,7 +176,9 @@ async def health_ready():
 
 
 @app.on_event("startup")
-async def startup_event():
+async def startup_event() -> None:
+    from api.cron import start_cron_loop
+
     start_cron_loop()
 
 

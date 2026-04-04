@@ -168,9 +168,17 @@ async def _cron_loop() -> None:
 
 
 def start_cron_loop() -> None:
+    """Idempotent. Safe to call when no event loop is running (e.g. at import time)."""
     global _CRON_TASK
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        # No running event loop - this happens during sync test setup.
+        # The task will be started by the ASGI lifespan instead.
+        return
+
     if _CRON_TASK is None or _CRON_TASK.done():
-        _CRON_TASK = asyncio.create_task(_cron_loop())
+        _CRON_TASK = loop.create_task(_cron_loop())
 
 
 @router.get("")

@@ -1752,11 +1752,11 @@ async def usage_summary(
 ):
     require_api_auth(request)
     await enforce_rate_limit(request, MEMORY_RATE_LIMITER, "usage")
-    data = summarize_usage(days=days, limit=limit)
+    data = summarize_usage(days=days, limit=limit, include_raw=(breakdown == "sessions"))
 
     if breakdown == "sessions":
         by_session: dict[str, dict[str, float | int]] = {}
-        for event in data.get("events", []):
+        for event in data.get("raw_events", []):
             if not isinstance(event, dict):
                 continue
             session_id = str(event.get("session_id", "")).strip() or "unknown"

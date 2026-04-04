@@ -160,9 +160,9 @@ def _iter_events() -> list[dict[str, Any]]:
     return items
 
 
-def summarize_usage(days: int = 7, limit: int = 200) -> dict[str, Any]:
+def summarize_usage(days: int = 7, limit: int = 200, include_raw: bool = False) -> dict[str, Any]:
     if telemetry_disabled():
-        return {
+        result = {
             "window_days": max(1, min(days, 365)),
             "events_count": 0,
             "totals": {
@@ -176,6 +176,9 @@ def summarize_usage(days: int = 7, limit: int = 200) -> dict[str, Any]:
             "by_model": {},
             "events": [],
         }
+        if include_raw:
+            result["raw_events"] = []
+        return result
 
     window_days = max(1, min(days, 365))
     cutoff = _utc_now() - timedelta(days=window_days)
@@ -226,7 +229,7 @@ def summarize_usage(days: int = 7, limit: int = 200) -> dict[str, Any]:
         row["input_cache_write_tokens"] = int(row["input_cache_write_tokens"]) + cache_write
         row["cost_usd_total"] = round(float(row["cost_usd_total"]) + cost, 8)
 
-    return {
+    result: dict[str, Any] = {
         "window_days": window_days,
         "events_count": len(events),
         "totals": {
@@ -246,3 +249,8 @@ def summarize_usage(days: int = 7, limit: int = 200) -> dict[str, Any]:
         },
         "events": events[: max(1, min(limit, 500))],
     }
+
+    if include_raw:
+        result["raw_events"] = events
+
+    return result

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
-import importlib.util
+import importlib
+import os
+from unittest.mock import patch
 
 import pytest
 
@@ -28,8 +30,22 @@ async def test_screenshot_non_http_url_rejected(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_screenshot_playwright_missing_returns_instructions(monkeypatch):
-    monkeypatch.setenv("KODO_ENABLE_SCREENSHOT", "1")
-    monkeypatch.setattr(importlib.util, "find_spec", lambda name: None)
-    result = await tool.execute(url="https://example.com")
+    os.environ["KODO_ENABLE_SCREENSHOT"] = "1"
+    patch_targets = {
+        "playwright": None,
+        "playwright.async_api": None,
+    }
+
+    with patch.dict("sys.modules", patch_targets):
+        import tools.screenshot as sc_mod
+
+        importlib.reload(sc_mod)
+        tool_fresh = sc_mod.ScreenshotTool()
+        result = await tool_fresh.execute(url="https://example.com")
+
+    import tools.screenshot as sc_mod_restored
+
+    importlib.reload(sc_mod_restored)
     assert result.success is False
     assert "playwright" in (result.error or "").lower()
+    os.environ.pop("KODO_ENABLE_SCREENSHOT", None)
