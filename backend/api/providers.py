@@ -151,6 +151,39 @@ class ProviderSwitchRequest(BaseModel):
     persist: bool = Field(default=True)
 
 
+class OllamaSetupRequest(BaseModel):
+    base_url: str | None = Field(default=None, max_length=300)
+    model: str | None = Field(default=None, max_length=200)
+    session_id: str | None = Field(default=None, max_length=128)
+    persist: bool = Field(default=True)
+
+
+def _normalize_ollama_base_url(value: str | None) -> str:
+    candidate = str(value or "").strip() or os.getenv("OLLAMA_BASE_URL", "").strip() or "http://127.0.0.1:11434"
+    candidate = candidate.rstrip("/")
+    if candidate.endswith("/v1"):
+        candidate = candidate[:-3].rstrip("/")
+    if not candidate.startswith(("http://", "https://")):
+        candidate = f"http://{candidate}"
+    return candidate
+
+
+async def _ollama_setup_status() -> dict[str, object]:
+    normalized_base = _normalize_ollama_base_url(None)
+    local = await discover_local_providers()
+    models = await list_available_models("ollama")
+    recommended = recommend_model(models, "balanced") if models else None
+
+    return {
+        "base_url": normalized_base,
+        "configured": bool(os.getenv("OLLAMA_BASE_URL", "").strip()),
+        "reachable": bool(local.get("ollama")),
+        "models": models,
+        "recommended_model": recommended,
+        "active_model": os.getenv("MODEL", "").strip() or None,
+    }
+
+
 @router.get("/discover")
 async def discover_providers_endpoint(request: Request):
     require_api_auth(request)
@@ -339,4 +372,64 @@ async def switch_provider_endpoint(body: ProviderSwitchRequest, request: Request
         "router_mode": "fixed",
         "profile": profile_name,
         "persisted": bool(body.persist),
+    }
+
+
+@router.get("/ollama/setup")
+async def ollama_setup_status_endpoint(request: Request):
+    require_api_auth(request)
+    await enforce_rate_limit(request, MEMORY_RATE_LIMITER, "providers_ollama_setup_status")
+    return await _ollama_setup_status()
+
+
+@router.post("/ollama/setup")
+async def ollama_setup_endpoint(body: OllamaSetupRequest, request: Request):
+    require_api_auth(request)
+    await enforce_rate_limit(request, MEMORY_RATE_LIMITER, "providers_ollama_setup")
+
+    normalized_base = _normalize_ollama_base_url(body.base_url)
+    _set_runtime_setting("OLLAMA_BASE_URL", normalized_base, persist=body.persist)
+
+    models = await list_available_models("ollama")
+    selected_model = str(body.model or "").strip()
+    if not selected_model:
+        selected_model = recommend_model(models, "balanced") or (models[0] if models else "")
+    if not selected_model:
+        selected_model = _default_model_for_provider("ollama")
+
+    _set_runtime_setting("PRIMARY_PROVIDER", "ollama", persist=body.persist)
+    _set_runtime_setting("MODEL", selected_model, persist=body.persist)
+    _set_runtime_setting("BIG_MODEL", selected_model, persist=body.persist)
+    _set_runtime_setting("SMALL_MODEL", selected_model, persist=body.persist)
+    _set_runtime_setting("ROUTER_MODE", "fixed", persist=body.persist)
+
+    profile_name = "quick-ollama"
+    profile = ProviderProfile.from_dict(
+        {
+            "name": profile_name,
+            "provider": "ollama",
+            "model": selected_model,
+            "goal": "balanced",
+            "base_url": normalized_base,
+            "api_key": None,
+        }
+    )
+    await profile_manager.save_profile(profile)
+    await profile_manager.activate_profile(profile_name)
+
+    session_id = str(body.session_id or "").strip()
+    if session_id:
+        await memory_manager.update_session_metadata(
+            session_id,
+            {"model_override": selected_model},
+            create_if_missing=True,
+        )
+
+    status = await _ollama_setup_status()
+    return {
+        "provider": "ollama",
+        "model": selected_model,
+        "profile": profile_name,
+        "persisted": bool(body.persist),
+        **status,
     }

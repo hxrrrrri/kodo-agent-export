@@ -23,6 +23,7 @@ from api.chat import router as chat_router
 from api.collab import router as collab_router
 from api.cron import router as cron_router
 from api.doctor import router as doctor_router
+from api.marketplace import router as marketplace_router
 from api.prompts import router as prompts_router
 from api.settings import router as settings_router
 from api.webhooks import router as webhooks_router
@@ -88,6 +89,7 @@ app.include_router(profiles_router)
 app.include_router(tts_router)
 app.include_router(prompts_router)
 app.include_router(settings_router, prefix="/api")
+app.include_router(marketplace_router, prefix="/api")
 app.include_router(skills_admin_router)
 app.include_router(collab_router)
 app.include_router(cron_router, prefix="/api")

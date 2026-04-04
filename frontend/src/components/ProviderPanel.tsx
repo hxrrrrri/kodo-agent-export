@@ -87,6 +87,22 @@ type ProviderSwitchResponse = {
   persisted: boolean
 }
 
+type OllamaSetupStatusResponse = {
+  base_url: string
+  configured: boolean
+  reachable: boolean
+  models: string[]
+  recommended_model: string | null
+  active_model?: string | null
+}
+
+type OllamaSetupResponse = OllamaSetupStatusResponse & {
+  provider: string
+  model: string
+  profile: string
+  persisted: boolean
+}
+
 function normalizeProviderName(value: string): string {
   const normalized = String(value || '').trim().toLowerCase().replace('_', '-')
   return normalized === 'atomicchat' ? 'atomic-chat' : normalized
@@ -146,6 +162,11 @@ export function ProviderPanel() {
   const [providerAvailability, setProviderAvailability] = useState<Record<string, boolean>>({})
   const [switchDraft, setSwitchDraft] = useState({ provider: '', model: '' })
   const [switching, setSwitching] = useState(false)
+  const [ollamaSetup, setOllamaSetup] = useState<OllamaSetupStatusResponse | null>(null)
+  const [ollamaBaseUrl, setOllamaBaseUrl] = useState('http://127.0.0.1:11434')
+  const [ollamaModel, setOllamaModel] = useState('')
+  const [ollamaSetupLoading, setOllamaSetupLoading] = useState(false)
+  const [ollamaSetupSaving, setOllamaSetupSaving] = useState(false)
   const [showModal, setShowModal] = useState(false)
   const [newProfile, setNewProfile] = useState({
     name: '',
@@ -266,6 +287,57 @@ export function ProviderPanel() {
       setProviderAvailability((prev) => ({ ...prev, ...nextAvailability }))
     } catch (e) {
       setError(String(e))
+    }
+  }
+
+  const loadOllamaSetupStatus = async () => {
+    setOllamaSetupLoading(true)
+    try {
+      const res = await fetch('/api/providers/ollama/setup', { headers: buildApiHeaders() })
+      if (!res.ok) throw new Error(await parseApiError(res))
+      const payload = (await res.json()) as OllamaSetupStatusResponse
+      setOllamaSetup(payload)
+      setOllamaBaseUrl(payload.base_url || 'http://127.0.0.1:11434')
+
+      const models = Array.isArray(payload.models) ? payload.models : []
+      const preferred = payload.active_model || payload.recommended_model || models[0] || ''
+      setOllamaModel(String(preferred || ''))
+    } catch (e) {
+      setError(String(e))
+    } finally {
+      setOllamaSetupLoading(false)
+    }
+  }
+
+  const runOllamaSetup = async () => {
+    setOllamaSetupSaving(true)
+    setError(null)
+    try {
+      const response = await fetch('/api/providers/ollama/setup', {
+        method: 'POST',
+        headers: buildApiHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify({
+          base_url: ollamaBaseUrl.trim() || null,
+          model: ollamaModel.trim() || null,
+          session_id: sessionId || null,
+          persist: true,
+        }),
+      })
+      if (!response.ok) throw new Error(await parseApiError(response))
+
+      const payload = (await response.json()) as OllamaSetupResponse
+      setSwitchDraft({ provider: payload.provider, model: payload.model })
+
+      await Promise.all([
+        loadStatus(),
+        loadProfiles(),
+        loadDiscovery(),
+        loadOllamaSetupStatus(),
+      ])
+    } catch (e) {
+      setError(String(e))
+    } finally {
+      setOllamaSetupSaving(false)
     }
   }
 
@@ -484,6 +556,7 @@ export function ProviderPanel() {
     void loadStatus()
     void loadDiscovery()
     void loadProfiles()
+    void loadOllamaSetupStatus()
     void loadWebhookEvents()
   }, [])
 
@@ -492,6 +565,7 @@ export function ProviderPanel() {
       void loadStatus()
       void loadDiscovery()
       void loadProfiles()
+      void loadOllamaSetupStatus()
     }, 7000)
 
     return () => window.clearInterval(timer)
@@ -686,6 +760,105 @@ export function ProviderPanel() {
 
           <div style={{ fontSize: 10, color: 'var(--text-2)' }}>
             Applies instantly and persists to backend settings. Existing session model is updated when available.
+          </div>
+        </div>
+      </section>
+
+      <section style={{ marginBottom: 12 }}>
+        <div style={{ fontSize: 10, color: 'var(--text-2)', letterSpacing: '0.1em', marginBottom: 6 }}>OLLAMA SETUP</div>
+        <div
+          style={{
+            border: '1px solid var(--border)',
+            borderRadius: 'var(--radius)',
+            background: 'var(--bg-2)',
+            padding: '8px 10px',
+            display: 'grid',
+            gap: 8,
+          }}
+        >
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, fontSize: 10 }}>
+            <span style={{ color: 'var(--text-2)' }}>Status</span>
+            <span style={{ color: ollamaSetup?.reachable ? 'var(--green)' : 'var(--yellow)' }}>
+              {ollamaSetup?.reachable ? 'reachable' : 'not reachable'}
+            </span>
+          </div>
+
+          <input
+            value={ollamaBaseUrl}
+            onChange={(event) => setOllamaBaseUrl(event.target.value)}
+            placeholder="http://127.0.0.1:11434"
+            style={{
+              width: '100%',
+              background: 'var(--bg-1)',
+              border: '1px solid var(--border)',
+              color: 'var(--text-0)',
+              borderRadius: 'var(--radius)',
+              padding: '6px 8px',
+              fontSize: 11,
+              fontFamily: 'var(--font-mono)',
+            }}
+          />
+
+          <select
+            value={ollamaModel}
+            onChange={(event) => setOllamaModel(event.target.value)}
+            style={{
+              width: '100%',
+              background: 'var(--bg-1)',
+              border: '1px solid var(--border)',
+              color: 'var(--text-0)',
+              borderRadius: 'var(--radius)',
+              padding: '6px 8px',
+              fontSize: 11,
+              fontFamily: 'var(--font-mono)',
+            }}
+          >
+            {(ollamaSetup?.models || []).length === 0 && (
+              <option value="">(no models discovered)</option>
+            )}
+            {(ollamaSetup?.models || []).map((model) => (
+              <option key={model} value={model}>{model}</option>
+            ))}
+          </select>
+
+          <div style={{ display: 'flex', gap: 6 }}>
+            <button
+              onClick={() => void loadOllamaSetupStatus()}
+              disabled={ollamaSetupLoading}
+              style={{
+                border: '1px solid var(--border)',
+                color: 'var(--text-1)',
+                background: 'var(--bg-1)',
+                borderRadius: 'var(--radius)',
+                fontSize: 10,
+                padding: '4px 8px',
+                cursor: ollamaSetupLoading ? 'not-allowed' : 'pointer',
+                opacity: ollamaSetupLoading ? 0.65 : 1,
+              }}
+            >
+              {ollamaSetupLoading ? 'Refreshing...' : 'Refresh'}
+            </button>
+
+            <button
+              onClick={() => void runOllamaSetup()}
+              disabled={ollamaSetupSaving}
+              style={{
+                border: '1px solid var(--accent)',
+                color: 'var(--accent)',
+                background: 'var(--accent-dim)',
+                borderRadius: 'var(--radius)',
+                fontSize: 10,
+                padding: '4px 8px',
+                cursor: ollamaSetupSaving ? 'not-allowed' : 'pointer',
+                opacity: ollamaSetupSaving ? 0.65 : 1,
+              }}
+            >
+              {ollamaSetupSaving ? 'Connecting...' : 'Connect Ollama'}
+            </button>
+          </div>
+
+          <div style={{ fontSize: 10, color: 'var(--text-2)' }}>
+            Sets provider to Ollama, updates model, and persists settings for one-click local usage.
           </div>
         </div>
       </section>

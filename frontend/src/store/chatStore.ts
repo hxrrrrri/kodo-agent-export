@@ -64,11 +64,21 @@ export interface ImageAttachment {
   media_type?: string
 }
 
+export interface AdvisorReview {
+  score?: number
+  summary?: string
+  strengths?: string[]
+  risks?: string[]
+  next_steps?: string[]
+  mode?: string
+}
+
 export interface Message {
   id: string
   role: MessageRole
   content: string
   imageAttachment?: ImageAttachment
+  advisorReview?: AdvisorReview
   toolCalls?: ToolCall[]
   isStreaming?: boolean
   usage?: {

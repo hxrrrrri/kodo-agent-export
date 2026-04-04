@@ -1,7 +1,7 @@
 import json
 import aiofiles
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -219,6 +219,109 @@ class MemoryManager:
             metadata=metadata,
         )
         return metadata
+
+    async def mark_session_activity(self, session_id: str) -> dict[str, Any]:
+        now = datetime.now(timezone.utc).isoformat()
+        payload = await self.load_session_payload(session_id)
+
+        metadata: dict[str, Any]
+        if isinstance(payload, dict):
+            candidate = payload.get("metadata", {})
+            metadata = dict(candidate) if isinstance(candidate, dict) else {}
+        else:
+            metadata = {}
+
+        previous_last_active = metadata.get("last_active_at")
+        if isinstance(previous_last_active, str) and previous_last_active.strip():
+            metadata["previous_active_at"] = previous_last_active
+        metadata["last_active_at"] = now
+
+        messages = payload.get("messages", []) if isinstance(payload, dict) else []
+        if not isinstance(messages, list):
+            messages = []
+
+        await self.save_session(session_id=session_id, messages=messages, metadata=metadata)
+        return metadata
+
+    async def get_session_away_seconds(self, session_id: str) -> int:
+        metadata = await self.get_session_metadata(session_id)
+        raw_last_active = metadata.get("last_active_at")
+        if not isinstance(raw_last_active, str) or not raw_last_active.strip():
+            return 0
+
+        try:
+            last_active = datetime.fromisoformat(raw_last_active)
+        except Exception:
+            return 0
+
+        if last_active.tzinfo is None:
+            last_active = last_active.replace(tzinfo=timezone.utc)
+        now = datetime.now(timezone.utc)
+        delta = (now - last_active).total_seconds()
+        if delta <= 0:
+            return 0
+        return int(delta)
+
+    async def build_session_recap(self, session_id: str, limit: int = 6) -> dict[str, Any]:
+        payload = await self.load_session_payload(session_id)
+        if payload is None:
+            raise ValueError("Session not found")
+
+        messages = payload.get("messages", []) if isinstance(payload, dict) else []
+        if not isinstance(messages, list):
+            messages = []
+
+        away_seconds = await self.get_session_away_seconds(session_id)
+
+        highlights: list[str] = []
+        for message in messages[-max(1, limit * 2):]:
+            if not isinstance(message, dict):
+                continue
+            role = str(message.get("role", "")).strip().lower()
+            if role not in {"user", "assistant"}:
+                continue
+
+            content = message.get("content", "")
+            text = ""
+            if isinstance(content, str):
+                text = content
+            elif isinstance(content, list):
+                chunks: list[str] = []
+                for block in content:
+                    if not isinstance(block, dict):
+                        continue
+                    if str(block.get("type", "")).lower() != "text":
+                        continue
+                    value = block.get("text")
+                    if isinstance(value, str) and value.strip():
+                        chunks.append(value.strip())
+                text = "\n".join(chunks)
+            else:
+                text = str(content or "")
+
+            snippet = " ".join(text.split()).strip()
+            if not snippet:
+                continue
+            if len(snippet) > 140:
+                snippet = snippet[:137].rstrip() + "..."
+            highlights.append(f"{role}: {snippet}")
+
+        highlights = highlights[-limit:]
+
+        if not highlights:
+            summary = "No recent conversation context to recap yet."
+        else:
+            summary = (
+                "Recent context: "
+                + " | ".join(highlights[-3:])
+            )
+
+        return {
+            "session_id": session_id,
+            "away_seconds": away_seconds,
+            "highlights": highlights,
+            "summary": summary,
+        }
 
     async def list_sessions(self) -> list[dict]:
         sessions = []

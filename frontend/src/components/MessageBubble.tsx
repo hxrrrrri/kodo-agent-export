@@ -4,7 +4,7 @@ import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter'
 import { vscDarkPlus } from 'react-syntax-highlighter/dist/esm/styles/prism'
-import { Message } from '../store/chatStore'
+import { AdvisorReview, Message } from '../store/chatStore'
 import { buildApiHeaders, parseApiError } from '../lib/api'
 import { ToolCallCard } from './ToolCallCard'
 
@@ -74,6 +74,71 @@ function CursorBlink() {
       verticalAlign: 'middle',
       animation: 'blink 1s step-end infinite',
     }} />
+  )
+}
+
+function normalizeReviewList(value: unknown): string[] {
+  if (!Array.isArray(value)) return []
+  return value
+    .map((item) => String(item || '').trim())
+    .filter(Boolean)
+    .slice(0, 3)
+}
+
+function AdvisorReviewCard({ review }: { review: AdvisorReview }) {
+  const strengths = normalizeReviewList(review.strengths)
+  const risks = normalizeReviewList(review.risks)
+  const nextSteps = normalizeReviewList(review.next_steps)
+  const score = Number.isFinite(Number(review.score)) ? Math.max(0, Math.min(100, Number(review.score))) : null
+  const summary = String(review.summary || '').trim()
+
+  if (!summary && strengths.length === 0 && risks.length === 0 && nextSteps.length === 0) {
+    return null
+  }
+
+  const toneColor = score === null ? 'var(--text-2)' : (score >= 80 ? 'var(--green)' : score >= 60 ? 'var(--yellow)' : 'var(--red)')
+
+  return (
+    <div
+      style={{
+        border: '1px solid var(--border)',
+        borderRadius: 'var(--radius)',
+        background: 'var(--bg-2)',
+        padding: '8px 10px',
+        marginBottom: 10,
+        display: 'grid',
+        gap: 6,
+      }}
+    >
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10 }}>
+        <span style={{ fontSize: 10, letterSpacing: '0.08em', color: 'var(--text-2)' }}>ADVISOR</span>
+        {score !== null && (
+          <span style={{ fontSize: 10, color: toneColor }}>score {score}/100</span>
+        )}
+      </div>
+
+      {summary && (
+        <div style={{ fontSize: 12, color: 'var(--text-1)', lineHeight: 1.4 }}>{summary}</div>
+      )}
+
+      {strengths.length > 0 && (
+        <div style={{ fontSize: 11, color: 'var(--green)' }}>
+          strengths: {strengths.join(' | ')}
+        </div>
+      )}
+
+      {risks.length > 0 && (
+        <div style={{ fontSize: 11, color: 'var(--yellow)' }}>
+          risks: {risks.join(' | ')}
+        </div>
+      )}
+
+      {nextSteps.length > 0 && (
+        <div style={{ fontSize: 11, color: 'var(--text-2)' }}>
+          next: {nextSteps.join(' | ')}
+        </div>
+      )}
+    </div>
   )
 }
 
@@ -289,6 +354,8 @@ export function MessageBubble({ message, searchQuery }: { message: Message; sear
       </div>
 
       {/* Tool calls */}
+      {message.advisorReview && <AdvisorReviewCard review={message.advisorReview} />}
+
       {message.toolCalls && message.toolCalls.length > 0 && (
         <div style={{ marginBottom: message.content ? 12 : 0 }}>
           {message.toolCalls.map((tc, i) => (

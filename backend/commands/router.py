@@ -37,6 +37,11 @@ KNOWN_ROOT_COMMANDS = [
     "/mcp",
     "/agents",
     "/skills",
+    "/teleport",
+    "/ultraplan",
+    "/dream",
+    "/advisor",
+    "/bughunter",
 ]
 
 COMMAND_REGISTRY: dict[str, str] = {
@@ -58,6 +63,11 @@ COMMAND_REGISTRY: dict[str, str] = {
     "/mcp": "Manage and call MCP servers",
     "/agents": "Manage spawned sub-agents",
     "/skills": "Inspect bundled skills",
+    "/teleport": "Quick-switch session mode with aliases",
+    "/ultraplan": "Generate a high-fidelity implementation plan",
+    "/dream": "Generate a bold next-iteration concept",
+    "/advisor": "Run strategic advisor-style review guidance",
+    "/bughunter": "Run targeted bug-hunting and validation flow",
 }
 
 
@@ -177,6 +187,11 @@ def _help_text() -> str:
         "/skills - List bundled skills",
         "/skills show <name> - Show skill content",
         "/skills run <name> - Run a bundled skill now",
+        "/teleport <mode|alias> - Quick switch mode (aliases: coord, hunt, ultra)",
+        "/ultraplan <goal> - Build an execution-ready implementation plan",
+        "/dream [focus] - Brainstorm a high-impact next iteration",
+        "/advisor [topic] - Ask for strategic advisor review",
+        "/bughunter <issue> - Trigger bug-hunting workflow",
     ])
 
 
@@ -390,6 +405,81 @@ async def _run_tool_command(tool_name: str, **kwargs) -> CommandExecutionResult:
     return CommandExecutionResult(name=tool_name, text=result.error or "Tool execution failed")
 
 
+def _teleport_target(value: str) -> str:
+    aliases = {
+        "coord": "coordinator",
+        "coordinator": "coordinator",
+        "hunt": "bughunter",
+        "bug": "bughunter",
+        "bughunter": "bughunter",
+        "ultra": "ultraplan",
+        "ultraplan": "ultraplan",
+        "dream": "ultraplan",
+        "plan": "plan",
+        "debug": "debug",
+        "review": "review",
+        "execute": "execute",
+    }
+    normalized = value.strip().lower()
+    return aliases.get(normalized, normalized)
+
+
+def _ultraplan_prompt(goal: str) -> str:
+    target = goal.strip() or "ship the highest-impact next project milestone"
+    return (
+        "[UltraPlan]\n"
+        f"Goal: {target}\n\n"
+        "Produce an execution-ready plan with:\n"
+        "1) assumptions and constraints\n"
+        "2) ordered implementation steps\n"
+        "3) risks and mitigations\n"
+        "4) validation checklist and completion criteria\n"
+        "Keep it actionable and specific to this workspace."
+    )
+
+
+def _dream_prompt(focus: str) -> str:
+    target = focus.strip() or "the highest-leverage next capability"
+    return (
+        "[Dream]\n"
+        f"Focus: {target}\n\n"
+        "Propose one bold but realistic next iteration for this project. Include:\n"
+        "1) concept title\n"
+        "2) why now\n"
+        "3) implementation sketch (3-7 steps)\n"
+        "4) top risks and fallback plan\n"
+        "5) a fast validation experiment"
+    )
+
+
+def _advisor_prompt(topic: str) -> str:
+    target = topic.strip() or "overall architecture and execution quality"
+    return (
+        "[Advisor]\n"
+        f"Topic: {target}\n\n"
+        "Act as a pragmatic staff engineer advisor. Provide:\n"
+        "1) what is strong\n"
+        "2) top strategic gaps\n"
+        "3) highest ROI next actions\n"
+        "4) validation signals that prove progress\n"
+        "Be concrete and prioritized."
+    )
+
+
+def _bughunter_prompt(issue: str) -> str:
+    target = issue.strip() or "the most likely failure path in the current code changes"
+    return (
+        "[BugHunter]\n"
+        f"Target: {target}\n\n"
+        "Run a bug-hunting workflow:\n"
+        "1) reproduce or infer failure signals\n"
+        "2) identify likely root cause\n"
+        "3) propose minimal fix\n"
+        "4) add verification steps/tests\n"
+        "Keep edits focused and evidence-driven."
+    )
+
+
 async def execute_command(message: str, session_id: str, project_dir: str | None = None) -> CommandExecutionResult:
     raw = message.strip()
 
@@ -411,6 +501,62 @@ async def execute_command(message: str, session_id: str, project_dir: str | None
         return CommandExecutionResult(
             name="stop",
             text="Stop requested. Use the UI stop control (Esc or stop button) to cancel the active stream immediately.",
+        )
+
+    if command == "/teleport":
+        if not args:
+            return CommandExecutionResult(
+                name="teleport",
+                text="Usage: /teleport <execute|plan|debug|review|coordinator|bughunter|ultraplan>",
+            )
+
+        destination = _teleport_target(args[0])
+        try:
+            mode = normalize_mode(destination)
+        except ValueError as e:
+            return CommandExecutionResult(name="teleport", text=str(e))
+
+        await memory_manager.update_session_metadata(
+            session_id,
+            {"mode": mode},
+            create_if_missing=True,
+        )
+        selected = get_mode(mode)
+        return CommandExecutionResult(
+            name="teleport",
+            text=f"Teleported to mode: {selected.key} ({selected.title}).",
+        )
+
+    if command == "/ultraplan":
+        goal = " ".join(args).strip()
+        return CommandExecutionResult(
+            name="ultraplan",
+            text="UltraPlan engaged.",
+            run_prompt=_ultraplan_prompt(goal),
+        )
+
+    if command == "/dream":
+        focus = " ".join(args).strip()
+        return CommandExecutionResult(
+            name="dream",
+            text="Dream mode engaged.",
+            run_prompt=_dream_prompt(focus),
+        )
+
+    if command == "/advisor":
+        topic = " ".join(args).strip()
+        return CommandExecutionResult(
+            name="advisor",
+            text="Advisor review engaged.",
+            run_prompt=_advisor_prompt(topic),
+        )
+
+    if command == "/bughunter":
+        issue = " ".join(args).strip()
+        return CommandExecutionResult(
+            name="bughunter",
+            text="BugHunter engaged.",
+            run_prompt=_bughunter_prompt(issue),
         )
 
     if command in {"/cost", "/usage"}:

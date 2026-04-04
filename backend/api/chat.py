@@ -350,6 +350,121 @@ class PermissionDecisionRequest(BaseModel):
     remember: bool = False
 
 
+class DreamRequest(BaseModel):
+    session_id: str | None = Field(default=None, max_length=128)
+    project_dir: str | None = Field(default=None, max_length=1024)
+    focus: str | None = Field(default=None, max_length=400)
+
+    @field_validator("focus")
+    @classmethod
+    def validate_focus(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        text = value.strip()
+        return text or None
+
+
+def _format_away_label(seconds: int) -> str:
+    if seconds <= 0:
+        return "just now"
+    if seconds < 60:
+        return f"{seconds}s"
+    minutes = seconds // 60
+    if minutes < 60:
+        return f"{minutes}m"
+    hours = minutes // 60
+    if hours < 24:
+        return f"{hours}h {minutes % 60}m"
+    days = hours // 24
+    return f"{days}d {hours % 24}h"
+
+
+def _build_advisor_review(user_text: str, assistant_text: str, mode: str) -> dict[str, Any]:
+    assistant = (assistant_text or "").strip()
+    normalized = assistant.lower()
+    score = 72
+
+    if len(assistant) >= 800:
+        score += 8
+    elif len(assistant) < 100:
+        score -= 12
+
+    if any(token in normalized for token in ["test", "pytest", "validate", "verification"]):
+        score += 8
+    if any(token in normalized for token in ["risk", "rollback", "fallback", "edge case"]):
+        score += 5
+    if any(token in normalized for token in ["maybe", "might", "possibly"]):
+        score -= 3
+
+    score = max(0, min(100, score))
+
+    strengths: list[str] = []
+    risks: list[str] = []
+    next_steps: list[str] = []
+
+    if len(assistant) >= 200:
+        strengths.append("Response includes useful implementation detail.")
+    else:
+        risks.append("Response may be too brief for safe execution.")
+
+    if "test" in normalized or "validate" in normalized:
+        strengths.append("Validation mindset is visible in the response.")
+    else:
+        risks.append("Validation steps are not explicit yet.")
+
+    if any(token in normalized for token in ["error", "failed", "exception"]) and "fix" not in normalized:
+        risks.append("Errors are mentioned without a clear fix path.")
+
+    if mode in {"bughunter", "debug"}:
+        next_steps.append("Re-run the failing path and capture before/after evidence.")
+    else:
+        next_steps.append("Convert the response into a short checklist before execution.")
+    next_steps.append("Confirm with tests or concrete runtime checks.")
+
+    summary = (
+        f"Advisor score {score}/100. "
+        f"Prompt focus: {(user_text or '').strip()[:90] or 'general workflow'}"
+    )
+
+    return {
+        "score": score,
+        "summary": summary,
+        "strengths": strengths[:3],
+        "risks": risks[:3],
+        "next_steps": next_steps[:3],
+        "mode": mode,
+    }
+
+
+async def _persist_last_assistant_advisor_review(session_id: str, review: dict[str, Any]) -> None:
+    payload = await memory_manager.load_session_payload(session_id)
+    if payload is None:
+        return
+
+    messages = payload.get("messages", []) if isinstance(payload, dict) else []
+    if not isinstance(messages, list) or not messages:
+        return
+
+    for idx in range(len(messages) - 1, -1, -1):
+        message = messages[idx]
+        if not isinstance(message, dict):
+            continue
+        if str(message.get("role", "")).lower() != "assistant":
+            continue
+        updated = dict(message)
+        updated["advisor_review"] = review
+        messages[idx] = updated
+        break
+    else:
+        return
+
+    metadata = payload.get("metadata", {}) if isinstance(payload, dict) else {}
+    if not isinstance(metadata, dict):
+        metadata = {}
+
+    await memory_manager.save_session(session_id=session_id, messages=messages, metadata=metadata)
+
+
 async def _run_background_task(prompt: str, project_dir: str | None, task_id: str) -> dict[str, Any]:
     parts: list[str] = []
     usage_payload: dict[str, Any] | None = None
@@ -407,6 +522,11 @@ async def send_message(req: ChatRequest, request: Request):
             raise HTTPException(status_code=400, detail=f"project_dir is not a directory: {project_dir}")
 
     session_id = req.session_id or str(uuid.uuid4())
+    try:
+        await memory_manager.mark_session_activity(session_id)
+    except Exception:
+        pass
+
     user_content: str | list[dict[str, Any]] = req.content if req.content is not None else (req.message or "")
     user_text = _extract_text_content(user_content)
     user_payload: dict[str, Any] = {"role": "user", "content": user_content}
@@ -522,6 +642,7 @@ async def send_message(req: ChatRequest, request: Request):
             if result.run_prompt:
                 runner = SessionRunner()
                 usage_payload: dict[str, Any] | None = None
+                assistant_parts: list[str] = []
                 run_messages = list(updated_history) + [{"role": "user", "content": result.run_prompt}]
 
                 text_event = {'type': 'text', 'content': result.text}
@@ -535,10 +656,21 @@ async def send_message(req: ChatRequest, request: Request):
                     mode=latest_mode,
                     approval_callback=approval_callback,
                 ):
+                    if event.get("type") == "text":
+                        assistant_parts.append(str(event.get("content", "")))
                     if event.get("type") == "done" and isinstance(event.get("usage"), dict):
                         usage_payload = event["usage"]
                     await publish_session_event(session_id, event)
                     yield f"data: {json.dumps(event)}\n\n"
+
+                advisor_review = _build_advisor_review(user_text, "".join(assistant_parts), latest_mode)
+                advisor_event = {"type": "advisor_review", "review": advisor_review}
+                await publish_session_event(session_id, advisor_event)
+                yield f"data: {json.dumps(advisor_event)}\n\n"
+                try:
+                    await _persist_last_assistant_advisor_review(session_id, advisor_review)
+                except Exception:
+                    pass
 
                 run_result = getattr(runner, "_last_result", None)
                 if usage_payload is not None:
@@ -600,6 +732,7 @@ async def send_message(req: ChatRequest, request: Request):
 
     async def event_stream():
         usage_payload: dict | None = None
+        assistant_parts: list[str] = []
         runner = SessionRunner()
 
         session_messages = list(history) + [user_payload]
@@ -617,6 +750,8 @@ async def send_message(req: ChatRequest, request: Request):
                 approval_callback=approval_callback,
                 model_override=stored_model_override or None,
             ):
+                if event.get("type") == "text":
+                    assistant_parts.append(str(event.get("content", "")))
                 if event["type"] == "done" and isinstance(event.get("usage"), dict):
                     usage_payload = event["usage"]
 
@@ -657,6 +792,19 @@ async def send_message(req: ChatRequest, request: Request):
                     mode=effective_mode,
                     usage=None,
                 )
+
+            advisor_review = _build_advisor_review(user_text, "".join(assistant_parts), effective_mode)
+            advisor_event = {
+                "type": "advisor_review",
+                "review": advisor_review,
+            }
+            await publish_session_event(session_id, advisor_event)
+            yield f"data: {json.dumps(advisor_event)}\n\n"
+
+            try:
+                await _persist_last_assistant_advisor_review(session_id, advisor_review)
+            except Exception:
+                pass
 
         except Exception as e:
             log_audit_event("chat_send_error", request_id=request_id, session_id=session_id, error=str(e))
@@ -1233,7 +1381,92 @@ async def list_commands_endpoint(request: Request):
             {"name": "/skills", "description": "List bundled skills"},
             {"name": "/skills show <name>", "description": "Show skill content"},
             {"name": "/skills run <name>", "description": "Run bundled skill immediately"},
+            {"name": "/teleport <mode>", "description": "Quick-switch session mode"},
+            {"name": "/ultraplan <goal>", "description": "Generate a high-fidelity execution plan"},
+            {"name": "/dream [focus]", "description": "Generate a bold next-iteration concept"},
+            {"name": "/advisor [topic]", "description": "Run strategic advisor-style review"},
+            {"name": "/bughunter <issue>", "description": "Trigger bug-hunting workflow"},
         ]
+    }
+
+
+@router.post("/dream")
+async def dream_endpoint(body: DreamRequest, request: Request):
+    require_api_auth(request)
+    await enforce_rate_limit(request, SEND_RATE_LIMITER, "dream")
+
+    session_id = str(body.session_id or "").strip() or str(uuid.uuid4())
+    focus = str(body.focus or "").strip() or "the highest-impact next capability for this project"
+
+    project_dir = body.project_dir
+    if project_dir:
+        try:
+            project_dir = enforce_allowed_path(project_dir)
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
+
+        if not os.path.isdir(project_dir):
+            raise HTTPException(status_code=400, detail=f"project_dir is not a directory: {project_dir}")
+
+    payload = await memory_manager.load_session_payload(session_id)
+    history = payload.get("messages", []) if isinstance(payload, dict) else []
+    if not isinstance(history, list):
+        history = []
+
+    prompt = (
+        "Dream mode request:\n"
+        f"Focus: {focus}\n\n"
+        "Propose one bold but realistic next iteration for this codebase. Include:\n"
+        "1) concept title\n"
+        "2) why now\n"
+        "3) implementation sketch (3-7 steps)\n"
+        "4) risks and fallback\n"
+        "5) a fast validation experiment"
+    )
+
+    parts: list[str] = []
+    usage_payload: dict[str, Any] | None = None
+
+    async def on_event(event: dict[str, Any]) -> None:
+        nonlocal usage_payload
+        event_type = str(event.get("type", ""))
+        if event_type == "text":
+            parts.append(str(event.get("content", "")))
+        elif event_type == "done" and isinstance(event.get("usage"), dict):
+            usage_payload = event.get("usage")
+
+    try:
+        await memory_manager.mark_session_activity(session_id)
+    except Exception:
+        pass
+
+    runner = SessionRunner()
+    result = await runner.run(
+        session_id=session_id,
+        messages=list(history) + [{"role": "user", "content": prompt}],
+        project_dir=project_dir,
+        mode="ultraplan",
+        stream_callback=on_event,
+    )
+
+    dream_text = "".join(parts).strip() or result.output or "No dream output generated."
+
+    log_audit_event(
+        "dream_completed",
+        request_id=getattr(request.state, "request_id", None),
+        session_id=session_id,
+        has_error=bool(result.error),
+        provider=result.provider,
+        model=result.model,
+    )
+
+    return {
+        "session_id": session_id,
+        "dream": dream_text,
+        "usage": usage_payload,
+        "provider": result.provider,
+        "model": result.model,
+        "error": result.error,
     }
 
 
@@ -1579,6 +1812,34 @@ async def get_session(session_id: str, request: Request):
     return {"session_id": session_id, "messages": messages, "metadata": metadata}
 
 
+@router.get("/sessions/{session_id}/recap")
+async def get_session_recap(session_id: str, request: Request):
+    require_api_auth(request)
+    await enforce_rate_limit(request, SESSION_RATE_LIMITER, "get_session_recap")
+
+    try:
+        recap = await memory_manager.build_session_recap(session_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    away_seconds = int(recap.get("away_seconds", 0) or 0)
+    recap["away_label"] = _format_away_label(away_seconds)
+
+    try:
+        await memory_manager.mark_session_activity(session_id)
+    except Exception:
+        pass
+
+    log_audit_event(
+        "get_session_recap",
+        request_id=getattr(request.state, "request_id", None),
+        session_id=session_id,
+        away_seconds=away_seconds,
+        highlights=len(recap.get("highlights", []) if isinstance(recap.get("highlights"), list) else []),
+    )
+    return recap
+
+
 @router.get("/sessions/{session_id}/events")
 async def get_session_events(session_id: str, request: Request):
     require_api_auth(request)
@@ -1636,6 +1897,15 @@ async def get_session_events(session_id: str, request: Request):
 
         if role == "assistant":
             _push("assistant_text", timestamp=timestamp, content=content)
+
+            advisor_review = message.get("advisor_review")
+            if isinstance(advisor_review, dict):
+                _push(
+                    "advisor_review",
+                    timestamp=timestamp,
+                    content=str(advisor_review.get("summary", "")).strip(),
+                    review=advisor_review,
+                )
 
             for tool_call in message.get("tool_calls", []) if isinstance(message.get("tool_calls"), list) else []:
                 if not isinstance(tool_call, dict):

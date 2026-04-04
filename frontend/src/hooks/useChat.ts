@@ -1,5 +1,6 @@
 import { useCallback, useMemo, useRef } from 'react'
 import {
+  AdvisorReview,
   useChatStore,
   Checkpoint,
   CommandDefinition,
@@ -32,7 +33,7 @@ type SendMessageOptions = {
   silent?: boolean
 }
 
-const FALLBACK_MODE_KEYS = ['execute', 'plan', 'debug', 'review']
+const FALLBACK_MODE_KEYS = ['execute', 'plan', 'debug', 'review', 'coordinator', 'bughunter', 'ultraplan']
 
 function normalizeClientMode(mode: string | null | undefined, availableModes: ModeOption[]): string {
   const fallback = availableModes.find((item) => item.is_default)?.key || 'execute'
@@ -298,11 +299,12 @@ export function useChat() {
       // Convert raw history to display messages
       const messages: Message[] = data.messages
         .filter((m: { role: string }) => m.role !== 'system')
-        .map((m: { role: string; content: unknown }) => ({
+        .map((m: { role: string; content: unknown; advisor_review?: AdvisorReview }) => ({
           id: genId(),
           role: m.role as 'user' | 'assistant',
           content: extractTextContent(m.content),
           imageAttachment: extractImageAttachment(m.content),
+          advisorReview: m.role === 'assistant' ? (m.advisor_review || undefined) : undefined,
           timestamp: Date.now(),
         }))
       store.setMessages(messages)
@@ -424,6 +426,82 @@ export function useChat() {
       store.setError(String(e))
     }
   }, [loadCheckpoints, loadSession, store])
+
+  const runDream = useCallback(async (focus?: string) => {
+    if (store.isLoading) return
+
+    abortRef.current?.abort()
+    abortRef.current = null
+    activeAssistantIdRef.current = null
+
+    store.setError(null)
+    store.setLoading(true)
+
+    let sessionId = store.sessionId
+    const assistantId = genId()
+    store.addMessage({
+      id: assistantId,
+      role: 'assistant',
+      content: '',
+      isStreaming: true,
+      timestamp: Date.now(),
+    })
+
+    try {
+      if (!sessionId) {
+        const newSessionRes = await fetch(`${API}/new-session`, {
+          method: 'POST',
+          headers: buildApiHeaders(),
+        })
+        if (!newSessionRes.ok) {
+          throw new Error(await parseApiError(newSessionRes))
+        }
+        const payload = await newSessionRes.json()
+        sessionId = String(payload.session_id || '').trim()
+        if (!sessionId) {
+          throw new Error('Could not create a session for dream mode')
+        }
+        store.setSessionId(sessionId)
+      }
+
+      const res = await fetch(`${API}/dream`, {
+        method: 'POST',
+        headers: buildApiHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify({
+          session_id: sessionId,
+          project_dir: store.projectDir || null,
+          focus: (focus || '').trim() || null,
+        }),
+      })
+      if (!res.ok) {
+        throw new Error(await parseApiError(res))
+      }
+
+      const data = await res.json()
+      const dreamText = String(data.dream || '').trim() || 'No dream output generated.'
+      store.updateMessageById(assistantId, (msg) => ({
+        ...msg,
+        content: dreamText,
+        isStreaming: false,
+      }))
+
+      await loadSessions()
+      await loadUsage()
+      if (sessionId) {
+        await loadCheckpoints(sessionId)
+      }
+    } catch (e) {
+      const message = String(e)
+      store.setError(message)
+      store.updateMessageById(assistantId, (msg) => ({
+        ...msg,
+        content: msg.content || `Error: ${message}`,
+        isStreaming: false,
+      }))
+    } finally {
+      store.setLoading(false)
+    }
+  }, [loadCheckpoints, loadSessions, loadUsage, store])
 
   const setSessionMode = useCallback(async (mode: string, targetSessionId?: string | null) => {
     const normalized = normalizeClientMode(mode, store.availableModes)
@@ -810,6 +888,19 @@ export function useChat() {
         eventHandlers?.onMeta?.(event)
         break
 
+      case 'advisor_review':
+        if (!silent && assistantId) {
+          const rawReview = event.review
+          const review = (rawReview && typeof rawReview === 'object') ? (rawReview as AdvisorReview) : undefined
+          if (review) {
+            store.updateMessageById(assistantId, (msg) => ({
+              ...msg,
+              advisorReview: review,
+            }))
+          }
+        }
+        break
+
       case 'permission_request':
         // Reserved for future server-pushed permission events.
         pushUiNotification('Permission required', 'A tool call requires your approval.', 'warning')
@@ -849,6 +940,7 @@ export function useChat() {
     loadCheckpoints,
     createCheckpoint,
     restoreCheckpoint,
+    runDream,
     updateSessionTitle,
   }
 }

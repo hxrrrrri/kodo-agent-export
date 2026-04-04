@@ -11,12 +11,15 @@ class AgentMode:
     prompt: str
 
 
-_MODE_ORDER = ["execute", "plan", "debug", "review"]
+_MODE_ORDER = ["execute", "plan", "debug", "review", "coordinator", "bughunter", "ultraplan"]
 _MODE_ALIASES = {
     "default": "execute",
     "builder": "execute",
     "planner": "plan",
     "audit": "review",
+    "coord": "coordinator",
+    "hunt": "bughunter",
+    "ultra": "ultraplan",
 }
 
 _MODES: dict[str, AgentMode] = {
@@ -62,6 +65,39 @@ _MODES: dict[str, AgentMode] = {
             "- Prioritize findings: bugs, security issues, regressions, and missing tests.\n"
             "- Prefer evidence from code and behavior over speculative commentary.\n"
             "- Recommend minimal, high-confidence fixes."
+        ),
+    ),
+    "coordinator": AgentMode(
+        key="coordinator",
+        title="Coordinator",
+        summary="Orchestrate multi-step work with clear checkpoints and ownership.",
+        prompt=(
+            "Mode instructions (coordinator):\n"
+            "- Start by clarifying goals, constraints, and ordered milestones.\n"
+            "- Keep a short live checklist and report milestone completion explicitly.\n"
+            "- Favor low-risk sequencing: inspect, implement, validate, summarize."
+        ),
+    ),
+    "bughunter": AgentMode(
+        key="bughunter",
+        title="Bug Hunter",
+        summary="Deep debugging with reproducible evidence and regression safety.",
+        prompt=(
+            "Mode instructions (bughunter):\n"
+            "- Reproduce issues first and capture concrete failure signals.\n"
+            "- Use hypothesis-driven fixes with narrow, surgical edits.\n"
+            "- Add or update tests that prove the bug is fixed and guarded."
+        ),
+    ),
+    "ultraplan": AgentMode(
+        key="ultraplan",
+        title="Ultra Plan",
+        summary="High-fidelity implementation plans with risks and validation gates.",
+        prompt=(
+            "Mode instructions (ultraplan):\n"
+            "- Produce a concrete, execution-ready plan before writing code.\n"
+            "- Include assumptions, dependencies, edge cases, and rollback strategy.\n"
+            "- End each plan with validation steps and exit criteria."
         ),
     ),
 }

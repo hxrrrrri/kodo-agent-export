@@ -38,6 +38,14 @@ interface FileAttachment {
   previewUrl?: string
 }
 
+type SessionRecap = {
+  session_id: string
+  away_seconds: number
+  away_label?: string
+  summary: string
+  highlights: string[]
+}
+
 type PromptTemplate = {
   name: string
   content: string
@@ -92,6 +100,11 @@ const KNOWN_ROOT_COMMANDS: CommandDefinition[] = [
   { name: '/search', description: 'Search the web with provider fallback' },
   { name: '/git', description: 'Run safe, read-only git command' },
   { name: '/checkpoint', description: 'Create/list/restore checkpoints' },
+  { name: '/teleport', description: 'Quick-switch session mode' },
+  { name: '/ultraplan', description: 'Generate high-fidelity execution plans' },
+  { name: '/dream', description: 'Generate a bold next-iteration concept' },
+  { name: '/advisor', description: 'Run strategic advisor-style review' },
+  { name: '/bughunter', description: 'Trigger bug-hunting workflow' },
 ]
 
 const FALLBACK_COMMANDS: CommandDefinition[] = [
@@ -134,6 +147,11 @@ const FALLBACK_COMMANDS: CommandDefinition[] = [
   { name: '/skills', description: 'List bundled skills' },
   { name: '/skills show <name>', description: 'Show skill content' },
   { name: '/skills run <name>', description: 'Run bundled skill immediately' },
+  { name: '/teleport <mode>', description: 'Quick-switch session mode' },
+  { name: '/ultraplan <goal>', description: 'Generate high-fidelity execution plan' },
+  { name: '/dream [focus]', description: 'Generate a bold next-iteration concept' },
+  { name: '/advisor [topic]', description: 'Run strategic advisor-style review' },
+  { name: '/bughunter <issue>', description: 'Trigger bug-hunting workflow' },
 ]
 
 function leadingCommandToken(value: string): string {
@@ -285,6 +303,7 @@ export function ChatWindow({ editorOpen, onToggleEditor }: ChatWindowProps) {
     createCheckpoint,
     restoreCheckpoint,
     newSession,
+    runDream,
   } = useChat()
   const [input, setInput] = useState('')
   const [showProjectInput, setShowProjectInput] = useState(false)
@@ -324,6 +343,8 @@ export function ChatWindow({ editorOpen, onToggleEditor }: ChatWindowProps) {
   const [installPromptEvent, setInstallPromptEvent] = useState<any>(null)
   const [activeTool, setActiveTool] = useState<string | null>(null)
   const [promptTemplates, setPromptTemplates] = useState<PromptTemplate[]>([])
+  const [recapLoading, setRecapLoading] = useState(false)
+  const [afkRecap, setAfkRecap] = useState<SessionRecap | null>(null)
 
   const {
     observerMode,
@@ -457,6 +478,7 @@ export function ChatWindow({ editorOpen, onToggleEditor }: ChatWindowProps) {
     setTerminalRunning(false)
     setActiveTool(null)
     setThemeMenuOpen(false)
+    setAfkRecap(null)
     dragDepthRef.current = 0
     setDragOverlayVisible(false)
     const resetCwd = projectDir || ''
@@ -898,6 +920,60 @@ export function ChatWindow({ editorOpen, onToggleEditor }: ChatWindowProps) {
     return { cwd: nextCwd }
   }, [isLoading, observerMode, projectDir, terminalRunning])
 
+  const fetchSessionRecap = useCallback(async (manual = false) => {
+    if (!sessionId) return
+    if (recapLoading) return
+
+    setRecapLoading(true)
+    try {
+      const response = await fetch(`/api/chat/sessions/${encodeURIComponent(sessionId)}/recap`, {
+        headers: buildApiHeaders(),
+      })
+      if (!response.ok) {
+        throw new Error(await parseApiError(response))
+      }
+
+      const payload = await response.json() as SessionRecap
+      const awaySeconds = Number(payload.away_seconds || 0)
+      if (manual || awaySeconds >= 300) {
+        setAfkRecap(payload)
+      }
+    } catch {
+      if (manual) {
+        setAfkRecap({
+          session_id: sessionId,
+          away_seconds: 0,
+          away_label: 'just now',
+          summary: 'Recap is unavailable right now.',
+          highlights: [],
+        })
+      }
+    } finally {
+      setRecapLoading(false)
+    }
+  }, [recapLoading, sessionId])
+
+  useEffect(() => {
+    if (!sessionId) return
+
+    const handleVisibility = () => {
+      if (document.visibilityState === 'visible') {
+        void fetchSessionRecap(false)
+      }
+    }
+
+    const handleFocus = () => {
+      void fetchSessionRecap(false)
+    }
+
+    document.addEventListener('visibilitychange', handleVisibility)
+    window.addEventListener('focus', handleFocus)
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibility)
+      window.removeEventListener('focus', handleFocus)
+    }
+  }, [fetchSessionRecap, sessionId])
+
   const terminalActive = showTerminal
 
   useEffect(() => {
@@ -1323,6 +1399,9 @@ export function ChatWindow({ editorOpen, onToggleEditor }: ChatWindowProps) {
       { key: 'plan', title: 'Plan', summary: 'Plan-first execution.', is_default: false },
       { key: 'debug', title: 'Debug', summary: 'Hypothesis-driven debugging.', is_default: false },
       { key: 'review', title: 'Review', summary: 'Risk-focused code review.', is_default: false },
+      { key: 'coordinator', title: 'Coordinator', summary: 'Milestone-driven orchestration.', is_default: false },
+      { key: 'bughunter', title: 'Bug Hunter', summary: 'Deep bug-hunting with validation.', is_default: false },
+      { key: 'ultraplan', title: 'Ultra Plan', summary: 'High-fidelity implementation planning.', is_default: false },
     ]
   const activeMode = useMemo(() => {
     const normalized = (sessionMode || '').trim().toLowerCase()
@@ -1509,6 +1588,60 @@ export function ChatWindow({ editorOpen, onToggleEditor }: ChatWindowProps) {
             </option>
           ))}
         </select>
+
+        <button
+          type="button"
+          onClick={() => {
+            void runDream()
+          }}
+          title="Generate a bold next-iteration concept"
+          disabled={observerMode || isLoading}
+          style={{
+            background: 'none',
+            border: '1px solid var(--border)',
+            color: 'var(--text-2)',
+            padding: '4px 10px',
+            borderRadius: 'var(--radius)',
+            cursor: observerMode || isLoading ? 'not-allowed' : 'pointer',
+            fontSize: 11,
+            fontFamily: 'var(--font-mono)',
+            transition: 'all 0.15s',
+            transform: 'translateY(0)',
+            outline: 'none',
+            opacity: observerMode || isLoading ? 0.6 : 1,
+          }}
+          onMouseEnter={(e) => applyHeaderHover(e, { disabled: observerMode || isLoading })}
+          onMouseLeave={(e) => resetHeaderHover(e, { disabled: observerMode || isLoading })}
+        >
+          DREAM
+        </button>
+
+        <button
+          type="button"
+          onClick={() => {
+            void fetchSessionRecap(true)
+          }}
+          title="Show recap for current session"
+          disabled={!sessionId || recapLoading}
+          style={{
+            background: afkRecap ? 'var(--accent-dim)' : 'none',
+            border: `1px solid ${afkRecap ? 'var(--accent)' : 'var(--border)'}`,
+            color: afkRecap ? 'var(--text-0)' : 'var(--text-2)',
+            padding: '4px 10px',
+            borderRadius: 'var(--radius)',
+            cursor: !sessionId || recapLoading ? 'not-allowed' : 'pointer',
+            fontSize: 11,
+            fontFamily: 'var(--font-mono)',
+            transition: 'all 0.15s',
+            transform: 'translateY(0)',
+            outline: 'none',
+            opacity: !sessionId || recapLoading ? 0.6 : 1,
+          }}
+          onMouseEnter={(e) => applyHeaderHover(e, { active: Boolean(afkRecap), disabled: !sessionId || recapLoading })}
+          onMouseLeave={(e) => resetHeaderHover(e, { active: Boolean(afkRecap), disabled: !sessionId || recapLoading })}
+        >
+          {recapLoading ? 'RECAP...' : 'RECAP'}
+        </button>
 
         <button
           type="button"
@@ -2027,6 +2160,53 @@ export function ChatWindow({ editorOpen, onToggleEditor }: ChatWindowProps) {
           {isMessageFilteringActive && (
             <div style={{ fontSize: 11, color: 'var(--text-2)' }}>
               {filteredMessages.length} of {messages.length} messages match
+            </div>
+          )}
+        </div>
+      )}
+
+      {afkRecap && (
+        <div
+          style={{
+            padding: '10px 24px',
+            borderBottom: '1px solid var(--border)',
+            background: 'var(--bg-1)',
+            display: 'grid',
+            gap: 6,
+          }}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
+            <span style={{ fontSize: 11, color: 'var(--accent)', letterSpacing: '0.08em' }}>
+              AFK RECAP {afkRecap.away_label ? `· away ${afkRecap.away_label}` : ''}
+            </span>
+            <button
+              type="button"
+              onClick={() => setAfkRecap(null)}
+              style={{
+                border: '1px solid var(--border)',
+                background: 'var(--bg-2)',
+                color: 'var(--text-2)',
+                borderRadius: 'var(--radius)',
+                fontSize: 10,
+                padding: '2px 6px',
+                cursor: 'pointer',
+              }}
+            >
+              Hide
+            </button>
+          </div>
+
+          <div style={{ fontSize: 12, color: 'var(--text-1)', lineHeight: 1.5 }}>
+            {afkRecap.summary}
+          </div>
+
+          {afkRecap.highlights.length > 0 && (
+            <div style={{ display: 'grid', gap: 4 }}>
+              {afkRecap.highlights.slice(-3).map((item, index) => (
+                <div key={`${item}-${index}`} style={{ fontSize: 11, color: 'var(--text-2)' }}>
+                  - {item}
+                </div>
+              ))}
             </div>
           )}
         </div>
