@@ -63,7 +63,7 @@ jobs:
           pip install -r requirements.txt
           pip install pytest pytest-asyncio
       - name: Run backend tests
-        run: pytest tests -q
+        run: pytest tests -q -W ignore::DeprecationWarning
 
   lint-frontend:
     runs-on: ubuntu-latest
@@ -128,4 +128,4 @@ jobs:
           pip install -r requirements.txt
           pip install pytest pytest-asyncio
       - name: Smoke tests
-        run: pytest tests/smoke/ -q
+        run: pytest tests/smoke/ -q -W ignore::DeprecationWarning
