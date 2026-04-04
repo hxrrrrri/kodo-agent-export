@@ -1,6 +1,6 @@
 import { MouseEvent as ReactMouseEvent, useEffect, useRef, useState } from 'react'
 import { Sidebar } from './components/Sidebar'
-import { ChatWindow } from './components/ChatWindow'
+import ChatWindow from './components/ChatWindow'
 import { NotificationCenter } from './components/NotificationCenter'
 import { EditorPanel } from './components/EditorPanel'
 import { useChatStore } from './store/chatStore'

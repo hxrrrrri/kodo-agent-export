@@ -2169,6 +2169,8 @@ export function ChatWindow({ editorOpen, onToggleEditor }: ChatWindowProps) {
   )
 }
 
+export default ChatWindow
+
 function ShortcutRow({ keys, action }: { keys: string; action: string }) {
   return (
     <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10, fontSize: 12 }}>
