@@ -598,6 +598,12 @@ async def execute_command(message: str, session_id: str, project_dir: str | None
                 return CommandExecutionResult(name="provider", text=str(e))
 
             active = await profile_manager.get_active_profile()
+            if active and str(active.model or "").strip():
+                await memory_manager.update_session_metadata(
+                    session_id,
+                    {"model_override": str(active.model).strip()},
+                    create_if_missing=True,
+                )
             return CommandExecutionResult(
                 name="provider",
                 text=f"Activated profile: {(active.name if active else args[1])}",

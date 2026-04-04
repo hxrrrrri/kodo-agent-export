@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Activity, RefreshCw, ShieldCheck, Stethoscope } from 'lucide-react'
 import { buildApiHeaders, parseApiError } from '../lib/api'
+import { useChatStore } from '../store/chatStore'
 
 type ProviderRow = {
   provider: string
@@ -46,6 +47,81 @@ type WebhookEvent = {
 }
 
 const ROUTER_STRATEGIES = ['latency', 'cost', 'balanced', 'quality']
+const ALL_PROVIDER_OPTIONS = [
+  'anthropic',
+  'openai',
+  'gemini',
+  'deepseek',
+  'groq',
+  'openrouter',
+  'github-models',
+  'codex',
+  'ollama',
+  'atomic-chat',
+]
+
+const DEFAULT_MODEL_BY_PROVIDER: Record<string, string> = {
+  anthropic: 'claude-sonnet-4-6',
+  openai: 'gpt-4o',
+  gemini: 'gemini-2.0-flash',
+  deepseek: 'deepseek-chat',
+  groq: 'llama-3.3-70b-versatile',
+  openrouter: 'anthropic/claude-sonnet-4-6',
+  'github-models': 'gpt-4o',
+  codex: 'gpt-4o',
+  ollama: '',
+  'atomic-chat': '',
+}
+
+type ProvidersDiscoveryResponse = {
+  providers: Record<string, boolean>
+  models: Record<string, string[]>
+  key_status: Record<string, boolean>
+}
+
+type ProviderSwitchResponse = {
+  provider: string
+  model: string
+  router_mode: string
+  profile: string
+  persisted: boolean
+}
+
+function normalizeProviderName(value: string): string {
+  const normalized = String(value || '').trim().toLowerCase().replace('_', '-')
+  return normalized === 'atomicchat' ? 'atomic-chat' : normalized
+}
+
+function mergeModelCatalog(
+  base: Record<string, string[]>,
+  rows: ProviderRow[],
+): Record<string, string[]> {
+  const merged: Record<string, string[]> = {}
+
+  for (const [provider, models] of Object.entries(base)) {
+    const key = normalizeProviderName(provider)
+    merged[key] = Array.from(new Set((models || []).map((item) => String(item || '').trim()).filter(Boolean)))
+  }
+
+  for (const row of rows) {
+    const key = normalizeProviderName(row.provider)
+    const existing = merged[key] || []
+    const additions = [row.big_model, row.small_model]
+      .map((item) => String(item || '').trim())
+      .filter(Boolean)
+    merged[key] = Array.from(new Set([...existing, ...additions]))
+  }
+
+  for (const provider of ALL_PROVIDER_OPTIONS) {
+    const key = normalizeProviderName(provider)
+    if (!merged[key] || merged[key].length === 0) {
+      const fallback = DEFAULT_MODEL_BY_PROVIDER[key]
+      merged[key] = fallback ? [fallback] : []
+    }
+  }
+
+  return merged
+}
 
 function latencyColor(latency: number | null): string {
   if (latency === null) return 'var(--text-2)'
@@ -55,6 +131,7 @@ function latencyColor(latency: number | null): string {
 }
 
 export function ProviderPanel() {
+  const sessionId = useChatStore((state) => state.sessionId)
   const [status, setStatus] = useState<ProvidersStatusResponse | null>(null)
   const [profiles, setProfiles] = useState<ProviderProfile[]>([])
   const [activeProfile, setActiveProfile] = useState<ProviderProfile | null>(null)
@@ -65,6 +142,10 @@ export function ProviderPanel() {
   const [webhookError, setWebhookError] = useState<string | null>(null)
   const [copiedWebhook, setCopiedWebhook] = useState(false)
   const [strategyDraft, setStrategyDraft] = useState('balanced')
+  const [modelCatalog, setModelCatalog] = useState<Record<string, string[]>>({})
+  const [providerAvailability, setProviderAvailability] = useState<Record<string, boolean>>({})
+  const [switchDraft, setSwitchDraft] = useState({ provider: '', model: '' })
+  const [switching, setSwitching] = useState(false)
   const [showModal, setShowModal] = useState(false)
   const [newProfile, setNewProfile] = useState({
     name: '',
@@ -101,6 +182,27 @@ export function ProviderPanel() {
     return rows.find((row) => row.healthy) || rows[0] || null
   }, [activeProfile, status])
 
+  const mergedModelCatalog = useMemo(() => {
+    return mergeModelCatalog(modelCatalog, status?.providers || [])
+  }, [modelCatalog, status])
+
+  const providerOptions = useMemo(() => {
+    const dynamic = Object.keys(mergedModelCatalog)
+    return Array.from(new Set([...ALL_PROVIDER_OPTIONS, ...dynamic])).map((provider) => normalizeProviderName(provider))
+  }, [mergedModelCatalog])
+
+  const effectiveSwitchProvider = useMemo(() => {
+    if (switchDraft.provider) {
+      return normalizeProviderName(switchDraft.provider)
+    }
+    return providerOptions[0] || ''
+  }, [providerOptions, switchDraft.provider])
+
+  const modelOptions = useMemo(() => {
+    const key = normalizeProviderName(effectiveSwitchProvider)
+    return mergedModelCatalog[key] || []
+  }, [effectiveSwitchProvider, mergedModelCatalog])
+
   const webhookUrl = useMemo(() => {
     if (typeof window === 'undefined') return '/api/webhooks/trigger'
     return `${window.location.origin}/api/webhooks/trigger`
@@ -113,6 +215,55 @@ export function ProviderPanel() {
       const payload = (await res.json()) as ProvidersStatusResponse
       setStatus(payload)
       setStrategyDraft(payload.strategy || 'balanced')
+
+      const nextAvailability: Record<string, boolean> = {}
+      for (const row of payload.providers || []) {
+        nextAvailability[normalizeProviderName(row.provider)] = Boolean(row.configured)
+      }
+      setProviderAvailability((prev) => ({ ...prev, ...nextAvailability }))
+
+      if (payload.providers && payload.providers.length > 0) {
+        const first = payload.providers[0]
+        const firstProvider = normalizeProviderName(first.provider)
+        setSwitchDraft((prev) => {
+          if (prev.provider) {
+            return prev
+          }
+          return {
+            provider: firstProvider,
+            model: first.big_model || prev.model || '',
+          }
+        })
+      }
+    } catch (e) {
+      setError(String(e))
+    }
+  }
+
+  const loadDiscovery = async () => {
+    try {
+      const res = await fetch('/api/providers/discover', { headers: buildApiHeaders() })
+      if (!res.ok) throw new Error(await parseApiError(res))
+      const payload = (await res.json()) as ProvidersDiscoveryResponse
+
+      const discoveredModels: Record<string, string[]> = {}
+      for (const [provider, models] of Object.entries(payload.models || {})) {
+        discoveredModels[normalizeProviderName(provider)] = (models || []).map((item) => String(item || '').trim()).filter(Boolean)
+      }
+      setModelCatalog(discoveredModels)
+
+      const nextAvailability: Record<string, boolean> = {}
+      const local = payload.providers || {}
+      const keys = payload.key_status || {}
+      nextAvailability['openai'] = Boolean(keys.openai)
+      nextAvailability['anthropic'] = Boolean(keys.anthropic)
+      nextAvailability['gemini'] = Boolean(keys.gemini)
+      nextAvailability['deepseek'] = Boolean(keys.deepseek)
+      nextAvailability['groq'] = Boolean(keys.groq)
+      nextAvailability['ollama'] = Boolean(local.ollama)
+      nextAvailability['atomic-chat'] = Boolean(local.atomic_chat)
+
+      setProviderAvailability((prev) => ({ ...prev, ...nextAvailability }))
     } catch (e) {
       setError(String(e))
     }
@@ -209,31 +360,61 @@ export function ProviderPanel() {
   }
 
   const setActiveFromProvider = async (row: ProviderRow) => {
-    const name = `quick-${row.provider}`
     try {
-      const saveRes = await fetch('/api/profiles', {
+      const targetProvider = normalizeProviderName(row.provider)
+      const modelHint = targetProvider === 'ollama' || targetProvider === 'atomic-chat'
+        ? null
+        : (row.big_model || row.small_model || null)
+
+      const res = await fetch('/api/providers/switch', {
         method: 'POST',
         headers: buildApiHeaders({ 'Content-Type': 'application/json' }),
         body: JSON.stringify({
-          name,
-          provider: row.provider,
-          model: row.big_model || row.small_model,
-          goal: 'balanced',
-          base_url: null,
-          api_key: null,
+          provider: targetProvider,
+          model: modelHint,
+          session_id: sessionId || null,
+          persist: true,
         }),
       })
-      if (!saveRes.ok) throw new Error(await parseApiError(saveRes))
+      if (!res.ok) throw new Error(await parseApiError(res))
 
-      const activateRes = await fetch(`/api/profiles/${encodeURIComponent(name)}/activate`, {
-        method: 'POST',
-        headers: buildApiHeaders(),
-      })
-      if (!activateRes.ok) throw new Error(await parseApiError(activateRes))
-
-      await loadProfiles()
+      const payload = (await res.json()) as ProviderSwitchResponse
+      setSwitchDraft({ provider: payload.provider, model: payload.model })
+      await Promise.all([loadStatus(), loadProfiles(), loadDiscovery()])
     } catch (e) {
       setError(String(e))
+    }
+  }
+
+  const applyQuickSwitch = async () => {
+    const provider = normalizeProviderName(effectiveSwitchProvider)
+    if (!provider) {
+      setError('Choose a provider to switch.')
+      return
+    }
+
+    setSwitching(true)
+    setError(null)
+    try {
+      const response = await fetch('/api/providers/switch', {
+        method: 'POST',
+        headers: buildApiHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify({
+          provider,
+          model: switchDraft.model.trim() || modelOptions[0] || null,
+          session_id: sessionId || null,
+          persist: true,
+        }),
+      })
+      if (!response.ok) throw new Error(await parseApiError(response))
+
+      const payload = (await response.json()) as ProviderSwitchResponse
+      setSwitchDraft({ provider: payload.provider, model: payload.model })
+      await Promise.all([loadStatus(), loadProfiles(), loadDiscovery()])
+    } catch (e) {
+      setError(String(e))
+    } finally {
+      setSwitching(false)
     }
   }
 
@@ -241,10 +422,19 @@ export function ProviderPanel() {
     try {
       const res = await fetch(`/api/profiles/${encodeURIComponent(name)}/activate`, {
         method: 'POST',
-        headers: buildApiHeaders(),
+        headers: buildApiHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify({
+          session_id: sessionId || null,
+          persist: true,
+        }),
       })
       if (!res.ok) throw new Error(await parseApiError(res))
-      await loadProfiles()
+      const payload = await res.json()
+      const profile = payload?.profile as ProviderProfile | undefined
+      if (profile?.provider && profile?.model) {
+        setSwitchDraft({ provider: profile.provider, model: profile.model })
+      }
+      await Promise.all([loadProfiles(), loadStatus(), loadDiscovery()])
     } catch (e) {
       setError(String(e))
     }
@@ -292,6 +482,7 @@ export function ProviderPanel() {
 
   useEffect(() => {
     void loadStatus()
+    void loadDiscovery()
     void loadProfiles()
     void loadWebhookEvents()
   }, [])
@@ -299,6 +490,7 @@ export function ProviderPanel() {
   useEffect(() => {
     const timer = window.setInterval(() => {
       void loadStatus()
+      void loadDiscovery()
       void loadProfiles()
     }, 7000)
 
@@ -391,6 +583,109 @@ export function ProviderPanel() {
               }} />
               {activeProvider?.healthy ? 'HEALTHY' : 'UNHEALTHY'}
             </span>
+          </div>
+        </div>
+      </section>
+
+      <section style={{ marginBottom: 12 }}>
+        <div style={{ fontSize: 10, color: 'var(--text-2)', letterSpacing: '0.1em', marginBottom: 6 }}>QUICK SWITCH</div>
+        <div
+          style={{
+            border: '1px solid var(--border)',
+            borderRadius: 'var(--radius)',
+            background: 'var(--bg-2)',
+            padding: '8px 10px',
+            display: 'grid',
+            gap: 8,
+          }}
+        >
+          <select
+            value={effectiveSwitchProvider}
+            onChange={(event) => {
+              const provider = normalizeProviderName(event.target.value)
+              const models = mergedModelCatalog[provider] || []
+              setSwitchDraft({
+                provider,
+                model: models[0] || DEFAULT_MODEL_BY_PROVIDER[provider] || '',
+              })
+            }}
+            style={{
+              width: '100%',
+              background: 'var(--bg-1)',
+              color: 'var(--text-0)',
+              border: '1px solid var(--border)',
+              borderRadius: 'var(--radius)',
+              padding: '6px 8px',
+              fontSize: 11,
+              fontFamily: 'var(--font-mono)',
+            }}
+          >
+            {providerOptions.map((provider) => {
+              const available = providerAvailability[provider]
+              return (
+                <option key={provider} value={provider}>
+                  {available ? provider : `${provider} (not configured)`}
+                </option>
+              )
+            })}
+          </select>
+
+          <select
+            value={modelOptions.includes(switchDraft.model) ? switchDraft.model : (modelOptions[0] || switchDraft.model)}
+            onChange={(event) => setSwitchDraft((prev) => ({ ...prev, model: event.target.value }))}
+            style={{
+              width: '100%',
+              background: 'var(--bg-1)',
+              border: '1px solid var(--border)',
+              color: 'var(--text-0)',
+              borderRadius: 'var(--radius)',
+              padding: '6px 8px',
+              fontSize: 11,
+              fontFamily: 'var(--font-mono)',
+            }}
+          >
+            {modelOptions.length === 0 && (
+              <option value="">(no discovered models)</option>
+            )}
+            {modelOptions.map((model) => (
+              <option key={model} value={model}>{model}</option>
+            ))}
+          </select>
+
+          <button
+            onClick={() => void loadDiscovery()}
+            style={{
+              border: '1px solid var(--border)',
+              color: 'var(--text-1)',
+              background: 'var(--bg-1)',
+              borderRadius: 'var(--radius)',
+              fontSize: 10,
+              padding: '4px 8px',
+              cursor: 'pointer',
+            }}
+          >
+            Refresh Models
+          </button>
+
+          <button
+            onClick={() => void applyQuickSwitch()}
+            disabled={switching}
+            style={{
+              border: '1px solid var(--accent)',
+              color: 'var(--accent)',
+              background: 'var(--accent-dim)',
+              borderRadius: 'var(--radius)',
+              fontSize: 11,
+              padding: '6px 8px',
+              cursor: switching ? 'not-allowed' : 'pointer',
+              opacity: switching ? 0.65 : 1,
+            }}
+          >
+            {switching ? 'Switching...' : 'Switch Provider'}
+          </button>
+
+          <div style={{ fontSize: 10, color: 'var(--text-2)' }}>
+            Applies instantly and persists to backend settings. Existing session model is updated when available.
           </div>
         </div>
       </section>

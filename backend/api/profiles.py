@@ -1,14 +1,21 @@
 from __future__ import annotations
 
 from dataclasses import asdict
+import logging
+import os
+from pathlib import Path
 
+from dotenv import set_key
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 
 from api.security import MEMORY_RATE_LIMITER, enforce_rate_limit, require_api_auth
+from memory.manager import memory_manager
 from profiles.manager import ProviderProfile, profile_manager
 
 router = APIRouter(prefix="/api/profiles", tags=["profiles"])
+logger = logging.getLogger(__name__)
+_DEFAULT_DOTENV_PATH = Path(__file__).resolve().parents[1] / ".env"
 
 
 class ProviderProfileRequest(BaseModel):
@@ -22,6 +29,32 @@ class ProviderProfileRequest(BaseModel):
 
 class AutoSelectRequest(BaseModel):
     goal: str = Field(default="balanced", max_length=32)
+
+
+class ActivateProfileRequest(BaseModel):
+    session_id: str | None = Field(default=None, max_length=128)
+    persist: bool = Field(default=True)
+
+
+def _resolve_dotenv_path() -> Path:
+    override = os.getenv("KODO_SETTINGS_DOTENV_PATH", "").strip()
+    if override:
+        return Path(override).expanduser()
+    return _DEFAULT_DOTENV_PATH
+
+
+def _persist_setting(env_key: str, value: str) -> None:
+    dotenv_path = _resolve_dotenv_path()
+    try:
+        set_key(str(dotenv_path), env_key, value, quote_mode="auto")
+    except Exception as exc:
+        logger.warning("Failed to persist setting %s to %s: %s", env_key, dotenv_path, exc)
+
+
+def _set_runtime_setting(env_key: str, value: str, *, persist: bool) -> None:
+    os.environ[env_key] = value
+    if persist:
+        _persist_setting(env_key, value)
 
 
 @router.get("")
@@ -66,7 +99,7 @@ async def delete_profile_endpoint(name: str, request: Request):
 
 
 @router.post("/{name}/activate")
-async def activate_profile_endpoint(name: str, request: Request):
+async def activate_profile_endpoint(name: str, request: Request, body: ActivateProfileRequest | None = None):
     require_api_auth(request)
     await enforce_rate_limit(request, MEMORY_RATE_LIMITER, "profiles_activate")
 
@@ -76,7 +109,35 @@ async def activate_profile_endpoint(name: str, request: Request):
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
     active = await profile_manager.get_active_profile()
-    return {"activated": True, "profile": asdict(active) if active else None}
+    model_override_updated = False
+    persist = True if body is None else bool(body.persist)
+
+    if active is not None:
+        provider = str(active.provider or "").strip().lower()
+        model = str(active.model or "").strip()
+        if provider and model:
+            _set_runtime_setting("PRIMARY_PROVIDER", provider, persist=persist)
+            _set_runtime_setting("MODEL", model, persist=persist)
+            _set_runtime_setting("ROUTER_MODE", "fixed", persist=persist)
+
+            if provider in {"ollama", "atomic-chat"}:
+                _set_runtime_setting("BIG_MODEL", model, persist=persist)
+                _set_runtime_setting("SMALL_MODEL", model, persist=persist)
+
+        session_id = str((body.session_id if body else "") or "").strip()
+        if session_id and model:
+            await memory_manager.update_session_metadata(
+                session_id,
+                {"model_override": model},
+                create_if_missing=True,
+            )
+            model_override_updated = True
+
+    return {
+        "activated": True,
+        "profile": asdict(active) if active else None,
+        "model_override_updated": model_override_updated,
+    }
 
 
 @router.get("/active")

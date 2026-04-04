@@ -29,7 +29,7 @@ def sanitize_outbound_headers(headers: dict[str, str] | None = None) -> dict[str
     return cleaned
 
 
-def _strip_user_agent(request: httpx.Request) -> None:
+async def _strip_user_agent(request: httpx.Request) -> None:
     if telemetry_disabled():
         request.headers.pop("User-Agent", None)
 

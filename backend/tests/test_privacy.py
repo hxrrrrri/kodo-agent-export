@@ -1,6 +1,8 @@
 from __future__ import annotations
 
-from privacy import feature_enabled, sanitize_outbound_headers, telemetry_disabled
+import inspect
+
+from privacy import _strip_user_agent, feature_enabled, sanitize_outbound_headers, telemetry_disabled
 
 
 def test_telemetry_disabled_flag(monkeypatch):
@@ -21,3 +23,7 @@ def test_sanitize_headers_removes_user_agent(monkeypatch):
     headers = sanitize_outbound_headers({'User-Agent': 'kodo-test', 'Accept': 'application/json'})
     assert 'User-Agent' not in headers
     assert headers['Accept'] == 'application/json'
+
+
+def test_strip_user_agent_hook_is_async():
+    assert inspect.iscoroutinefunction(_strip_user_agent)

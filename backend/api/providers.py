@@ -1,15 +1,36 @@
 from __future__ import annotations
 
+import logging
 import os
+from pathlib import Path
 
+from dotenv import set_key
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 
 from api.security import MEMORY_RATE_LIMITER, enforce_rate_limit, require_api_auth
-from providers.discovery import discover_local_providers, list_available_models
+from memory.manager import memory_manager
+from profiles.manager import ProviderProfile, profile_manager
+from providers.discovery import discover_local_providers, list_available_models, recommend_model
 from providers.smart_router import ROUTER_STRATEGIES, get_smart_router, smart_router_enabled
 
 router = APIRouter(prefix="/api/providers", tags=["providers"])
+logger = logging.getLogger(__name__)
+
+SUPPORTED_PROVIDERS = {
+    "anthropic",
+    "openai",
+    "gemini",
+    "deepseek",
+    "groq",
+    "openrouter",
+    "github-models",
+    "codex",
+    "ollama",
+    "atomic-chat",
+}
+
+_DEFAULT_DOTENV_PATH = Path(__file__).resolve().parents[1] / ".env"
 
 
 def _request_overrides(request: Request) -> dict[str, str]:
@@ -50,6 +71,50 @@ def _provider_configured(provider: str, request: Request) -> bool:
     return False
 
 
+def _normalize_provider_name(value: str) -> str:
+    normalized = value.strip().lower().replace("_", "-")
+    if normalized == "atomicchat":
+        return "atomic-chat"
+    return normalized
+
+
+def _resolve_dotenv_path() -> Path:
+    override = os.getenv("KODO_SETTINGS_DOTENV_PATH", "").strip()
+    if override:
+        return Path(override).expanduser()
+    return _DEFAULT_DOTENV_PATH
+
+
+def _persist_setting(env_key: str, value: str) -> None:
+    dotenv_path = _resolve_dotenv_path()
+    try:
+        set_key(str(dotenv_path), env_key, value, quote_mode="auto")
+    except Exception as exc:
+        logger.warning("Failed to persist setting %s to %s: %s", env_key, dotenv_path, exc)
+
+
+def _set_runtime_setting(env_key: str, value: str, *, persist: bool) -> None:
+    os.environ[env_key] = value
+    if persist:
+        _persist_setting(env_key, value)
+
+
+async def _resolve_model_for_switch(provider: str, requested_model: str | None) -> str:
+    explicit = str(requested_model or "").strip()
+    if explicit:
+        return explicit
+
+    if provider in {"ollama", "atomic-chat"}:
+        discovered = await list_available_models(provider)
+        pick = recommend_model(discovered, "balanced") if discovered else None
+        if pick:
+            return pick
+        if discovered:
+            return discovered[0]
+
+    return _default_model_for_provider(provider)
+
+
 def _default_model_for_provider(provider: str) -> str:
     name = provider.strip().lower()
     if name == "anthropic":
@@ -77,6 +142,13 @@ def _default_model_for_provider(provider: str) -> str:
 
 class RouterStrategyRequest(BaseModel):
     strategy: str = Field(min_length=1, max_length=32)
+
+
+class ProviderSwitchRequest(BaseModel):
+    provider: str = Field(min_length=1, max_length=80)
+    model: str | None = Field(default=None, max_length=200)
+    session_id: str | None = Field(default=None, max_length=128)
+    persist: bool = Field(default=True)
 
 
 @router.get("/discover")
@@ -202,4 +274,69 @@ async def ping_provider(provider_name: str, request: Request):
         "healthy": provider.healthy,
         "latency_ms": round(provider.avg_latency_ms, 2),
         "error_rate": round(provider.error_rate, 4),
+    }
+
+
+@router.post("/switch")
+async def switch_provider_endpoint(body: ProviderSwitchRequest, request: Request):
+    require_api_auth(request)
+    await enforce_rate_limit(request, MEMORY_RATE_LIMITER, "providers_switch")
+
+    provider = _normalize_provider_name(body.provider)
+    if provider not in SUPPORTED_PROVIDERS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unsupported provider '{body.provider}'.",
+        )
+
+    if not _provider_configured(provider, request):
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Provider '{provider}' is not configured. Add credentials/base URL and retry."
+            ),
+        )
+
+    resolved_model = (await _resolve_model_for_switch(provider, body.model)).strip()
+    if not resolved_model:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Could not resolve model for provider '{provider}'.",
+        )
+
+    _set_runtime_setting("PRIMARY_PROVIDER", provider, persist=body.persist)
+    _set_runtime_setting("MODEL", resolved_model, persist=body.persist)
+    _set_runtime_setting("ROUTER_MODE", "fixed", persist=body.persist)
+    if provider in {"ollama", "atomic-chat"}:
+        _set_runtime_setting("BIG_MODEL", resolved_model, persist=body.persist)
+        _set_runtime_setting("SMALL_MODEL", resolved_model, persist=body.persist)
+
+    profile_name = f"quick-{provider}"
+    profile = ProviderProfile.from_dict(
+        {
+            "name": profile_name,
+            "provider": provider,
+            "model": resolved_model,
+            "goal": "balanced",
+            "base_url": None,
+            "api_key": None,
+        }
+    )
+    await profile_manager.save_profile(profile)
+    await profile_manager.activate_profile(profile_name)
+
+    session_id = str(body.session_id or "").strip()
+    if session_id:
+        await memory_manager.update_session_metadata(
+            session_id,
+            {"model_override": resolved_model},
+            create_if_missing=True,
+        )
+
+    return {
+        "provider": provider,
+        "model": resolved_model,
+        "router_mode": "fixed",
+        "profile": profile_name,
+        "persisted": bool(body.persist),
     }

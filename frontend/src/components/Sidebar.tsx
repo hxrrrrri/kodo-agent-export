@@ -82,6 +82,23 @@ type StoredApiKeys = {
 }
 
 const API_KEY_STORAGE = 'kodo_api_keys'
+const SETTINGS_REQUEST_TIMEOUT_MS = 10000
+
+async function fetchWithTimeout(input: RequestInfo | URL, init: RequestInit = {}, timeoutMs = SETTINGS_REQUEST_TIMEOUT_MS): Promise<Response> {
+  const controller = new AbortController()
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs)
+
+  try {
+    return await fetch(input, { ...init, signal: controller.signal })
+  } catch (error) {
+    if (error instanceof DOMException && error.name === 'AbortError') {
+      throw new Error(`Request timed out after ${Math.round(timeoutMs / 1000)}s`)
+    }
+    throw error
+  } finally {
+    clearTimeout(timeoutId)
+  }
+}
 
 function toGraphStatus(status: string | undefined): AgentNode['status'] {
   const normalized = (status || '').toLowerCase()
@@ -657,7 +674,7 @@ export function Sidebar({ collapsed, onToggleCollapse }: SidebarProps) {
     setSettingsLoading(true)
     setSettingsError('')
     try {
-      const response = await fetch('/api/settings', { headers: buildApiHeaders() })
+      const response = await fetchWithTimeout('/api/settings', { headers: buildApiHeaders() })
       if (!response.ok) {
         throw new Error(await parseApiError(response))
       }
@@ -678,7 +695,7 @@ export function Sidebar({ collapsed, onToggleCollapse }: SidebarProps) {
       const toBool = (value: string | undefined) => {
         return ['1', 'true', 'yes', 'on'].includes(String(value || '').toLowerCase())
       }
-      const response = await fetch('/api/settings', {
+      const response = await fetchWithTimeout('/api/settings', {
         method: 'PATCH',
         headers: buildApiHeaders({ 'Content-Type': 'application/json' }),
         body: JSON.stringify({

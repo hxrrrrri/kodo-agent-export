@@ -1,14 +1,19 @@
 from __future__ import annotations
 
+import logging
 import os
+from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, Request
+from dotenv import set_key
 from pydantic import BaseModel
 
 from api.security import MEMORY_RATE_LIMITER, enforce_rate_limit, require_api_auth
 
 router = APIRouter(prefix="/settings", tags=["settings"])
+logger = logging.getLogger(__name__)
+_DEFAULT_DOTENV_PATH = Path(__file__).resolve().parents[1] / ".env"
 
 
 class SettingsPayload(BaseModel):
@@ -52,6 +57,21 @@ READABLE_KEYS = {
 }
 
 
+def _resolve_dotenv_path() -> Path:
+    override = os.getenv("KODO_SETTINGS_DOTENV_PATH", "").strip()
+    if override:
+        return Path(override).expanduser()
+    return _DEFAULT_DOTENV_PATH
+
+
+def _persist_setting(env_key: str, value: str) -> None:
+    dotenv_path = _resolve_dotenv_path()
+    try:
+        set_key(str(dotenv_path), env_key, value, quote_mode="auto")
+    except Exception as exc:
+        logger.warning("Failed to persist setting %s to %s: %s", env_key, dotenv_path, exc)
+
+
 @router.get("")
 async def get_settings(request: Request):
     require_api_auth(request)
@@ -76,6 +96,7 @@ async def update_settings(body: SettingsPayload, request: Request):
             return
         str_value = str(int(value)) if isinstance(value, bool) else str(value)
         os.environ[env_key] = str_value
+        _persist_setting(env_key, str_value)
         updated[env_key.lower()] = str_value
 
     apply("PERMISSION_MODE", body.permission_mode)

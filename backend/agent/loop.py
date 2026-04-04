@@ -91,47 +91,113 @@ ANTHROPIC_TOOLS = build_anthropic_tools()
 
 def _resolve_provider_config(model_override: str | None = None) -> RuntimeConfig:
     configured_model = _normalize_model_name(model_override or os.getenv("MODEL", ""))
-    configured_model_lower = configured_model.lower()
-    primary_provider = os.getenv("PRIMARY_PROVIDER", "anthropic").strip().lower()
 
-    openai_key = os.getenv("OPENAI_API_KEY", "").strip()
-    anthropic_key = os.getenv("ANTHROPIC_API_KEY", "").strip()
-    openai_base_url = os.getenv("OPENAI_BASE_URL", "").strip() or None
-    anthropic_base_url = os.getenv("ANTHROPIC_BASE_URL", "").strip() or DEFAULT_ANTHROPIC_BASE_URL
+    def _normalize_provider(value: str) -> str:
+        normalized = value.strip().lower().replace("_", "-")
+        if normalized == "atomicchat":
+            return "atomic-chat"
+        return normalized
 
-    if openai_key and anthropic_key:
-        if primary_provider == "openai":
-            model = configured_model if configured_model_lower.startswith(OPENAI_MODEL_PREFIXES) else DEFAULT_OPENAI_MODEL
-            return RuntimeConfig(provider="openai", model=model, api_key=openai_key, base_url=openai_base_url)
+    default_model_map = {
+        "anthropic": DEFAULT_ANTHROPIC_MODEL,
+        "openai": DEFAULT_OPENAI_MODEL,
+        "gemini": os.getenv("GEMINI_MODEL", "gemini-2.0-flash").strip() or "gemini-2.0-flash",
+        "deepseek": "deepseek-chat",
+        "groq": "llama-3.3-70b-versatile",
+        "openrouter": "anthropic/claude-sonnet-4-6",
+        "github-models": "gpt-4o",
+        "codex": "gpt-4o",
+        "ollama": "llama3",
+        "atomic-chat": "default",
+    }
 
-        model = configured_model if configured_model_lower.startswith(ANTHROPIC_MODEL_PREFIXES) else DEFAULT_ANTHROPIC_MODEL
-        return RuntimeConfig(provider="anthropic", model=model, api_key=anthropic_key, base_url=anthropic_base_url)
+    key_env_map = {
+        "anthropic": "ANTHROPIC_API_KEY",
+        "openai": "OPENAI_API_KEY",
+        "deepseek": "DEEPSEEK_API_KEY",
+        "groq": "GROQ_API_KEY",
+        "openrouter": "OPENROUTER_API_KEY",
+        "github-models": "GITHUB_MODELS_TOKEN",
+        "codex": "CODEX_API_KEY",
+    }
 
-    if openai_key:
-        if configured_model_lower.startswith(ANTHROPIC_MODEL_PREFIXES):
-            raise ValueError(
-                f"MODEL='{configured_model}' looks like a Claude model, but only OPENAI_API_KEY is configured. "
-                "Set MODEL to an OpenAI model (for example: gpt-4o) or provide ANTHROPIC_API_KEY."
+    base_url_map = {
+        "anthropic": os.getenv("ANTHROPIC_BASE_URL", DEFAULT_ANTHROPIC_BASE_URL).strip() or DEFAULT_ANTHROPIC_BASE_URL,
+        "openai": os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1").strip() or "https://api.openai.com/v1",
+        "gemini": os.getenv("GEMINI_BASE_URL", "https://generativelanguage.googleapis.com/v1beta").strip()
+        or "https://generativelanguage.googleapis.com/v1beta",
+        "deepseek": os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com/v1").strip() or "https://api.deepseek.com/v1",
+        "groq": os.getenv("GROQ_BASE_URL", "https://api.groq.com/openai/v1").strip() or "https://api.groq.com/openai/v1",
+        "openrouter": os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1").strip()
+        or "https://openrouter.ai/api/v1",
+        "github-models": os.getenv("GITHUB_MODELS_BASE_URL", "https://models.github.ai/inference").strip()
+        or "https://models.github.ai/inference",
+        "codex": os.getenv("CODEX_BASE_URL", "https://api.openai.com/v1").strip() or "https://api.openai.com/v1",
+        "ollama": os.getenv("OLLAMA_BASE_URL", "http://localhost:11434").rstrip("/") + "/v1",
+        "atomic-chat": os.getenv("ATOMIC_CHAT_BASE_URL", "http://127.0.0.1:1337").rstrip("/") + "/v1",
+    }
+
+    provider_order = [
+        "anthropic",
+        "openai",
+        "gemini",
+        "deepseek",
+        "groq",
+        "openrouter",
+        "github-models",
+        "codex",
+        "ollama",
+        "atomic-chat",
+    ]
+
+    requested_provider = _normalize_provider(os.getenv("PRIMARY_PROVIDER", "anthropic"))
+    if requested_provider not in provider_order:
+        requested_provider = "anthropic"
+
+    candidates: list[str] = [requested_provider]
+    for provider_name in provider_order:
+        if provider_name != requested_provider:
+            candidates.append(provider_name)
+
+    for provider_name in candidates:
+        if provider_name in {"ollama", "atomic-chat"}:
+            if requested_provider != provider_name:
+                continue
+            model = configured_model or default_model_map.get(provider_name, "")
+            return RuntimeConfig(
+                provider=provider_name,
+                model=model,
+                api_key="local",
+                base_url=base_url_map.get(provider_name),
             )
+
+        if provider_name == "gemini":
+            gemini_key = os.getenv("GEMINI_API_KEY", "").strip() or os.getenv("GOOGLE_API_KEY", "").strip()
+            if not gemini_key:
+                continue
+            model = configured_model or default_model_map.get(provider_name, "")
+            return RuntimeConfig(
+                provider="gemini",
+                model=model,
+                api_key=gemini_key,
+                base_url=base_url_map.get("gemini"),
+            )
+
+        key_env = key_env_map.get(provider_name, "")
+        api_key = os.getenv(key_env, "").strip() if key_env else ""
+        if not api_key:
+            continue
+
+        model = configured_model or default_model_map.get(provider_name, "")
         return RuntimeConfig(
-            provider="openai",
-            model=configured_model or DEFAULT_OPENAI_MODEL,
-            api_key=openai_key,
-            base_url=openai_base_url,
+            provider=provider_name,
+            model=model,
+            api_key=api_key,
+            base_url=base_url_map.get(provider_name),
         )
 
-    if anthropic_key:
-        model = configured_model or DEFAULT_ANTHROPIC_MODEL
-        if model.lower().startswith(OPENAI_MODEL_PREFIXES):
-            raise ValueError(
-                f"MODEL='{model}' looks like an OpenAI model, but only ANTHROPIC_API_KEY is configured. "
-                "Set MODEL to a Claude model (for example: claude-sonnet-4-6) or provide OPENAI_API_KEY."
-            )
-        return RuntimeConfig(provider="anthropic", model=model, api_key=anthropic_key, base_url=anthropic_base_url)
-
     raise ValueError(
-        "No model provider API key is configured. Set OPENAI_API_KEY (OpenAI models) "
-        "or ANTHROPIC_API_KEY (Claude models) in backend/.env."
+        "No configured provider found. Add at least one provider credential or local provider base URL in backend/.env."
     )
 
 
@@ -324,7 +390,9 @@ def _to_anthropic_content(content: Any) -> list[dict[str, Any]]:
     for block in blocks:
         block_type = str(block.get("type", "")).lower().strip()
         if block_type == "text":
-            normalized.append({"type": "text", "text": str(block.get("text", ""))})
+            text = str(block.get("text", ""))
+            if text.strip():
+                normalized.append({"type": "text", "text": text})
             continue
 
         source = block.get("source", {})
@@ -354,9 +422,7 @@ def _to_anthropic_content(content: Any) -> list[dict[str, Any]]:
             if url:
                 normalized.append({"type": "text", "text": f"Image URL: {url}"})
 
-    if normalized:
-        return normalized
-    return [{"type": "text", "text": ""}]
+    return normalized
 
 
 def _build_openai_messages(history: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -380,7 +446,10 @@ def _build_anthropic_messages(history: list[dict[str, Any]]) -> list[dict[str, A
         role = str(msg.get("role", "")).lower()
         if role not in {"user", "assistant"}:
             continue
-        messages.append({"role": role, "content": _to_anthropic_content(msg.get("content", ""))})
+        content = _to_anthropic_content(msg.get("content", ""))
+        if not content:
+            continue
+        messages.append({"role": role, "content": content})
     return messages
 
 
