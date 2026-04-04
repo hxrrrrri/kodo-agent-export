@@ -27,6 +27,7 @@ OPENAI_MODEL_PREFIXES = ("gpt-", "o1", "o3", "o4")
 ANTHROPIC_MODEL_PREFIXES = ("claude",)
 MAX_TOKENS = int(os.getenv("MAX_TOKENS", "8192"))
 NONE_LIKE_STRINGS = {"none", "null", "undefined"}
+LOCAL_PROVIDER_NAMES = {"ollama", "atomic-chat"}
 
 
 def _normalize_model_name(value: Any) -> str:
@@ -345,6 +346,106 @@ def _text_from_content(content: Any) -> str:
             if isinstance(text, str) and text.strip():
                 parts.append(text.strip())
     return "\n".join(parts).strip()
+
+
+def _infer_local_forced_tool_call(
+    user_message: str | list[dict[str, Any]],
+    provider: str,
+    project_dir: str | None,
+) -> dict[str, Any] | None:
+    """
+    Build a deterministic safe tool call for local providers when user intent is
+    an obvious filesystem listing operation.
+    """
+    if provider not in LOCAL_PROVIDER_NAMES:
+        return None
+
+    prompt = " ".join(_text_from_content(user_message).lower().split())
+    if not prompt:
+        return None
+
+    folder_terms = (
+        "folder",
+        "folders",
+        "directory",
+        "directories",
+        "dir names",
+    )
+    file_terms = ("file", "files", "filenames", "file names")
+    listing_terms = ("list", "show", "display", "name", "names", "contents", "content", "items", "entries")
+    folder_question_terms = ("what folders", "which folders", "what directories", "which directories")
+    file_question_terms = ("what files", "which files")
+    recursive_terms = ("recursive", "recursively", "tree")
+
+    wants_folders = (
+        any(term in prompt for term in folder_terms) and any(term in prompt for term in listing_terms)
+    ) or any(term in prompt for term in folder_question_terms)
+    wants_files = (
+        any(term in prompt for term in file_terms) and any(term in prompt for term in listing_terms)
+    ) or any(term in prompt for term in file_question_terms)
+    wants_contents = (
+        ("list" in prompt or "show" in prompt)
+        and any(term in prompt for term in ("contents", "content", "items", "entries"))
+    ) or prompt in {"ls", "dir", "list"}
+    wants_pwd = any(token in prompt for token in ("current directory", "present working directory", "pwd", "where am i"))
+    wants_recursive = any(term in prompt for term in recursive_terms)
+
+    if not (wants_pwd or wants_folders or wants_files or wants_contents):
+        return None
+
+    tool_name = "powershell" if os.name == "nt" else "bash"
+    command = ""
+    prefix = ""
+
+    if wants_folders:
+        if tool_name == "powershell":
+            command = "Get-ChildItem -Directory -Name"
+            if wants_recursive:
+                command = "Get-ChildItem -Directory -Recurse -Name"
+        else:
+            command = "find . -maxdepth 1 -type d -not -path '.' -exec basename {} \\;"
+            if wants_recursive:
+                command = "find . -type d -not -path '.' -exec basename {} \\;"
+        prefix = "Folder names:"
+    elif wants_files:
+        if tool_name == "powershell":
+            command = "Get-ChildItem -File -Name"
+            if wants_recursive:
+                command = "Get-ChildItem -File -Recurse -Name"
+        else:
+            command = "find . -maxdepth 1 -type f -exec basename {} \\;"
+            if wants_recursive:
+                command = "find . -type f -exec basename {} \\;"
+        prefix = "File names:"
+    elif wants_contents:
+        if tool_name == "powershell":
+            command = "Get-ChildItem -Name"
+            if wants_recursive:
+                command = "Get-ChildItem -Recurse -Name"
+        else:
+            command = "ls -1"
+            if wants_recursive:
+                command = "find . -print"
+        prefix = "Directory contents:"
+    else:
+        if tool_name == "powershell":
+            command = "(Get-Location).Path"
+        else:
+            command = "pwd"
+        prefix = "Current directory:"
+
+    tool_input: dict[str, Any] = {
+        "command": command,
+        "timeout": 30,
+    }
+    if project_dir:
+        tool_input["cwd"] = project_dir
+
+    return {
+        "tool": tool_name,
+        "input": tool_input,
+        "prefix": prefix,
+    }
 
 
 def _to_openai_content(content: Any) -> str | list[dict[str, Any]]:
@@ -800,6 +901,12 @@ class AgentLoop:
         user_message: str | list[dict[str, Any]],
         history: list[dict[str, Any]],
     ) -> AsyncGenerator[dict[str, Any], None]:
+        forced_tool = _infer_local_forced_tool_call(user_message, self.provider, self.project_dir)
+        if forced_tool is not None:
+            async for event in self._run_forced_local_tool(forced_tool):
+                yield event
+            return
+
         system = await self._build_system_prompt()
         messages: list[dict[str, Any]] = [{"role": "system", "content": system}]
         messages.extend(_build_openai_messages(history))
@@ -951,6 +1058,83 @@ class AgentLoop:
                         "content": result.output if result.success else f"Error: {result.error}",
                     }
                 )
+
+    async def _run_forced_local_tool(self, forced_tool: dict[str, Any]) -> AsyncGenerator[dict[str, Any], None]:
+        tool_name = str(forced_tool.get("tool", "")).strip()
+        tool_input = dict(forced_tool.get("input", {}) or {})
+        prefix = str(forced_tool.get("prefix", "")).strip()
+
+        tool_use_id = f"forced-local-{int(time.time() * 1000)}"
+        tool = TOOL_MAP.get(tool_name)
+        if tool is None:
+            message = f"Unknown tool: {tool_name or '(empty)'}"
+            yield {"type": "error", "message": message}
+            return
+
+        approved, reason = await self.permission_checker.check(tool, **tool_input)
+        yield {
+            "type": "tool_start",
+            "tool": tool_name,
+            "tool_use_id": tool_use_id,
+            "input": tool_input,
+            "approved": approved,
+        }
+
+        if not approved:
+            result = ToolResult(success=False, output="", error=f"Operation denied: {reason}")
+        else:
+            try:
+                if tool_name in {"bash", "powershell", "repl"} and _streaming_tools_enabled():
+                    line_queue: asyncio.Queue[str | None] = asyncio.Queue()
+
+                    async def _on_output(line: str) -> None:
+                        await line_queue.put(line)
+
+                    async def _run_streaming_tool() -> ToolResult:
+                        try:
+                            return await tool.execute(**tool_input, on_output=_on_output)
+                        except TypeError:
+                            return await tool.execute(**tool_input)
+                        finally:
+                            await line_queue.put(None)
+
+                    task = asyncio.create_task(_run_streaming_tool())
+                    while True:
+                        streamed_line = await line_queue.get()
+                        if streamed_line is None:
+                            break
+                        yield {
+                            "type": "tool_output",
+                            "tool_use_id": tool_use_id,
+                            "line": streamed_line,
+                        }
+                    result = await task
+                else:
+                    result = await tool.execute(**tool_input)
+            except Exception as exc:
+                result = ToolResult(success=False, output="", error=f"Tool error: {exc}")
+
+        yield {
+            "type": "tool_result",
+            "tool": tool_name,
+            "tool_use_id": tool_use_id,
+            "output": result.output if result.success else result.error,
+            "success": result.success,
+            "metadata": result.metadata,
+        }
+
+        output_text = (result.output if result.success else result.error) or "(no output)"
+        final_text = f"{prefix}\n{output_text}" if prefix else output_text
+        yield {"type": "text", "content": final_text}
+
+        yield {
+            "type": "done",
+            "usage": {
+                "input_tokens": 0,
+                "output_tokens": max(1, len(final_text) // 4),
+                "model": self.model,
+            },
+        }
 
     async def _run_anthropic(
         self,

@@ -9,6 +9,7 @@ import { KodoLogoMark } from './KodoLogoMark'
 import { CollabBar } from './CollabBar'
 import { useCollabSession } from '../hooks/useCollabSession'
 import { buildApiHeaders, parseApiError } from '../lib/api'
+import { BuddyWidget } from './BuddyWidget'
 
 type ChatWindowProps = {
   editorOpen: boolean
@@ -345,6 +346,14 @@ export function ChatWindow({ editorOpen, onToggleEditor }: ChatWindowProps) {
   const [promptTemplates, setPromptTemplates] = useState<PromptTemplate[]>([])
   const [recapLoading, setRecapLoading] = useState(false)
   const [afkRecap, setAfkRecap] = useState<SessionRecap | null>(null)
+
+  const lastMessageRole = messages.length > 0
+    ? messages[messages.length - 1]?.role as 'user' | 'assistant' | null
+    : null
+
+  const lastAdvisorVerdict = messages.length > 0
+    ? (messages[messages.length - 1] as any)?.advisorVerdict?.verdict ?? null
+    : null
 
   const {
     observerMode,
@@ -2682,6 +2691,16 @@ export function ChatWindow({ editorOpen, onToggleEditor }: ChatWindowProps) {
           >
             <Mic size={14} />
           </button>
+
+          {/* ─── Buddy companion ─── */}
+          <BuddyWidget
+            isLoading={isLoading}
+            activeTool={activeTool}
+            voiceListening={voiceListening}
+            hasMessages={messages.length > 0}
+            lastMessageRole={lastMessageRole}
+            advisorVerdict={lastAdvisorVerdict}
+          />
 
           <textarea
             ref={textareaRef}
