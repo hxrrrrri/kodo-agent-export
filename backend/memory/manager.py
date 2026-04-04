@@ -143,7 +143,12 @@ class MemoryManager:
                 merged_metadata = {}
 
         if isinstance(metadata, dict):
-            merged_metadata.update(metadata)
+            for key, value in metadata.items():
+                normalized_key = str(key)
+                if value is None:
+                    merged_metadata.pop(normalized_key, None)
+                else:
+                    merged_metadata[normalized_key] = value
 
         data = {
             "session_id": session_id,

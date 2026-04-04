@@ -662,71 +662,118 @@ export function ChatWindow({ editorOpen, onToggleEditor }: ChatWindowProps) {
 
   const runTerminalCommand = useCallback(async (command: string): Promise<{ cwd?: string }> => {
     const trimmed = command.trim()
-    const activeCwd = terminalCwdRef.current || projectDir || ''
+    const activeCwd = (terminalCwdRef.current || projectDir || '').trim()
+    const requestCwd = activeCwd === 'workspace root' ? '' : activeCwd
 
     if (observerMode) {
       setTerminalLines((prev) => [...prev, '[terminal] observer mode is read-only'])
-      return { cwd: activeCwd }
+      return { cwd: requestCwd }
     }
 
     if (!trimmed) {
-      return { cwd: activeCwd }
+      return { cwd: requestCwd }
     }
 
     if (terminalRunning || isLoading) {
       setTerminalLines((prev) => [...prev, '[terminal] command already running, wait for completion'])
-      return { cwd: activeCwd }
+      return { cwd: requestCwd }
     }
 
     setShowTerminal(true)
     setTerminalRunning(true)
     setTerminalLines((prev) => [...prev, `> ${trimmed}`])
 
-    const bashMsg = `Run command: \`${trimmed}\``
+    let nextCwd = requestCwd
+
+    const handleStreamEvent = (event: Record<string, unknown>) => {
+      const type = String(event.type || '').toLowerCase()
+      if (type === 'start') {
+        const startedCwd = String(event.cwd || '').trim()
+        if (startedCwd) nextCwd = startedCwd
+        return
+      }
+
+      if (type === 'line') {
+        const line = String(event.line || '')
+        if (line) {
+          setTerminalLines((prev) => [...prev, line])
+        }
+        return
+      }
+
+      if (type === 'done') {
+        const doneCwd = String(event.cwd_after || '').trim()
+        if (doneCwd) nextCwd = doneCwd
+
+        if (event.success === false) {
+          const errorText = String(event.error || '').trim()
+          if (errorText) {
+            setTerminalLines((prev) => [...prev, `[error] ${errorText}`])
+          }
+        }
+      }
+    }
 
     try {
-      await sendMessage(
-        bashMsg,
-        undefined,
-        [],
-        {
-          onToolOutput: (line, event) => {
-            const toolName = String(event.tool || '').toLowerCase()
-            if (toolName === 'bash' || toolName === 'powershell' || toolName === 'repl') {
-              setTerminalLines((prev) => [...prev, line])
-            }
-          },
-          onToolResult: (event) => {
-            const toolName = String(event.tool || '').toLowerCase()
-            if (!(toolName === 'bash' || toolName === 'powershell' || toolName === 'repl')) {
-              return
-            }
+      const response = await fetch('/api/chat/terminal/run', {
+        method: 'POST',
+        headers: buildApiHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify({
+          command: trimmed,
+          cwd: requestCwd || undefined,
+          timeout: 30,
+        }),
+      })
 
-            const output = String(event.output || '').trim()
-            if (output) {
-              setTerminalLines((prev) => [...prev, ...output.split(/\r?\n/).filter(Boolean)])
-            }
+      if (!response.ok) {
+        throw new Error(await parseApiError(response))
+      }
 
-            if (event.success === false) {
-              const errorText = String(event.error || '')
-              if (errorText) {
-                setTerminalLines((prev) => [...prev, `[error] ${errorText}`])
-              }
-            }
-          },
-        },
-      )
+      if (!response.body) {
+        throw new Error('Terminal stream unavailable')
+      }
+
+      const reader = response.body.getReader()
+      const decoder = new TextDecoder()
+      let buffer = ''
+
+      const processSseLine = (line: string) => {
+        if (!line.startsWith('data:')) return
+        const raw = line.slice(5).trim()
+        if (!raw) return
+        try {
+          handleStreamEvent(JSON.parse(raw) as Record<string, unknown>)
+        } catch {
+          // Ignore malformed stream events.
+        }
+      }
+
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
+
+        buffer += decoder.decode(value, { stream: true })
+        const lines = buffer.split('\n')
+        buffer = lines.pop() || ''
+        for (const line of lines) {
+          processSseLine(line.trimEnd())
+        }
+      }
+
+      const tail = buffer.trim()
+      if (tail) {
+        processSseLine(tail)
+      }
     } catch (error) {
       setTerminalLines((prev) => [...prev, `[error] ${String(error)}`])
     } finally {
       setTerminalRunning(false)
     }
 
-    const nextCwd = projectDir || activeCwd
     terminalCwdRef.current = nextCwd
     setTerminalCwd(nextCwd)
     return { cwd: nextCwd }
-  }, [isLoading, observerMode, projectDir, sendMessage, terminalRunning])
+  }, [isLoading, observerMode, projectDir, terminalRunning])
 
   const terminalActive = showTerminal
 

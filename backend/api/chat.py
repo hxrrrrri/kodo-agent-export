@@ -44,6 +44,7 @@ router = APIRouter(prefix="/api/chat", tags=["chat"])
 SECRET_PATTERN = re.compile(r"sk-[A-Za-z0-9_\-]+")
 MAX_UPLOAD_SIZE_MB = max(1, int(os.getenv("MAX_UPLOAD_SIZE_MB", "10") or 10))
 MAX_UPLOAD_SIZE_BYTES = MAX_UPLOAD_SIZE_MB * 1024 * 1024
+NONE_LIKE_STRINGS = {"none", "null", "undefined"}
 
 
 def _safe_error_message(error: Exception) -> str:
@@ -55,6 +56,15 @@ def _safe_error_message(error: Exception) -> str:
 def _resolve_mode(requested_mode: str | None, stored_mode: str | None) -> str:
     target = requested_mode if requested_mode is not None else stored_mode
     return normalize_mode(target)
+
+
+def _normalize_optional_text(value: Any) -> str:
+    if value is None:
+        return ""
+    text = value.strip() if isinstance(value, str) else str(value).strip()
+    if text.lower() in NONE_LIKE_STRINGS:
+        return ""
+    return text
 
 
 def _extract_text_content(content: Any) -> str:
@@ -406,8 +416,10 @@ async def send_message(req: ChatRequest, request: Request):
     existing_payload = await memory_manager.load_session_payload(session_id)
     history = existing_payload.get("messages", []) if existing_payload else []
     metadata = existing_payload.get("metadata", {}) if existing_payload else {}
-    stored_mode = str(metadata.get("mode", DEFAULT_MODE)) if isinstance(metadata, dict) else DEFAULT_MODE
-    stored_model_override = str(metadata.get("model_override", "")).strip() if isinstance(metadata, dict) else ""
+    stored_mode = _normalize_optional_text(metadata.get("mode")) if isinstance(metadata, dict) else ""
+    if not stored_mode:
+        stored_mode = DEFAULT_MODE
+    stored_model_override = _normalize_optional_text(metadata.get("model_override")) if isinstance(metadata, dict) else ""
 
     try:
         effective_mode = _resolve_mode(req.mode, stored_mode)

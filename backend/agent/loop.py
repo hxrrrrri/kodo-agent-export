@@ -26,6 +26,16 @@ DEFAULT_ANTHROPIC_BASE_URL = "https://api.anthropic.com"
 OPENAI_MODEL_PREFIXES = ("gpt-", "o1", "o3", "o4")
 ANTHROPIC_MODEL_PREFIXES = ("claude",)
 MAX_TOKENS = int(os.getenv("MAX_TOKENS", "8192"))
+NONE_LIKE_STRINGS = {"none", "null", "undefined"}
+
+
+def _normalize_model_name(value: Any) -> str:
+    if value is None:
+        return ""
+    text = value.strip() if isinstance(value, str) else str(value).strip()
+    if text.lower() in NONE_LIKE_STRINGS:
+        return ""
+    return text
 
 
 def _env_int(name: str, default: int, minimum: int) -> int:
@@ -80,7 +90,7 @@ ANTHROPIC_TOOLS = build_anthropic_tools()
 
 
 def _resolve_provider_config(model_override: str | None = None) -> RuntimeConfig:
-    configured_model = (model_override or os.getenv("MODEL", "")).strip()
+    configured_model = _normalize_model_name(model_override or os.getenv("MODEL", ""))
     configured_model_lower = configured_model.lower()
     primary_provider = os.getenv("PRIMARY_PROVIDER", "anthropic").strip().lower()
 
@@ -174,7 +184,7 @@ def _has_env_overrides() -> bool:
 
 def _runtime_from_profile(profile: ProviderProfile, model_override: str | None = None) -> RuntimeConfig:
     provider = profile.provider
-    model = (model_override or profile.model).strip()
+    model = _normalize_model_name(model_override or profile.model)
     if not model:
         raise ValueError("Active profile has no model")
 
@@ -422,7 +432,7 @@ class AgentLoop:
         self.session_id = session_id
         self.project_dir = project_dir
         self.mode = normalize_mode(mode)
-        self.model_override = (model_override or "").strip() or None
+        self.model_override = _normalize_model_name(model_override) or None
 
         self.router_mode = os.getenv("ROUTER_MODE", "fixed").strip().lower()
         self.smart_router: SmartRouter | None = None
@@ -558,11 +568,20 @@ class AgentLoop:
                 stream=True,
                 exclude_providers=attempted,
             )
-            provider_name = str(decision.get("provider", ""))
-            model = str(decision.get("model", ""))
+            provider_name = str(decision.get("provider", "")).strip().lower()
+            model = _normalize_model_name(decision.get("model", ""))
             base_url = str(decision.get("base_url", "")).strip() or None
             api_key = str(decision.get("api_key", "")).strip()
             provider_obj = next((p for p in self.smart_router.providers if p.name == provider_name), None)
+
+            if not model and provider_obj is not None:
+                model = self.smart_router._resolve_model(provider_obj, "", router_messages)
+            if not model:
+                model = _normalize_model_name(self.model_override or self.model)
+            if not model:
+                raise RuntimeError(
+                    f"Smart router returned no model for provider {provider_name or '(unknown)'}"
+                )
 
             start = time.perf_counter()
             try:

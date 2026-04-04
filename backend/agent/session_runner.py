@@ -353,14 +353,17 @@ class SessionRunner:
         default_title = _default_session_title(updated_history)
         current_title = str(existing_metadata.get("title", "")).strip() or default_title
 
+        metadata_payload: dict[str, Any] = {
+            "title": current_title,
+            "mode": mode,
+        }
+        if isinstance(model_override, str) and model_override.strip():
+            metadata_payload["model_override"] = model_override.strip()
+
         await memory_manager.save_session(
             session_id,
             updated_history,
-            metadata={
-                "title": current_title,
-                "mode": mode,
-                "model_override": model_override,
-            },
+            metadata=metadata_payload,
         )
 
         if (

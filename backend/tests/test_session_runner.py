@@ -57,6 +57,40 @@ async def test_session_runner_stream_and_save(monkeypatch):
     saved_messages = saved['messages']
     assert isinstance(saved_messages, list)
     assert saved_messages[-1]['role'] == 'assistant'
+    saved_metadata = saved['metadata']
+    assert isinstance(saved_metadata, dict)
+    assert saved_metadata.get('mode') == 'execute'
+    assert 'model_override' not in saved_metadata
+
+
+@pytest.mark.asyncio
+async def test_session_runner_persists_explicit_model_override(monkeypatch):
+    monkeypatch.setattr(session_runner_mod, 'AgentLoop', FakeAgentLoop)
+
+    saved: dict[str, object] = {}
+
+    async def fake_save_session(session_id, messages, metadata=None):
+        saved['session_id'] = session_id
+        saved['messages'] = messages
+        saved['metadata'] = metadata
+
+    monkeypatch.setattr(session_runner_mod.memory_manager, 'save_session', fake_save_session)
+
+    runner = SessionRunner()
+    events = []
+    async for event in runner.stream(
+        session_id='s1b',
+        messages=[{'role': 'user', 'content': 'hi'}],
+        project_dir=None,
+        mode='execute',
+        model_override='gpt-4o-mini',
+    ):
+        events.append(event)
+
+    assert any(event['type'] == 'done' for event in events)
+    saved_metadata = saved['metadata']
+    assert isinstance(saved_metadata, dict)
+    assert saved_metadata.get('model_override') == 'gpt-4o-mini'
 
 
 @pytest.mark.asyncio
