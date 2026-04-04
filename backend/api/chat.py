@@ -1,13 +1,19 @@
+import asyncio
+import base64
+import io
 import json
 import os
 import re
+import shutil
 import uuid
+import zipfile
+from pathlib import Path
 from typing import Any
 
 from agent.coordinator import agent_coordinator
 from agent.session_runner import SessionRunner
 from agent.modes import DEFAULT_MODE, list_modes, normalize_mode
-from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi import APIRouter, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field, field_validator, model_validator
 
@@ -28,10 +34,13 @@ from observability.audit import log_audit_event
 from observability.usage import record_usage_event, summarize_usage
 from skills.registry import skill_registry
 from tasks.manager import task_manager
+from tools import TOOL_MAP
 from tools.path_guard import enforce_allowed_path
 
 router = APIRouter(prefix="/api/chat", tags=["chat"])
 SECRET_PATTERN = re.compile(r"sk-[A-Za-z0-9_\-]+")
+MAX_UPLOAD_SIZE_MB = max(1, int(os.getenv("MAX_UPLOAD_SIZE_MB", "10") or 10))
+MAX_UPLOAD_SIZE_BYTES = MAX_UPLOAD_SIZE_MB * 1024 * 1024
 
 
 def _safe_error_message(error: Exception) -> str:
@@ -60,6 +69,40 @@ def _extract_text_content(content: Any) -> str:
                     parts.append(text.strip())
         return "\n".join(parts).strip()
     return str(content or "").strip()
+
+
+def _validate_zip_member_path(name: str) -> Path | None:
+    normalized = str(name or "").replace("\\", "/")
+    if not normalized or normalized.endswith("/"):
+        return None
+
+    path = Path(normalized)
+    if path.is_absolute() or ".." in path.parts:
+        raise ValueError(f"Unsafe zip entry path: {name}")
+    return path
+
+
+def _extract_zip_to_project(zip_bytes: bytes, project_dir: str) -> list[str]:
+    base_dir = Path(project_dir).resolve()
+    extracted: list[str] = []
+
+    with zipfile.ZipFile(io.BytesIO(zip_bytes)) as archive:
+        for info in archive.infolist():
+            rel_path = _validate_zip_member_path(info.filename)
+            if rel_path is None:
+                continue
+
+            target_path = (base_dir / rel_path).resolve()
+            if not str(target_path).startswith(str(base_dir)):
+                raise ValueError(f"Unsafe zip entry path: {info.filename}")
+
+            target_path.parent.mkdir(parents=True, exist_ok=True)
+            with archive.open(info, "r") as src, open(target_path, "wb") as dst:
+                shutil.copyfileobj(src, dst)
+
+            extracted.append(str(target_path))
+
+    return extracted
 
 
 class ChatRequest(BaseModel):
@@ -93,6 +136,20 @@ class ChatRequest(BaseModel):
             return None
         text = value.strip()
         return text or None
+
+
+class TerminalRunRequest(BaseModel):
+    command: str = Field(min_length=1, max_length=4000)
+    cwd: str | None = Field(default=None, max_length=1024)
+    timeout: int = Field(default=30, ge=1, le=120)
+
+    @field_validator("command")
+    @classmethod
+    def validate_command(cls, value: str) -> str:
+        text = value.strip()
+        if not text:
+            raise ValueError("command is required")
+        return text
 
 
 class NewSessionResponse(BaseModel):
@@ -488,6 +545,196 @@ async def send_message(req: ChatRequest, request: Request):
             "X-Session-ID": session_id,
         },
     )
+
+
+@router.post("/terminal/run")
+async def run_terminal_command(req: TerminalRunRequest, request: Request):
+    require_api_auth(request)
+    await enforce_rate_limit(request, SEND_RATE_LIMITER, "terminal_run")
+
+    request_id = getattr(request.state, "request_id", None)
+
+    try:
+        safe_cwd = enforce_allowed_path(req.cwd or ".")
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    if not os.path.isdir(safe_cwd):
+        raise HTTPException(status_code=400, detail=f"Working directory not found: {safe_cwd}")
+
+    tool = TOOL_MAP.get("powershell")
+    if tool is None:
+        raise HTTPException(status_code=503, detail="PowerShell tool is not available")
+
+    command = req.command.strip()
+    if hasattr(tool, "is_dangerous") and tool.is_dangerous(command=command):
+        raise HTTPException(status_code=400, detail="Blocked potentially destructive terminal command")
+
+    encoded_command = base64.b64encode(command.encode("utf-8")).decode("ascii")
+    cwd_marker = f"__KODO_CWD_{uuid.uuid4().hex}__"
+    wrapped_command = (
+        "$ErrorActionPreference = 'Continue'; "
+        f"$__kodoMarker = '{cwd_marker}'; "
+        f"$__kodoEncoded = '{encoded_command}'; "
+        "$__kodoCommand = [System.Text.Encoding]::UTF8.GetString([System.Convert]::FromBase64String($__kodoEncoded)); "
+        "try { Invoke-Expression $__kodoCommand } "
+        "finally { Write-Output $__kodoMarker; (Get-Location).Path; Write-Output $__kodoMarker }"
+    )
+
+    log_audit_event(
+        "terminal_run_started",
+        request_id=request_id,
+        cwd=safe_cwd,
+        command_preview=command[:200],
+    )
+
+    async def event_stream():
+        yield f"data: {json.dumps({'type': 'start', 'cwd': safe_cwd, 'shell': 'powershell'})}\n\n"
+
+        queue: asyncio.Queue[str | None] = asyncio.Queue()
+        streamed_lines = 0
+        cwd_after = safe_cwd
+        capturing_cwd = False
+
+        def process_line(raw_line: str) -> str | None:
+            nonlocal cwd_after
+            nonlocal capturing_cwd
+
+            line = str(raw_line)
+            if line == cwd_marker:
+                capturing_cwd = not capturing_cwd
+                return None
+
+            if capturing_cwd:
+                candidate = line.strip()
+                if candidate:
+                    cwd_after = candidate
+                return None
+
+            return line
+
+        async def on_output(line: str) -> None:
+            parsed = process_line(line)
+            if parsed is None:
+                return
+            await queue.put(parsed)
+
+        async def run_tool():
+            return await tool.execute(
+                command=wrapped_command,
+                cwd=safe_cwd,
+                timeout=req.timeout,
+                on_output=on_output,
+            )
+
+        task = asyncio.create_task(run_tool())
+
+        while True:
+            if task.done() and queue.empty():
+                break
+
+            try:
+                line = await asyncio.wait_for(queue.get(), timeout=0.1)
+            except asyncio.TimeoutError:
+                continue
+
+            if line is None:
+                continue
+
+            streamed_lines += 1
+            yield f"data: {json.dumps({'type': 'line', 'line': line})}\n\n"
+
+        try:
+            result = await task
+        except Exception as exc:
+            message = _safe_error_message(exc)
+            log_audit_event(
+                "terminal_run_error",
+                request_id=request_id,
+                cwd=safe_cwd,
+                command_preview=command[:200],
+                error=message,
+            )
+            yield f"data: {json.dumps({'type': 'done', 'success': False, 'error': message})}\n\n"
+            return
+
+        if streamed_lines == 0 and result.output and result.output != "(no output)":
+            for raw_line in str(result.output).splitlines() or [str(result.output)]:
+                line = process_line(raw_line)
+                if line is None:
+                    continue
+                yield f"data: {json.dumps({'type': 'line', 'line': line})}\n\n"
+
+        try:
+            cwd_after = enforce_allowed_path(cwd_after)
+        except ValueError:
+            cwd_after = safe_cwd
+
+        log_audit_event(
+            "terminal_run_completed",
+            request_id=request_id,
+            cwd=safe_cwd,
+            cwd_after=cwd_after,
+            command_preview=command[:200],
+            success=result.success,
+            error=result.error,
+            metadata=result.metadata,
+        )
+
+        yield f"data: {json.dumps({'type': 'done', 'success': result.success, 'error': result.error, 'cwd_after': cwd_after, 'metadata': result.metadata or {}})}\n\n"
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+        },
+    )
+
+
+@router.post("/upload-zip")
+async def upload_zip(
+    request: Request,
+    file: UploadFile = File(...),
+    project_dir: str = Form(...),
+):
+    require_api_auth(request)
+    await enforce_rate_limit(request, MEMORY_RATE_LIMITER, "upload_zip")
+
+    try:
+        safe_project_dir = enforce_allowed_path(project_dir)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    if not os.path.isdir(safe_project_dir):
+        raise HTTPException(status_code=400, detail=f"project_dir is not a directory: {safe_project_dir}")
+
+    filename = (file.filename or "").strip()
+    if filename and not filename.lower().endswith(".zip"):
+        raise HTTPException(status_code=400, detail="Only .zip archives are supported")
+
+    blob = await file.read(MAX_UPLOAD_SIZE_BYTES + 1)
+    await file.close()
+    if len(blob) > MAX_UPLOAD_SIZE_BYTES:
+        raise HTTPException(status_code=413, detail=f"Zip exceeds {MAX_UPLOAD_SIZE_MB}MB upload limit")
+
+    try:
+        extracted = await asyncio.to_thread(_extract_zip_to_project, blob, safe_project_dir)
+    except zipfile.BadZipFile as exc:
+        raise HTTPException(status_code=400, detail="Invalid zip archive") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Zip extraction failed: {exc}") from exc
+
+    log_audit_event(
+        "upload_zip",
+        request_id=getattr(request.state, "request_id", None),
+        project_dir=safe_project_dir,
+        extracted_count=len(extracted),
+    )
+    return {"project_dir": safe_project_dir, "extracted": extracted}
 
 
 @router.get("/permissions/pending")

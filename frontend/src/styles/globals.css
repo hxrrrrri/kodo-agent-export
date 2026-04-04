@@ -27,7 +27,9 @@
   --font-display: 'Syne', sans-serif;
 
   --radius: 4px;
-  --sidebar-width: 260px;
+  --sidebar-rail-width: 48px;
+  --sidebar-panel-width: 238px;
+  --sidebar-width: calc(var(--sidebar-rail-width) + var(--sidebar-panel-width));
 }
 
 :root[data-theme='light'] {
@@ -79,7 +81,8 @@ body {
 
 @media (max-width: 900px) {
   :root {
-    --sidebar-width: 220px;
+    --sidebar-panel-width: 220px;
+    --sidebar-width: calc(var(--sidebar-rail-width) + var(--sidebar-panel-width));
   }
 }
 
@@ -92,22 +95,6 @@ body {
 /* Selection */
 ::selection { background: var(--accent-dim); color: var(--text-0); }
 
-/* Scan line overlay for CRT feel */
-body::before {
-  content: '';
-  position: fixed;
-  inset: 0;
-  background: repeating-linear-gradient(
-    0deg,
-    transparent,
-    transparent 2px,
-    rgba(0,0,0,0.03) 2px,
-    rgba(0,0,0,0.03) 4px
-  );
-  pointer-events: none;
-  z-index: 9999;
-}
-
 /* Utility */
 .truncate { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .mono { font-family: var(--font-mono); }
@@ -117,6 +104,24 @@ body::before {
 @keyframes blink {
   0%, 100% { opacity: 1; }
   50% { opacity: 0; }
+}
+
+@keyframes terminal-dot-pulse {
+  0% {
+    opacity: 0.55;
+    transform: scale(0.88);
+    box-shadow: 0 0 0 0 var(--green-dim);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1.1);
+    box-shadow: 0 0 10px 2px var(--green-dim);
+  }
+  100% {
+    opacity: 0.7;
+    transform: scale(0.95);
+    box-shadow: 0 0 0 0 var(--green-dim);
+  }
 }
 
 @keyframes pulse-accent {

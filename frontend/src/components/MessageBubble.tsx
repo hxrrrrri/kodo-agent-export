@@ -50,6 +50,12 @@ function renderHighlightedText(text: string, query: string): JSX.Element {
   )
 }
 
+function extractGeneratedImageUrl(content: string): string | null {
+  const match = content.match(/https?:\/\/[^\s]*oaidalleapiprodscus\.blob\.core\.windows\.net[^\s]*/i)
+  if (!match) return null
+  return match[0].replace(/[),.;!?]+$/, '')
+}
+
 function CursorBlink() {
   return (
     <span style={{
@@ -69,6 +75,7 @@ export function MessageBubble({ message, searchQuery }: { message: Message; sear
   const normalizedSearch = (searchQuery || '').trim()
   const hasSearch = normalizedSearch.length > 0
   const contentMatch = hasSearch && message.content.toLowerCase().includes(normalizedSearch.toLowerCase())
+  const generatedImageUrl = !isUser ? extractGeneratedImageUrl(message.content) : null
   let codeBlockIndex = -1
   const imageSrc = (() => {
     if (!message.imageAttachment) return ''
@@ -164,6 +171,20 @@ export function MessageBubble({ message, searchQuery }: { message: Message; sear
       )}
 
       {/* Text content */}
+      {generatedImageUrl && (
+        <div style={{ marginBottom: message.content ? 10 : 0 }}>
+          <img
+            src={generatedImageUrl}
+            alt="Generated image"
+            style={{
+              maxWidth: 'min(100%, 560px)',
+              borderRadius: 'var(--radius)',
+              border: '1px solid var(--border)',
+            }}
+          />
+        </div>
+      )}
+
       {message.content && (
         <div style={{
           fontSize: 14,

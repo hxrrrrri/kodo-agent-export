@@ -804,7 +804,7 @@ class AgentLoop:
                         result = ToolResult(success=False, output="", error=f"Operation denied: {reason}")
                     else:
                         try:
-                            if tool_name == "bash" and _streaming_tools_enabled():
+                            if tool_name in {"bash", "powershell", "repl"} and _streaming_tools_enabled():
                                 line_queue: asyncio.Queue[str | None] = asyncio.Queue()
 
                                 async def _on_bash_output(line: str) -> None:
@@ -956,7 +956,7 @@ class AgentLoop:
                         result = ToolResult(success=False, output="", error=f"Operation denied: {reason}")
                     else:
                         try:
-                            if tool_name == "bash" and _streaming_tools_enabled():
+                            if tool_name in {"bash", "powershell", "repl"} and _streaming_tools_enabled():
                                 line_queue: asyncio.Queue[str | None] = asyncio.Queue()
 
                                 async def _on_bash_output(line: str) -> None:

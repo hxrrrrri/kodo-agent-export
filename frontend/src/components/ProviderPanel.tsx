@@ -39,6 +39,12 @@ type DoctorCheck = {
   fix?: string | null
 }
 
+type WebhookEvent = {
+  event_type: string
+  task_id: string
+  queued_at: string
+}
+
 const ROUTER_STRATEGIES = ['latency', 'cost', 'balanced', 'quality']
 
 function latencyColor(latency: number | null): string {
@@ -55,6 +61,9 @@ export function ProviderPanel() {
   const [checks, setChecks] = useState<DoctorCheck[]>([])
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [webhookEvents, setWebhookEvents] = useState<WebhookEvent[]>([])
+  const [webhookError, setWebhookError] = useState<string | null>(null)
+  const [copiedWebhook, setCopiedWebhook] = useState(false)
   const [strategyDraft, setStrategyDraft] = useState('balanced')
   const [showModal, setShowModal] = useState(false)
   const [newProfile, setNewProfile] = useState({
@@ -70,6 +79,11 @@ export function ProviderPanel() {
     const rows = status?.providers || []
     return rows.find((row) => row.healthy) || rows[0] || null
   }, [status])
+
+  const webhookUrl = useMemo(() => {
+    if (typeof window === 'undefined') return '/api/webhooks/trigger'
+    return `${window.location.origin}/api/webhooks/trigger`
+  }, [])
 
   const loadStatus = async () => {
     try {
@@ -113,6 +127,33 @@ export function ProviderPanel() {
       setError(String(e))
     } finally {
       setLoading(false)
+    }
+  }
+
+  const loadWebhookEvents = async () => {
+    try {
+      const res = await fetch('/api/webhooks/events', { headers: buildApiHeaders() })
+      if (res.status === 404) {
+        setWebhookError('Webhooks are disabled on the backend.')
+        setWebhookEvents([])
+        return
+      }
+      if (!res.ok) throw new Error(await parseApiError(res))
+      const payload = await res.json()
+      setWebhookEvents((payload.events || []) as WebhookEvent[])
+      setWebhookError(null)
+    } catch (e) {
+      setWebhookError(String(e))
+    }
+  }
+
+  const copyWebhookUrl = async () => {
+    try {
+      await navigator.clipboard.writeText(webhookUrl)
+      setCopiedWebhook(true)
+      window.setTimeout(() => setCopiedWebhook(false), 1200)
+    } catch {
+      setCopiedWebhook(false)
     }
   }
 
@@ -231,6 +272,14 @@ export function ProviderPanel() {
   useEffect(() => {
     void loadStatus()
     void loadProfiles()
+    void loadWebhookEvents()
+  }, [])
+
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      void loadWebhookEvents()
+    }, 5000)
+    return () => window.clearInterval(timer)
   }, [])
 
   return (
@@ -501,6 +550,75 @@ export function ProviderPanel() {
               )}
             </div>
           ))}
+        </div>
+      </section>
+
+      <section style={{ marginTop: 12 }}>
+        <div style={{ fontSize: 10, color: 'var(--text-2)', letterSpacing: '0.1em', marginBottom: 6 }}>WEBHOOKS</div>
+
+        <div style={{
+          border: '1px solid var(--border)',
+          borderRadius: 'var(--radius)',
+          background: 'var(--bg-2)',
+          padding: 8,
+          display: 'grid',
+          gap: 8,
+        }}>
+          <div style={{ display: 'flex', gap: 6 }}>
+            <input
+              value={webhookUrl}
+              readOnly
+              style={{
+                flex: 1,
+                background: 'var(--bg-0)',
+                border: '1px solid var(--border)',
+                color: 'var(--text-1)',
+                borderRadius: 'var(--radius)',
+                padding: '6px 8px',
+                fontSize: 10,
+                fontFamily: 'var(--font-mono)',
+              }}
+            />
+            <button
+              onClick={() => void copyWebhookUrl()}
+              style={{
+                border: '1px solid var(--border)',
+                background: 'var(--bg-1)',
+                color: copiedWebhook ? 'var(--green)' : 'var(--text-1)',
+                borderRadius: 'var(--radius)',
+                fontSize: 10,
+                padding: '6px 8px',
+                cursor: 'pointer',
+                fontFamily: 'var(--font-mono)',
+                minWidth: 62,
+              }}
+            >
+              {copiedWebhook ? 'COPIED' : 'COPY'}
+            </button>
+          </div>
+
+          {webhookError ? (
+            <div style={{ fontSize: 10, color: 'var(--yellow)' }}>{webhookError}</div>
+          ) : (
+            <div style={{ maxHeight: 120, overflowY: 'auto', display: 'grid', gap: 4 }}>
+              {webhookEvents.length === 0 && (
+                <div style={{ fontSize: 10, color: 'var(--text-2)' }}>No webhook events yet.</div>
+              )}
+              {webhookEvents.map((event, idx) => (
+                <div key={`${event.task_id}-${idx}`} style={{
+                  fontSize: 10,
+                  color: 'var(--text-1)',
+                  fontFamily: 'var(--font-mono)',
+                  border: '1px solid var(--border)',
+                  borderRadius: 'var(--radius)',
+                  padding: '4px 6px',
+                  background: 'var(--bg-1)',
+                }}>
+                  {event.event_type} - {event.task_id} - {event.queued_at}
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       </section>
 

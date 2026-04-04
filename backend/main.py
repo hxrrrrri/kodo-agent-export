@@ -19,6 +19,7 @@ from fastapi.responses import JSONResponse
 from api.bridge import router as bridge_router
 from api.chat import router as chat_router
 from api.doctor import router as doctor_router
+from api.webhooks import router as webhooks_router
 from api.profiles import router as profiles_router
 from api.providers import router as providers_router
 from observability.audit import log_audit_event
@@ -52,6 +53,7 @@ app.add_middleware(
 )
 
 app.include_router(chat_router)
+app.include_router(webhooks_router, prefix="/api")
 app.include_router(bridge_router)
 app.include_router(providers_router)
 app.include_router(doctor_router)

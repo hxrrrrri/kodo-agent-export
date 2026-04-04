@@ -15,9 +15,9 @@ def telemetry_disabled() -> bool:
     return _env_flag("KODO_NO_TELEMETRY", "0")
 
 
-def feature_enabled(feature: str) -> bool:
+def feature_enabled(feature: str, default: str = "1") -> bool:
     key = f"KODO_ENABLE_{feature.strip().upper().replace('-', '_')}"
-    return _env_flag(key, "1")
+    return _env_flag(key, default)
 
 
 def sanitize_outbound_headers(headers: dict[str, str] | None = None) -> dict[str, str]:

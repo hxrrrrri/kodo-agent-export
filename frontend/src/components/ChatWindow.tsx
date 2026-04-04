@@ -1,16 +1,32 @@
 import { useCallback, useEffect, useMemo, useRef, useState, KeyboardEvent } from 'react'
-import { Send, Square, FolderOpen, Zap, ImagePlus, X, Search } from 'lucide-react'
+import { Send, Square, FolderOpen, Zap, ImagePlus, X, Search, Terminal as TerminalIcon, Paperclip, CircleAlert } from 'lucide-react'
 import { useChat } from '../hooks/useChat'
 import { MessageBubble } from './MessageBubble'
 import { CommandDefinition } from '../store/chatStore'
+import { TerminalPanel } from './TerminalPanel'
+import { buildApiHeaders, parseApiError } from '../lib/api'
 
 const CONTEXT_TOKEN_BUDGET = Number(import.meta.env.VITE_CONTEXT_TOKEN_BUDGET || 60000)
+const MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024
+const MAX_VISIBLE_ATTACHMENT_CHIPS = 8
+const ATTACHMENT_ACCEPT = 'image/png,image/jpeg,image/gif,image/webp,application/zip,.zip,text/*,.py,.ts,.tsx,.js,.jsx,.md,.json,.yaml,.yml,.toml,.rs,.go,.java,.cpp,.c,.h'
 
 type PendingImage = {
   previewUrl: string
   data: string
   media_type: string
   name: string
+  size: number
+}
+
+interface FileAttachment {
+  name: string
+  size: number
+  type: string
+  data: string
+  isImage: boolean
+  isZip: boolean
+  previewUrl?: string
 }
 
 const EXAMPLE_PROMPTS = [
@@ -180,6 +196,36 @@ function approximateTokens(value: string): number {
   return Math.max(1, Math.ceil(value.length / 4))
 }
 
+function readFileAsDataUrl(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = () => {
+      if (typeof reader.result === 'string') {
+        resolve(reader.result)
+        return
+      }
+      reject(new Error('Failed to read file'))
+    }
+    reader.onerror = () => reject(reader.error || new Error('Failed to read file'))
+    reader.readAsDataURL(file)
+  })
+}
+
+function decodeBase64ToText(data: string): string {
+  try {
+    const binary = atob(data)
+    const bytes = Uint8Array.from(binary, (char) => char.charCodeAt(0))
+    return new TextDecoder('utf-8', { fatal: false }).decode(bytes)
+  } catch {
+    return ''
+  }
+}
+
+function decodeBase64ToBytes(data: string): Uint8Array {
+  const binary = atob(data)
+  return Uint8Array.from(binary, (char) => char.charCodeAt(0))
+}
+
 export function ChatWindow() {
   const {
     messages,
@@ -200,6 +246,7 @@ export function ChatWindow() {
     respondPermission,
     messageSearchQuery,
     setMessageSearchQuery,
+    theme,
   } = useChat()
   const [input, setInput] = useState('')
   const [showProjectInput, setShowProjectInput] = useState(false)
@@ -209,6 +256,14 @@ export function ChatWindow() {
   const [paletteQuery, setPaletteQuery] = useState('')
   const [paletteIndex, setPaletteIndex] = useState(0)
   const [pendingImage, setPendingImage] = useState<PendingImage | null>(null)
+  const [pendingFiles, setPendingFiles] = useState<FileAttachment[]>([])
+  const [attachmentError, setAttachmentError] = useState('')
+  const [attachmentUploading, setAttachmentUploading] = useState(false)
+  const [terminalLines, setTerminalLines] = useState<string[]>([])
+  const [showTerminal, setShowTerminal] = useState(false)
+  const [terminalRunning, setTerminalRunning] = useState(false)
+  const [terminalCwd, setTerminalCwd] = useState('')
+  const terminalCwdRef = useRef('')
   const messageListRef = useRef<HTMLDivElement>(null)
   const bottomRef = useRef<HTMLDivElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
@@ -251,6 +306,15 @@ export function ChatWindow() {
   useEffect(() => {
     setInput('')
     setPendingImage(null)
+    setPendingFiles([])
+    setAttachmentError('')
+    setAttachmentUploading(false)
+    setTerminalLines([])
+    setShowTerminal(false)
+    setTerminalRunning(false)
+    const resetCwd = projectDir || ''
+    terminalCwdRef.current = resetCwd
+    setTerminalCwd(resetCwd)
     setMessageSearchQuery('')
     setCommandPaletteOpen(false)
     setPaletteQuery('')
@@ -258,6 +322,21 @@ export function ChatWindow() {
       textareaRef.current.style.height = 'auto'
     }
   }, [sessionId, setMessageSearchQuery])
+
+  useEffect(() => {
+    if (!terminalCwdRef.current && projectDir) {
+      terminalCwdRef.current = projectDir
+      setTerminalCwd(projectDir)
+    }
+  }, [projectDir])
+
+  useEffect(() => {
+    if (terminalCwdRef.current === 'workspace root') {
+      const normalized = projectDir || ''
+      terminalCwdRef.current = normalized
+      setTerminalCwd(normalized)
+    }
+  }, [projectDir])
 
   useEffect(() => {
     if (!commandPaletteOpen) return
@@ -287,6 +366,14 @@ export function ChatWindow() {
     }
     previousMessageSearchRef.current = messageSearchQuery
   }, [messageSearchQuery])
+
+  useEffect(() => {
+    if (messages.length === 0 && !isLoading) {
+      setTerminalLines([])
+      setShowTerminal(false)
+      setTerminalRunning(false)
+    }
+  }, [messages.length, isLoading])
 
   const applyCommandSuggestion = (name: string) => {
     const next = `${name}${name.includes('<') ? '' : ' '}`
@@ -318,9 +405,35 @@ export function ChatWindow() {
     })
   }
 
-  const handleSend = useCallback(() => {
+  const attachmentTotalBytes = useMemo(
+    () => pendingFiles.reduce((total, file) => total + file.size, 0) + (pendingImage?.size || 0),
+    [pendingFiles, pendingImage],
+  )
+
+  const uploadZipAttachment = useCallback(async (file: FileAttachment, cwd: string) => {
+    const form = new FormData()
+    const bytes = decodeBase64ToBytes(file.data)
+    const arrayBuffer = new ArrayBuffer(bytes.byteLength)
+    new Uint8Array(arrayBuffer).set(bytes)
+    const blob = new Blob([arrayBuffer], { type: file.type || 'application/zip' })
+    form.append('file', blob, file.name)
+    form.append('project_dir', cwd)
+
+    const response = await fetch('/api/chat/upload-zip', {
+      method: 'POST',
+      headers: buildApiHeaders(),
+      body: form,
+    })
+    if (!response.ok) {
+      throw new Error(await parseApiError(response))
+    }
+    return response.json() as Promise<{ extracted?: string[] }>
+  }, [])
+
+  const handleSend = useCallback(async () => {
     const msg = input.trim()
-    if ((!msg && !pendingImage) || isLoading) return
+    if ((!msg && !pendingImage && pendingFiles.length === 0) || isLoading || attachmentUploading) return
+
     const imagePayload = pendingImage
       ? {
           url: pendingImage.previewUrl,
@@ -328,11 +441,192 @@ export function ChatWindow() {
           media_type: pendingImage.media_type,
         }
       : undefined
-    setInput('')
-    setPendingImage(null)
-    if (textareaRef.current) textareaRef.current.style.height = 'auto'
-    sendMessage(msg, imagePayload)
-  }, [input, pendingImage, isLoading, sendMessage])
+
+    const attachmentBlocks: Array<Record<string, unknown>> = []
+    setAttachmentError('')
+    setAttachmentUploading(true)
+
+    try {
+      for (const file of pendingFiles) {
+        if (file.isImage) {
+          attachmentBlocks.push({
+            type: 'image',
+            source: {
+              type: 'base64',
+              media_type: file.type || 'image/png',
+              data: file.data,
+            },
+          })
+          continue
+        }
+
+        if (file.isZip) {
+          if (!projectDir.trim()) {
+            setAttachmentError('Set project directory before sending .zip attachments')
+            return
+          }
+
+          const payload = await uploadZipAttachment(file, projectDir.trim())
+          const extractedCount = Array.isArray(payload.extracted) ? payload.extracted.length : 0
+          attachmentBlocks.push({
+            type: 'text',
+            text: `[Uploaded zip: ${file.name}] extracted ${extractedCount} file(s) into ${projectDir.trim()}`,
+          })
+          continue
+        }
+
+        const decoded = decodeBase64ToText(file.data)
+        attachmentBlocks.push({
+          type: 'text',
+          text: `[Attached: ${file.name}]\n\`\`\`\n${decoded}\n\`\`\``,
+        })
+      }
+
+      setInput('')
+      setPendingImage(null)
+      setPendingFiles([])
+      if (textareaRef.current) textareaRef.current.style.height = 'auto'
+
+      sendMessage(msg, imagePayload, attachmentBlocks, {
+        onToolOutput: (line) => {
+          setTerminalLines((prev) => [...prev, line])
+          setShowTerminal(true)
+          setTerminalRunning(true)
+        },
+        onToolResult: (event) => {
+          const toolName = String(event.tool || '').toLowerCase()
+          if (toolName === 'bash' || toolName === 'powershell' || toolName === 'repl') {
+            setTerminalRunning(false)
+          }
+        },
+      })
+    } catch (error) {
+      setAttachmentError(String(error))
+    } finally {
+      setAttachmentUploading(false)
+    }
+  }, [attachmentUploading, input, isLoading, pendingFiles, pendingImage, projectDir, sendMessage, uploadZipAttachment])
+
+  const runTerminalCommand = useCallback(async (command: string): Promise<{ cwd?: string }> => {
+    const trimmed = command.trim()
+    if (!trimmed) {
+      return { cwd: terminalCwdRef.current || projectDir || '' }
+    }
+    if (terminalRunning) {
+      setTerminalLines((prev) => [...prev, '[terminal] command already running, wait for completion'])
+      return { cwd: terminalCwdRef.current || projectDir || '' }
+    }
+
+    let nextCwd = terminalCwdRef.current || projectDir || ''
+
+    setShowTerminal(true)
+    setTerminalRunning(true)
+
+    try {
+      const response = await fetch('/api/chat/terminal/run', {
+        method: 'POST',
+        headers: buildApiHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify({
+          command: trimmed,
+          cwd: nextCwd || null,
+          timeout: 60,
+        }),
+      })
+
+      if (!response.ok) {
+        throw new Error(await parseApiError(response))
+      }
+      if (!response.body) {
+        throw new Error('No terminal response body')
+      }
+
+      const reader = response.body.getReader()
+      const decoder = new TextDecoder()
+      let buffer = ''
+
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
+
+        buffer += decoder.decode(value, { stream: true })
+        const lines = buffer.split('\n')
+        buffer = lines.pop() || ''
+
+        for (const line of lines) {
+          if (!line.startsWith('data: ')) continue
+          const raw = line.slice(6).trim()
+          if (!raw) continue
+
+          try {
+            const event = JSON.parse(raw) as Record<string, unknown>
+            if (event.type === 'start') {
+              const startedCwd = String(event.cwd || '')
+              if (startedCwd.trim()) {
+                nextCwd = startedCwd.trim()
+              }
+              continue
+            }
+
+            if (event.type === 'line') {
+              const outputLine = String(event.line || '')
+              setTerminalLines((prev) => [...prev, outputLine])
+              continue
+            }
+
+            if (event.type === 'done') {
+              const success = Boolean(event.success)
+              const error = String(event.error || '')
+              const doneCwd = String(event.cwd_after || '')
+              const metadata = (event.metadata && typeof event.metadata === 'object')
+                ? event.metadata as Record<string, unknown>
+                : {}
+              const exitCode = typeof metadata.exit_code === 'number' ? metadata.exit_code : undefined
+
+              if (doneCwd.trim()) {
+                nextCwd = doneCwd.trim()
+              }
+
+              if (!success && error) {
+                setTerminalLines((prev) => [...prev, `[error] ${error}`])
+              }
+              if (typeof exitCode === 'number' && exitCode !== 0) {
+                setTerminalLines((prev) => [...prev, `[exit ${exitCode}]`])
+              }
+            }
+          } catch {
+            // Ignore malformed SSE event payloads.
+          }
+        }
+      }
+
+      if (buffer.startsWith('data: ')) {
+        try {
+          const event = JSON.parse(buffer.slice(6).trim()) as Record<string, unknown>
+          if (event.type === 'line') {
+            const outputLine = String(event.line || '')
+            setTerminalLines((prev) => [...prev, outputLine])
+          } else if (event.type === 'done') {
+            const doneCwd = String(event.cwd_after || '')
+            if (doneCwd.trim()) {
+              nextCwd = doneCwd.trim()
+            }
+          }
+        } catch {
+          // Ignore trailing partial frame.
+        }
+      }
+    } catch (error) {
+      setTerminalLines((prev) => [...prev, `[error] ${String(error)}`])
+    } finally {
+      setTerminalRunning(false)
+    }
+
+    terminalCwdRef.current = nextCwd
+    setTerminalCwd(nextCwd)
+    return { cwd: nextCwd }
+  }, [projectDir, terminalRunning])
+
+  const terminalActive = showTerminal
 
   useEffect(() => {
     const onKeyDown = (event: globalThis.KeyboardEvent) => {
@@ -360,7 +654,7 @@ export function ChatWindow() {
       }
       if (isMeta && event.key === 'Enter' && !commandPaletteOpen) {
         event.preventDefault()
-        handleSend()
+        void handleSend()
       }
       if (event.key === 'Escape' && commandPaletteOpen) {
         event.preventDefault()
@@ -402,7 +696,7 @@ export function ChatWindow() {
 
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault()
-      handleSend()
+      void handleSend()
     }
   }
 
@@ -444,26 +738,61 @@ export function ChatWindow() {
     e.target.style.height = Math.min(e.target.scrollHeight, 200) + 'px'
   }
 
-  const handleImagePick = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0]
-    if (!file) return
-    const reader = new FileReader()
-    reader.onload = () => {
-      const result = typeof reader.result === 'string' ? reader.result : ''
-      if (!result.startsWith('data:')) return
-      const split = result.split(',', 2)
-      if (split.length !== 2) return
-      const header = split[0]
-      const data = split[1]
-      const mediaType = header.replace('data:', '').replace(';base64', '') || file.type || 'image/png'
-      setPendingImage({
-        previewUrl: result,
-        data,
-        media_type: mediaType,
-        name: file.name,
-      })
+  const handleFilePick = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(e.target.files || [])
+    if (files.length === 0) return
+
+    const incomingBytes = files.reduce((total, file) => total + file.size, 0)
+    if (attachmentTotalBytes + incomingBytes > MAX_ATTACHMENT_BYTES) {
+      setAttachmentError('Total attachment size exceeds 10MB limit')
+      e.target.value = ''
+      return
     }
-    reader.readAsDataURL(file)
+
+    let nextPrimaryImage = pendingImage
+    const collected: FileAttachment[] = []
+
+    try {
+      for (const file of files) {
+        const dataUrl = await readFileAsDataUrl(file)
+        if (!dataUrl.startsWith('data:')) continue
+        const [header, data] = dataUrl.split(',', 2)
+        if (!header || !data) continue
+
+        const mediaType = header.replace('data:', '').replace(';base64', '') || file.type || 'application/octet-stream'
+        const lowerName = file.name.toLowerCase()
+        const isImage = mediaType.startsWith('image/')
+        const isZip = lowerName.endsWith('.zip')
+
+        if (isImage && !nextPrimaryImage) {
+          nextPrimaryImage = {
+            previewUrl: dataUrl,
+            data,
+            media_type: mediaType,
+            name: file.name,
+            size: file.size,
+          }
+          continue
+        }
+
+        collected.push({
+          name: file.name,
+          size: file.size,
+          type: mediaType,
+          data,
+          isImage,
+          isZip,
+          previewUrl: isImage ? dataUrl : undefined,
+        })
+      }
+
+      setPendingImage(nextPrimaryImage)
+      setPendingFiles((prev) => [...prev, ...collected])
+      setAttachmentError('')
+    } catch {
+      setAttachmentError('Failed to read one or more attachments')
+    }
+
     e.target.value = ''
   }
 
@@ -506,6 +835,8 @@ export function ChatWindow() {
       { key: 'debug', title: 'Debug', summary: 'Hypothesis-driven debugging.', is_default: false },
       { key: 'review', title: 'Review', summary: 'Risk-focused code review.', is_default: false },
     ]
+  const totalAttachmentCount = pendingFiles.length + (pendingImage ? 1 : 0)
+  const hiddenAttachmentCount = Math.max(0, totalAttachmentCount - MAX_VISIBLE_ATTACHMENT_CHIPS)
 
   return (
     <div style={{
@@ -591,6 +922,38 @@ export function ChatWindow() {
             </option>
           ))}
         </select>
+
+        <button
+          type="button"
+          onClick={() => setShowTerminal((prev) => !prev)}
+          title={terminalActive ? 'Terminal panel active' : 'Open terminal panel'}
+          style={{
+            background: showTerminal ? 'var(--bg-3)' : 'none',
+            border: '1px solid var(--border)',
+            color: terminalActive ? 'var(--green)' : 'var(--text-2)',
+            padding: '4px 10px',
+            borderRadius: 'var(--radius)',
+            cursor: 'pointer',
+            fontSize: 11,
+            fontFamily: 'var(--font-mono)',
+            display: 'flex',
+            alignItems: 'center',
+            gap: 6,
+          }}
+        >
+          <TerminalIcon size={12} />
+          TERMINAL
+          <span style={{
+            width: 6,
+            height: 6,
+            borderRadius: '50%',
+            background: terminalActive ? 'var(--green)' : 'var(--text-2)',
+            display: 'inline-block',
+            animation: terminalActive ? 'terminal-dot-pulse 1.4s ease-in-out infinite' : 'none',
+            boxShadow: terminalActive ? '0 0 8px var(--green-dim)' : 'none',
+            willChange: 'opacity, transform, box-shadow',
+          }} />
+        </button>
 
         {/* GitHub Button */}
         <a
@@ -987,6 +1350,17 @@ export function ChatWindow() {
         <div ref={bottomRef} />
       </div>
 
+      {showTerminal && (
+        <TerminalPanel
+          lines={terminalLines}
+          isRunning={terminalRunning}
+          themeMode={theme}
+          cwdHint={terminalCwd || projectDir || 'workspace root'}
+          onRunCommand={runTerminalCommand}
+          onClose={() => setShowTerminal(false)}
+        />
+      )}
+
       {/* Input area */}
       <div style={{
         padding: '12px 24px 16px',
@@ -1052,6 +1426,91 @@ export function ChatWindow() {
             </div>
           )}
 
+          {(pendingImage || pendingFiles.length > 0) && (
+            <div style={{
+              display: 'flex',
+              flexWrap: 'wrap',
+              gap: 6,
+              marginBottom: 8,
+            }}>
+              {pendingImage && (
+                <div style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 6,
+                  border: '1px solid var(--border-bright)',
+                  borderRadius: 'var(--radius)',
+                  background: 'var(--bg-3)',
+                  padding: '4px 6px',
+                  maxWidth: 210,
+                }}>
+                  <img
+                    src={pendingImage.previewUrl}
+                    alt={pendingImage.name}
+                    style={{ width: 22, height: 22, borderRadius: 3, objectFit: 'cover' }}
+                  />
+                  <span className="truncate" style={{ maxWidth: 140, fontSize: 10, color: 'var(--text-1)' }}>
+                    📎 {pendingImage.name}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => setPendingImage(null)}
+                    style={{ border: 'none', background: 'transparent', color: 'var(--text-2)', cursor: 'pointer', padding: 0 }}
+                  >
+                    <X size={12} />
+                  </button>
+                </div>
+              )}
+
+              {pendingFiles.slice(0, MAX_VISIBLE_ATTACHMENT_CHIPS - (pendingImage ? 1 : 0)).map((file, idx) => (
+                <div key={`${file.name}-${idx}`} style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 6,
+                  border: '1px solid var(--border)',
+                  borderRadius: 'var(--radius)',
+                  background: 'var(--bg-3)',
+                  padding: '4px 6px',
+                  maxWidth: 220,
+                }}>
+                  {file.isImage && file.previewUrl ? (
+                    <img src={file.previewUrl} alt={file.name} style={{ width: 22, height: 22, borderRadius: 3, objectFit: 'cover' }} />
+                  ) : (
+                    <Paperclip size={12} color="var(--text-2)" />
+                  )}
+                  <span className="truncate" style={{ maxWidth: 150, fontSize: 10, color: 'var(--text-1)' }}>
+                    📎 {file.name}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => setPendingFiles((prev) => prev.filter((_, fileIndex) => fileIndex !== idx))}
+                    style={{ border: 'none', background: 'transparent', color: 'var(--text-2)', cursor: 'pointer', padding: 0 }}
+                  >
+                    <X size={12} />
+                  </button>
+                </div>
+              ))}
+
+              {hiddenAttachmentCount > 0 && (
+                <span style={{ fontSize: 10, color: 'var(--text-2)', alignSelf: 'center' }}>+{hiddenAttachmentCount} more</span>
+              )}
+            </div>
+          )}
+
+          {attachmentError && (
+            <div style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 6,
+              marginBottom: 8,
+              fontSize: 11,
+              color: 'var(--red)',
+            }}>
+              <CircleAlert size={12} />
+              {attachmentError}
+            </div>
+          )}
+
         <div style={{
           display: 'flex',
           gap: 10,
@@ -1068,22 +1527,23 @@ export function ChatWindow() {
           <input
             ref={imageInputRef}
             type="file"
-            accept="image/*"
-            onChange={handleImagePick}
+            accept={ATTACHMENT_ACCEPT}
+            multiple
+            onChange={handleFilePick}
             style={{ display: 'none' }}
           />
 
           <button
             type="button"
             onClick={() => imageInputRef.current?.click()}
-            title="Attach image"
+            title="Attach files"
             style={{
               width: 32,
               height: 32,
               borderRadius: 'var(--radius)',
-              border: `1px solid ${pendingImage ? 'var(--accent)' : 'var(--border)'}`,
-              background: pendingImage ? 'var(--accent-dim)' : 'var(--bg-3)',
-              color: pendingImage ? 'var(--accent)' : 'var(--text-1)',
+              border: `1px solid ${totalAttachmentCount > 0 ? 'var(--accent)' : 'var(--border)'}`,
+              background: totalAttachmentCount > 0 ? 'var(--accent-dim)' : 'var(--bg-3)',
+              color: totalAttachmentCount > 0 ? 'var(--accent)' : 'var(--text-1)',
               display: 'flex',
               alignItems: 'center',
               justifyContent: 'center',
@@ -1094,51 +1554,12 @@ export function ChatWindow() {
             <ImagePlus size={14} />
           </button>
 
-          {pendingImage && (
-            <div style={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: 8,
-              border: '1px solid var(--border-bright)',
-              borderRadius: 'var(--radius)',
-              background: 'var(--bg-3)',
-              padding: '4px 6px',
-              maxWidth: 190,
-              flexShrink: 0,
-            }}>
-              <img
-                src={pendingImage.previewUrl}
-                alt={pendingImage.name}
-                style={{ width: 34, height: 34, objectFit: 'cover', borderRadius: 3 }}
-              />
-              <span className="truncate" style={{ fontSize: 10, color: 'var(--text-1)', maxWidth: 100 }}>
-                {pendingImage.name}
-              </span>
-              <button
-                type="button"
-                onClick={() => setPendingImage(null)}
-                style={{
-                  border: 'none',
-                  background: 'transparent',
-                  color: 'var(--text-2)',
-                  cursor: 'pointer',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  padding: 0,
-                }}
-              >
-                <X size={12} />
-              </button>
-            </div>
-          )}
-
           <textarea
             ref={textareaRef}
             value={input}
             onChange={handleTextareaChange}
             onKeyDown={handleKeyDown}
-            placeholder="Ask KŌDO anything, attach an image, or run /help"
+            placeholder="Ask KŌDO anything, attach files, or run /help"
             rows={1}
             style={{
               flex: 1,
@@ -1155,15 +1576,34 @@ export function ChatWindow() {
             }}
           />
           <button
-            onClick={isLoading ? stopGeneration : handleSend}
-            disabled={!isLoading && !input.trim() && !pendingImage}
+            onClick={() => {
+              if (isLoading) {
+                stopGeneration()
+                setTerminalRunning(false)
+                return
+              }
+              void handleSend()
+            }}
+            disabled={attachmentUploading || (!isLoading && !input.trim() && totalAttachmentCount === 0)}
             style={{
-              background: isLoading ? 'var(--red-dim)' : (input.trim() || pendingImage) ? 'var(--accent)' : 'var(--bg-3)',
+              background: isLoading
+                ? 'var(--red-dim)'
+                : attachmentUploading
+                  ? 'var(--bg-3)'
+                  : (input.trim() || totalAttachmentCount > 0)
+                    ? 'var(--accent)'
+                    : 'var(--bg-3)',
               border: isLoading ? '1px solid var(--red)' : 'none',
-              color: isLoading ? 'var(--red)' : (input.trim() || pendingImage) ? '#0a0a0b' : 'var(--text-2)',
+              color: isLoading
+                ? 'var(--red)'
+                : attachmentUploading
+                  ? 'var(--text-2)'
+                  : (input.trim() || totalAttachmentCount > 0)
+                    ? '#0a0a0b'
+                    : 'var(--text-2)',
               width: 36, height: 36,
               borderRadius: 'var(--radius)',
-              cursor: (!isLoading && !input.trim() && !pendingImage) ? 'not-allowed' : 'pointer',
+              cursor: (attachmentUploading || (!isLoading && !input.trim() && totalAttachmentCount === 0)) ? 'not-allowed' : 'pointer',
               display: 'flex', alignItems: 'center', justifyContent: 'center',
               flexShrink: 0,
               transition: 'all 0.15s',

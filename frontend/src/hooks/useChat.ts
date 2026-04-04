@@ -17,6 +17,11 @@ function genId() {
   return Math.random().toString(36).slice(2, 11)
 }
 
+type StreamEventHandlers = {
+  onToolOutput?: (line: string, event: Record<string, unknown>) => void
+  onToolResult?: (event: Record<string, unknown>) => void
+}
+
 function extractTextContent(content: unknown): string {
   if (typeof content === 'string') return content
   if (!Array.isArray(content)) return ''
@@ -56,10 +61,15 @@ function extractImageAttachment(content: unknown): ImageAttachment | undefined {
   return undefined
 }
 
-function buildStructuredContent(text: string, imageAttachment?: ImageAttachment): string | Array<Record<string, unknown>> {
+function buildStructuredContent(
+  text: string,
+  imageAttachment?: ImageAttachment,
+  extraBlocks: Array<Record<string, unknown>> = [],
+): string | Array<Record<string, unknown>> {
   const trimmed = text.trim()
   const hasImage = Boolean(imageAttachment && (imageAttachment.url || imageAttachment.data))
-  if (!hasImage) {
+  const hasExtras = extraBlocks.length > 0
+  if (!hasImage && !hasExtras) {
     return trimmed
   }
 
@@ -84,6 +94,11 @@ function buildStructuredContent(text: string, imageAttachment?: ImageAttachment)
         url: imageAttachment.url,
       },
     })
+  }
+
+  for (const block of extraBlocks) {
+    if (!block || typeof block !== 'object') continue
+    blocks.push(block)
   }
 
   return blocks
@@ -436,8 +451,13 @@ export function useChat() {
     }
   }, [loadSessions, store])
 
-  const sendMessage = useCallback(async (content: string, imageAttachment?: ImageAttachment) => {
-    if ((!content.trim() && !imageAttachment) || store.isLoading) return
+  const sendMessage = useCallback(async (
+    content: string,
+    imageAttachment?: ImageAttachment,
+    extraContentBlocks: Array<Record<string, unknown>> = [],
+    eventHandlers?: StreamEventHandlers,
+  ) => {
+    if ((!content.trim() && !imageAttachment && extraContentBlocks.length === 0) || store.isLoading) return
 
     // Abort previous stream
     abortRef.current?.abort()
@@ -447,10 +467,21 @@ export function useChat() {
     store.setLoading(true)
 
     // Add user message
+    const attachmentSummary = extraContentBlocks
+      .map((block) => {
+        if (typeof block?.text === 'string') {
+          return block.text.split('\n')[0]
+        }
+        return '[Attached file]'
+      })
+      .join('\n')
+
+    const displayContent = content.trim() || attachmentSummary || (imageAttachment ? '[Attached image]' : '')
+
     const userMsg: Message = {
       id: genId(),
       role: 'user',
-      content,
+      content: displayContent,
       imageAttachment,
       timestamp: Date.now(),
     }
@@ -494,7 +525,7 @@ export function useChat() {
         method: 'POST',
         headers: buildApiHeaders({ 'Content-Type': 'application/json' }),
         body: JSON.stringify((() => {
-          const structured = buildStructuredContent(content, imageAttachment)
+          const structured = buildStructuredContent(content, imageAttachment, extraContentBlocks)
           const basePayload: Record<string, unknown> = {
             session_id: sessionId,
             project_dir: store.projectDir || null,
@@ -539,7 +570,7 @@ export function useChat() {
 
           try {
             const event = JSON.parse(raw)
-            handleEvent(event, assistantId)
+            handleEvent(event, assistantId, eventHandlers)
           } catch {
             // ignore parse errors
           }
@@ -573,7 +604,7 @@ export function useChat() {
     }
   }, [loadCheckpoints, loadPendingPermissions, loadSessions, loadUsage, store])
 
-  function handleEvent(event: Record<string, unknown>, assistantId: string) {
+  function handleEvent(event: Record<string, unknown>, assistantId: string, eventHandlers?: StreamEventHandlers) {
     const toolUseId = typeof event.tool_use_id === 'string' ? event.tool_use_id : ''
 
     const resolveToolCallIndex = (toolCalls: ToolCall[]): number => {
@@ -621,6 +652,7 @@ export function useChat() {
           }
           return { ...msg, toolCalls: tcs }
         })
+        eventHandlers?.onToolOutput?.(line, event)
         break
       }
 
@@ -639,6 +671,7 @@ export function useChat() {
           }
           return { ...msg, toolCalls: tcs }
         })
+        eventHandlers?.onToolResult?.(event)
         break
       }
 

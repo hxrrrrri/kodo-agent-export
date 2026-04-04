@@ -1,51 +1,147 @@
-import { useEffect, useMemo, useState } from 'react'
-import { Plus, Trash2, MessageSquare, Cpu, Save, RotateCcw, Sun, Moon, PanelLeftClose } from 'lucide-react'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import {
+  Activity,
+  Cpu,
+  Maximize2,
+  MessageSquare,
+  Moon,
+  PanelLeftClose,
+  PanelLeftOpen,
+  Plus,
+  Search,
+  Sun,
+  Trash2,
+  X,
+} from 'lucide-react'
 import { useChat } from '../hooks/useChat'
 import { Session } from '../store/chatStore'
-import { clearApiAuthToken, getApiAuthToken, setApiAuthToken } from '../lib/api'
+import { buildApiHeaders, parseApiError } from '../lib/api'
 import { ProviderPanel } from './ProviderPanel'
+import { AgentGraph, AgentNode } from './AgentGraph'
 
 type SidebarProps = {
-  onToggleCollapse?: () => void
+  collapsed: boolean
+  onToggleCollapse: () => void
 }
 
-function escapeRegExp(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+type SidebarView = 'sessions' | 'providers' | 'agents' | 'usage'
+
+type RuntimeTask = {
+  task_id: string
+  status?: string
 }
 
-function renderHighlightedText(text: string, query: string): JSX.Element {
-  const trimmed = query.trim()
-  if (!trimmed) {
-    return <>{text}</>
-  }
+type RuntimeAgent = {
+  agent_id: string
+  role?: string
+  status?: string
+  task_id?: string
+}
 
-  const pattern = new RegExp(`(${escapeRegExp(trimmed)})`, 'ig')
-  const parts = text.split(pattern)
+function toGraphStatus(status: string | undefined): AgentNode['status'] {
+  const normalized = (status || '').toLowerCase()
+  if (normalized === 'running') return 'running'
+  if (normalized === 'completed' || normalized === 'done' || normalized === 'succeeded') return 'done'
+  if (normalized === 'failed' || normalized === 'error' || normalized === 'cancelled') return 'error'
+  return 'queued'
+}
+
+function shortId(value: string): string {
+  const text = (value || '').trim()
+  if (!text) return 'unknown'
+  if (text.length <= 10) return text
+  return text.slice(0, 10)
+}
+
+function formatDate(iso: string): string {
+  if (!iso) return ''
+  const date = new Date(iso)
+  return date.toLocaleDateString('en-US', {
+    month: 'short',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  })
+}
+
+function formatAgentStatus(status: AgentNode['status']): string {
+  if (status === 'running') return 'Running'
+  if (status === 'done') return 'Done'
+  if (status === 'error') return 'Error'
+  return 'Queued'
+}
+
+function agentStatusTone(status: AgentNode['status']): { color: string; background: string } {
+  if (status === 'running') return { color: 'var(--accent)', background: 'var(--accent-dim)' }
+  if (status === 'done') return { color: 'var(--green)', background: 'var(--green-dim)' }
+  if (status === 'error') return { color: 'var(--red)', background: 'var(--red-dim)' }
+  return { color: 'var(--text-2)', background: 'var(--bg-3)' }
+}
+
+function AgentGlyphIcon({ size = 15 }: { size?: number }) {
   return (
-    <>
-      {parts.map((part, idx) => {
-        if (part.toLowerCase() === trimmed.toLowerCase()) {
-          return (
-            <mark
-              key={`${part}-${idx}`}
-              style={{
-                background: 'var(--yellow-dim)',
-                color: 'var(--yellow)',
-                padding: '0 1px',
-                borderRadius: 2,
-              }}
-            >
-              {part}
-            </mark>
-          )
-        }
-        return <span key={`${part}-${idx}`}>{part}</span>
-      })}
-    </>
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" aria-hidden="true">
+      <path
+        d="M5 19L12 4L19 19"
+        stroke="currentColor"
+        strokeWidth={2.1}
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+      <path d="M8.5 13.5H15.5" stroke="currentColor" strokeWidth={2.1} strokeLinecap="round" />
+    </svg>
   )
 }
 
-export function Sidebar({ onToggleCollapse }: SidebarProps) {
+function RailButton({
+  icon,
+  label,
+  active = false,
+  onClick,
+}: {
+  icon: JSX.Element
+  label: string
+  active?: boolean
+  onClick: () => void
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      title={label}
+      aria-label={label}
+      style={{
+        width: 30,
+        height: 30,
+        borderRadius: 8,
+        border: active ? '1px solid var(--border-bright)' : '1px solid transparent',
+        background: active ? 'var(--bg-3)' : 'transparent',
+        color: active ? 'var(--text-0)' : 'var(--text-1)',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        cursor: 'pointer',
+        transition: 'all 140ms ease',
+      }}
+      onMouseEnter={(event) => {
+        if (!active) {
+          event.currentTarget.style.background = 'var(--bg-2)'
+          event.currentTarget.style.color = 'var(--text-0)'
+        }
+      }}
+      onMouseLeave={(event) => {
+        if (!active) {
+          event.currentTarget.style.background = 'transparent'
+          event.currentTarget.style.color = 'var(--text-1)'
+        }
+      }}
+    >
+      {icon}
+    </button>
+  )
+}
+
+export function Sidebar({ collapsed, onToggleCollapse }: SidebarProps) {
   const {
     sessions,
     sessionId,
@@ -54,811 +150,879 @@ export function Sidebar({ onToggleCollapse }: SidebarProps) {
     loadSession,
     newSession,
     deleteSession,
-    loadUsage,
     usageSummary,
-    checkpoints,
-    loadCheckpoints,
-    createCheckpoint,
-    restoreCheckpoint,
-    updateSessionTitle,
-    theme,
-    setTheme,
     searchQuery,
     setSearchQuery,
+    theme,
+    setTheme,
   } = useChat()
-  const [tokenDraft, setTokenDraft] = useState('')
-  const [tokenSaved, setTokenSaved] = useState(false)
-  const [checkpointLabel, setCheckpointLabel] = useState('')
-  const [checkpointBusy, setCheckpointBusy] = useState(false)
-  const [activeTab, setActiveTab] = useState<'sessions' | 'providers' | 'usage'>('sessions')
+
+  const [activeView, setActiveView] = useState<SidebarView>('sessions')
+  const [agentNodes, setAgentNodes] = useState<AgentNode[]>([])
+  const [agentGraphError, setAgentGraphError] = useState<string | null>(null)
+  const [agentGraphModalOpen, setAgentGraphModalOpen] = useState(false)
+  const searchInputRef = useRef<HTMLInputElement>(null)
+  const bootstrappedRef = useRef(false)
 
   useEffect(() => {
-    loadModes()
-    loadSessions()
-    loadUsage()
-    setTokenDraft(getApiAuthToken())
-    const savedTheme = window.localStorage.getItem('kodo_theme')
-    if (savedTheme === 'light' || savedTheme === 'dark') {
-      setTheme(savedTheme)
+    if (bootstrappedRef.current) return
+    bootstrappedRef.current = true
+    void loadModes()
+    void loadSessions()
+  }, [loadModes, loadSessions])
+
+  useEffect(() => {
+    if (activeView !== 'agents') return
+
+    let cancelled = false
+
+    const loadAgentGraph = async () => {
+      try {
+        const [tasksRes, agentsRes] = await Promise.all([
+          fetch('/api/chat/tasks?limit=50', { headers: buildApiHeaders() }),
+          fetch('/api/chat/agents?limit=50', { headers: buildApiHeaders() }),
+        ])
+
+        if (!tasksRes.ok) throw new Error(await parseApiError(tasksRes))
+        if (!agentsRes.ok) throw new Error(await parseApiError(agentsRes))
+
+        const tasksPayload = await tasksRes.json()
+        const agentsPayload = await agentsRes.json()
+        const tasks = (tasksPayload.tasks || []) as RuntimeTask[]
+        const agents = (agentsPayload.agents || []) as RuntimeAgent[]
+
+        const rootId = sessionId || 'session-root'
+        const nodes: AgentNode[] = [
+          {
+            id: rootId,
+            type: 'session',
+            label: sessionId ? `Session ${shortId(sessionId)}` : 'Session',
+            status: 'running',
+          },
+          ...tasks.map((task) => ({
+            id: task.task_id,
+            type: 'task' as const,
+            label: `task:${shortId(task.task_id)}`,
+            status: toGraphStatus(task.status),
+            parentId: rootId,
+          })),
+          ...agents.map((agent) => ({
+            id: agent.agent_id,
+            type: 'agent' as const,
+            label: `${agent.role || 'agent'}:${shortId(agent.agent_id)}`,
+            status: toGraphStatus(agent.status),
+            parentId: agent.task_id || rootId,
+          })),
+        ]
+
+        if (!cancelled) {
+          setAgentNodes(nodes)
+          setAgentGraphError(null)
+        }
+      } catch (error) {
+        if (!cancelled) {
+          setAgentGraphError(String(error))
+        }
+      }
     }
-  }, [])
 
-  useEffect(() => {
-    if (sessionId) {
-      void loadCheckpoints(sessionId)
-    } else {
-      void loadCheckpoints(null)
+    void loadAgentGraph()
+    const timer = window.setInterval(() => {
+      void loadAgentGraph()
+    }, 5000)
+
+    return () => {
+      cancelled = true
+      window.clearInterval(timer)
     }
-  }, [sessionId])
+  }, [activeView, sessionId])
 
   useEffect(() => {
-    document.documentElement.setAttribute('data-theme', theme)
-    window.localStorage.setItem('kodo_theme', theme)
-  }, [theme])
+    if (activeView !== 'agents') {
+      setAgentGraphModalOpen(false)
+    }
+  }, [activeView])
 
-  const handleNew = async () => {
+  useEffect(() => {
+    if (!agentGraphModalOpen) return
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setAgentGraphModalOpen(false)
+      }
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => {
+      window.removeEventListener('keydown', onKeyDown)
+    }
+  }, [agentGraphModalOpen])
+
+  const visibleSessions = useMemo(() => {
+    const normalizedSearch = searchQuery.trim().toLowerCase()
+    if (!normalizedSearch) return sessions
+
+    return sessions.filter((session) => {
+      const title = (session.title || '').toLowerCase()
+      const sessionKey = session.session_id.toLowerCase()
+      return title.includes(normalizedSearch) || sessionKey.includes(normalizedSearch)
+    })
+  }, [searchQuery, sessions])
+
+  const agentSnapshot = useMemo(() => {
+    const sessionsCount = agentNodes.filter((node) => node.type === 'session').length
+    const tasksCount = agentNodes.filter((node) => node.type === 'task').length
+    const agentsCount = agentNodes.filter((node) => node.type === 'agent').length
+    const runningCount = agentNodes.filter((node) => node.status === 'running').length
+    const doneCount = agentNodes.filter((node) => node.status === 'done').length
+    const queuedCount = agentNodes.filter((node) => node.status === 'queued').length
+    const errorCount = agentNodes.filter((node) => node.status === 'error').length
+
+    const recentNodes = agentNodes
+      .filter((node) => node.type !== 'session')
+      .slice(0, 6)
+      .map((node) => ({
+        id: node.id,
+        typeLabel: node.type === 'task' ? 'Task' : 'Agent',
+        label: node.label,
+        status: node.status,
+      }))
+
+    return {
+      sessionsCount,
+      tasksCount,
+      agentsCount,
+      runningCount,
+      doneCount,
+      queuedCount,
+      errorCount,
+      recentNodes,
+    }
+  }, [agentNodes])
+
+  const usageCost = usageSummary?.totals.cost_usd_total ?? usageSummary?.totals.estimated_cost_usd ?? 0
+  const usageInput = usageSummary?.totals.input_tokens ?? 0
+  const usageOutput = usageSummary?.totals.output_tokens ?? 0
+  const usageByModelRows = Object.entries(usageSummary?.by_model || {})
+
+  const openSearch = () => {
+    setActiveView('sessions')
+    if (collapsed) onToggleCollapse()
+    window.requestAnimationFrame(() => searchInputRef.current?.focus())
+  }
+
+  const handleNewChat = async () => {
     await newSession()
-  }
-
-  const handleCreateCheckpoint = async () => {
-    if (!sessionId || checkpointBusy) return
-    setCheckpointBusy(true)
-    await createCheckpoint(checkpointLabel || undefined, sessionId)
-    setCheckpointLabel('')
-    setCheckpointBusy(false)
-  }
-
-  const handleRestoreCheckpoint = async (checkpointId: string) => {
-    if (!sessionId || checkpointBusy) return
-    const confirmed = window.confirm(`Restore checkpoint ${checkpointId}? This replaces current session history.`)
-    if (!confirmed) return
-    setCheckpointBusy(true)
-    await restoreCheckpoint(checkpointId, sessionId)
-    setCheckpointBusy(false)
+    setActiveView('sessions')
+    if (collapsed) onToggleCollapse()
   }
 
   const toggleTheme = () => {
     setTheme(theme === 'dark' ? 'light' : 'dark')
   }
 
-  const formatDate = (iso: string) => {
-    if (!iso) return ''
-    const d = new Date(iso)
-    return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
-  }
-
-  const saveToken = () => {
-    setApiAuthToken(tokenDraft)
-    setTokenSaved(true)
-    window.setTimeout(() => setTokenSaved(false), 1500)
-    loadSessions()
-  }
-
-  const clearToken = () => {
-    clearApiAuthToken()
-    setTokenDraft('')
-    loadSessions()
-  }
-
-  const usageCost = usageSummary?.totals.cost_usd_total ?? usageSummary?.totals.estimated_cost_usd ?? 0
-  const usageInput = usageSummary?.totals.input_tokens ?? 0
-  const usageOutput = usageSummary?.totals.output_tokens ?? 0
-  const usageTotalTokens = usageInput + usageOutput
-  const usageCacheRead = usageSummary?.totals.input_cache_read_tokens ?? 0
-  const usageCacheWrite = usageSummary?.totals.input_cache_write_tokens ?? 0
-  const usageCacheSavings = (usageCacheRead * (3.0 * 0.9)) / 1_000_000
-  const normalizedSearch = searchQuery.trim().toLowerCase()
-  const usageByModelRows = Object.entries(usageSummary?.by_model || {})
-
-  const visibleSessions = useMemo(() => {
-    if (!normalizedSearch) return sessions
-    return sessions.filter((session) => {
-      const title = (session.title || '').toLowerCase()
-      const sessionKey = session.session_id.toLowerCase()
-      return title.includes(normalizedSearch) || sessionKey.includes(normalizedSearch)
-    })
-  }, [sessions, normalizedSearch])
-
   return (
-    <aside style={{
-      width: 'var(--sidebar-width)',
-      minWidth: 'var(--sidebar-width)',
-      background: 'var(--bg-1)',
-      borderRight: '1px solid var(--border)',
-      display: 'flex',
-      flexDirection: 'column',
-      height: '100%',
-      overflow: 'hidden',
-    }}>
-      {/* Logo */}
-      <div style={{
-        padding: '20px 16px 16px',
-        borderBottom: '1px solid var(--border)',
+    <aside
+      style={{
+        width: collapsed
+          ? 'var(--sidebar-rail-width)'
+          : 'calc(var(--sidebar-rail-width) + var(--sidebar-panel-width))',
+        minWidth: collapsed
+          ? 'var(--sidebar-rail-width)'
+          : 'calc(var(--sidebar-rail-width) + var(--sidebar-panel-width))',
+        transition: 'width 220ms ease, min-width 220ms ease',
+        background: 'var(--bg-1)',
+        borderRight: '1px solid var(--border)',
         display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'space-between',
-        gap: 10,
-      }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}>
-          <div style={{
-            width: 32, height: 32,
-            background: 'var(--accent)',
-            display: 'flex', alignItems: 'center', justifyContent: 'center',
-            borderRadius: 2,
-            flexShrink: 0,
-          }}>
-            <Cpu size={18} color="#0a0a0b" strokeWidth={2.5} />
-          </div>
-          <div>
-            <div style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 18, letterSpacing: '-0.5px' }}>
-              KŌDO
-            </div>
-            <div style={{ fontSize: 10, color: 'var(--text-2)', letterSpacing: '0.15em' }}>
-              AUTONOMOUS AGENT
-            </div>
-          </div>
-        </div>
-
-        <button
-          type="button"
+        height: '100%',
+        overflow: 'hidden',
+      }}
+    >
+      <div
+        style={{
+          width: 'var(--sidebar-rail-width)',
+          minWidth: 'var(--sidebar-rail-width)',
+          borderRight: '1px solid var(--border)',
+          display: 'flex',
+          flexDirection: 'column',
+          alignItems: 'center',
+          gap: 8,
+          paddingTop: 8,
+          paddingBottom: 10,
+          background: 'linear-gradient(180deg, color-mix(in srgb, var(--bg-1) 90%, #000 10%), var(--bg-1))',
+        }}
+      >
+        <RailButton
+          icon={collapsed ? <PanelLeftOpen size={14} /> : <PanelLeftClose size={14} />}
+          label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
           onClick={onToggleCollapse}
-          aria-label="Collapse sidebar"
-          title="Collapse sidebar"
+        />
+
+        <div
+          title="KŌDO"
           style={{
-            border: '1px solid var(--border)',
-            background: 'var(--bg-2)',
-            color: 'var(--text-1)',
-            borderRadius: 'var(--radius)',
-            width: 28,
-            height: 28,
+            width: 30,
+            height: 30,
+            borderRadius: 8,
+            border: '1px solid var(--border-bright)',
+            background: 'var(--accent-dim)',
+            color: 'var(--accent)',
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'center',
-            cursor: 'pointer',
-            flexShrink: 0,
-            transition: 'all 150ms ease',
-          }}
-          onMouseEnter={(event) => {
-            event.currentTarget.style.borderColor = 'var(--accent)'
-            event.currentTarget.style.color = 'var(--accent)'
-          }}
-          onMouseLeave={(event) => {
-            event.currentTarget.style.borderColor = 'var(--border)'
-            event.currentTarget.style.color = 'var(--text-1)'
           }}
         >
-          <PanelLeftClose size={14} />
-        </button>
+          <Cpu size={15} />
+        </div>
+
+        <div style={{ width: 18, height: 1, background: 'var(--border)' }} />
+
+        <RailButton icon={<Plus size={15} />} label="New chat" onClick={() => void handleNewChat()} />
+        <RailButton icon={<Search size={15} />} label="Search chats" onClick={openSearch} active={activeView === 'sessions'} />
+
+        <div style={{ width: 18, height: 1, background: 'var(--border)' }} />
+
+        <RailButton
+          icon={<MessageSquare size={15} />}
+          label="Sessions"
+          onClick={() => {
+            setActiveView('sessions')
+            if (collapsed) onToggleCollapse()
+          }}
+          active={activeView === 'sessions'}
+        />
+        <RailButton
+          icon={<Cpu size={15} />}
+          label="Providers"
+          onClick={() => {
+            setActiveView('providers')
+            if (collapsed) onToggleCollapse()
+          }}
+          active={activeView === 'providers'}
+        />
+        <RailButton
+          icon={<AgentGlyphIcon size={15} />}
+          label="Agents"
+          onClick={() => {
+            setActiveView('agents')
+            if (collapsed) onToggleCollapse()
+          }}
+          active={activeView === 'agents'}
+        />
+        <RailButton
+          icon={<Activity size={15} />}
+          label="Usage"
+          onClick={() => {
+            setActiveView('usage')
+            if (collapsed) onToggleCollapse()
+          }}
+          active={activeView === 'usage'}
+        />
+
+        <div style={{ flex: 1 }} />
+
+        <RailButton
+          icon={theme === 'dark' ? <Sun size={15} /> : <Moon size={15} />}
+          label="Toggle theme"
+          onClick={toggleTheme}
+        />
       </div>
 
-      {/* New chat button */}
-      <div style={{ padding: '12px 12px 8px' }}>
-        <button
-          onClick={handleNew}
+      <div
+        style={{
+          width: collapsed ? 0 : 'var(--sidebar-panel-width)',
+          opacity: collapsed ? 0 : 1,
+          transform: collapsed ? 'translateX(-10px)' : 'translateX(0)',
+          pointerEvents: collapsed ? 'none' : 'auto',
+          transition: 'opacity 150ms ease, transform 220ms ease, width 220ms ease',
+          display: 'flex',
+          flexDirection: 'column',
+          overflow: 'hidden',
+          background: 'linear-gradient(180deg, color-mix(in srgb, var(--bg-1) 94%, #000 6%), var(--bg-1))',
+        }}
+      >
+        <div
           style={{
-            width: '100%',
-            background: 'var(--accent-dim)',
-            border: '1px solid var(--accent)',
-            color: 'var(--accent)',
-            padding: '8px 12px',
-            borderRadius: 'var(--radius)',
-            cursor: 'pointer',
-            fontSize: 12,
-            fontFamily: 'var(--font-mono)',
-            fontWeight: 600,
-            letterSpacing: '0.08em',
+            height: 52,
+            borderBottom: '1px solid var(--border)',
             display: 'flex',
             alignItems: 'center',
-            gap: 6,
-            transition: 'all 0.15s',
-          }}
-          onMouseEnter={e => {
-            (e.currentTarget as HTMLElement).style.background = 'var(--accent)'
-            ;(e.currentTarget as HTMLElement).style.color = '#0a0a0b'
-          }}
-          onMouseLeave={e => {
-            (e.currentTarget as HTMLElement).style.background = 'var(--accent-dim)'
-            ;(e.currentTarget as HTMLElement).style.color = 'var(--accent)'
+            justifyContent: 'space-between',
+            padding: '0 14px',
           }}
         >
-          <Plus size={14} />
-          NEW SESSION
-        </button>
-      </div>
-
-      <div style={{ padding: '0 12px 8px', display: 'flex', gap: 6 }}>
-        <button
-          onClick={() => setActiveTab('sessions')}
-          style={{
-            flex: 1,
-            background: activeTab === 'sessions' ? 'var(--bg-3)' : 'var(--bg-2)',
-            border: `1px solid ${activeTab === 'sessions' ? 'var(--border-bright)' : 'var(--border)'}`,
-            color: activeTab === 'sessions' ? 'var(--text-0)' : 'var(--text-1)',
-            borderRadius: 'var(--radius)',
-            cursor: 'pointer',
-            padding: '6px 8px',
-            fontSize: 10,
-            fontFamily: 'var(--font-mono)',
-            letterSpacing: '0.08em',
-          }}
-        >
-          SESSIONS
-        </button>
-        <button
-          onClick={() => setActiveTab('providers')}
-          style={{
-            flex: 1,
-            background: activeTab === 'providers' ? 'var(--bg-3)' : 'var(--bg-2)',
-            border: `1px solid ${activeTab === 'providers' ? 'var(--border-bright)' : 'var(--border)'}`,
-            color: activeTab === 'providers' ? 'var(--text-0)' : 'var(--text-1)',
-            borderRadius: 'var(--radius)',
-            cursor: 'pointer',
-            padding: '6px 8px',
-            fontSize: 10,
-            fontFamily: 'var(--font-mono)',
-            letterSpacing: '0.08em',
-          }}
-        >
-          PROVIDERS
-        </button>
-        <button
-          onClick={() => setActiveTab('usage')}
-          style={{
-            flex: 1,
-            background: activeTab === 'usage' ? 'var(--bg-3)' : 'var(--bg-2)',
-            border: `1px solid ${activeTab === 'usage' ? 'var(--border-bright)' : 'var(--border)'}`,
-            color: activeTab === 'usage' ? 'var(--text-0)' : 'var(--text-1)',
-            borderRadius: 'var(--radius)',
-            cursor: 'pointer',
-            padding: '6px 8px',
-            fontSize: 10,
-            fontFamily: 'var(--font-mono)',
-            letterSpacing: '0.08em',
-          }}
-        >
-          USAGE
-        </button>
-      </div>
-
-      {/* Sessions list */}
-      <div style={{
-        flex: 1,
-        overflowY: 'auto',
-        padding: activeTab === 'sessions' ? '4px 8px' : '0',
-      }}>
-        {activeTab === 'sessions' && (
-          <>
-            <div style={{ padding: '0 4px 8px' }}>
-              <input
-                type="text"
-                value={searchQuery}
-                onChange={(event) => setSearchQuery(event.target.value)}
-                placeholder="Search sessions..."
-                style={{
-                  width: '100%',
-                  background: 'var(--bg-2)',
-                  border: '1px solid var(--border)',
-                  color: 'var(--text-0)',
-                  borderRadius: 'var(--radius)',
-                  padding: '6px 8px',
-                  fontSize: 11,
-                  fontFamily: 'var(--font-mono)',
-                  outline: 'none',
-                }}
-              />
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            <div style={{
+              width: 26,
+              height: 26,
+              borderRadius: 6,
+              border: '1px solid var(--border-bright)',
+              background: 'var(--accent-dim)',
+              color: 'var(--accent)',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+            }}>
+              <Cpu size={14} />
             </div>
-
-            {sessions.length === 0 && (
-              <div style={{ padding: '16px 8px', color: 'var(--text-2)', fontSize: 12, textAlign: 'center' }}>
-                No sessions yet.<br />Start a conversation.
+            <div>
+              <div
+                style={{
+                  fontFamily: 'var(--font-display)',
+                  fontSize: 20,
+                  fontWeight: 800,
+                  letterSpacing: '-0.06em',
+                  lineHeight: 0.95,
+                  color: 'var(--text-0)',
+                }}
+              >
+                KŌDO
               </div>
-            )}
-            {sessions.length > 0 && normalizedSearch && visibleSessions.length === 0 && (
-              <div style={{ padding: '12px 8px', color: 'var(--text-2)', fontSize: 11, textAlign: 'center' }}>
-                No sessions match "{searchQuery.trim()}".
+              <div style={{ fontSize: 9, color: 'var(--text-2)', letterSpacing: '0.13em' }}>
+                AGENT
               </div>
-            )}
-            {visibleSessions.map((session: Session) => (
-              <SessionItem
-                key={session.session_id}
-                session={session}
-                active={session.session_id === sessionId}
-                onSelect={() => loadSession(session.session_id)}
-                onDelete={() => deleteSession(session.session_id)}
-                onRename={(title) => updateSessionTitle(session.session_id, title)}
-                formatDate={formatDate}
-                searchQuery={searchQuery}
-              />
-            ))}
-
-            {sessionId && (
-              <div style={{
-                marginTop: 8,
-                border: '1px solid var(--border)',
-                borderRadius: 'var(--radius)',
-                background: 'var(--bg-2)',
-                padding: '8px',
-                display: 'grid',
-                gap: 8,
-              }}>
-                <div style={{
-                  fontSize: 10,
-                  letterSpacing: '0.1em',
-                  color: 'var(--text-2)',
-                }}>
-                  CHECKPOINTS
-                </div>
-                <div style={{ display: 'flex', gap: 6 }}>
-                  <input
-                    value={checkpointLabel}
-                    onChange={(event) => setCheckpointLabel(event.target.value)}
-                    placeholder="checkpoint label"
-                    style={{
-                      flex: 1,
-                      background: 'var(--bg-0)',
-                      border: '1px solid var(--border)',
-                      color: 'var(--text-0)',
-                      borderRadius: 'var(--radius)',
-                      fontSize: 10,
-                      fontFamily: 'var(--font-mono)',
-                      padding: '6px 8px',
-                      outline: 'none',
-                    }}
-                  />
-                  <button
-                    onClick={handleCreateCheckpoint}
-                    disabled={checkpointBusy}
-                    style={{
-                      border: '1px solid var(--accent)',
-                      background: 'var(--accent-dim)',
-                      color: 'var(--accent)',
-                      borderRadius: 'var(--radius)',
-                      fontSize: 10,
-                      fontFamily: 'var(--font-mono)',
-                      padding: '6px 8px',
-                      cursor: checkpointBusy ? 'wait' : 'pointer',
-                    }}
-                    title="Create checkpoint"
-                  >
-                    <Save size={12} />
-                  </button>
-                </div>
-                <div style={{ display: 'grid', gap: 4, maxHeight: 170, overflowY: 'auto' }}>
-                  {checkpoints.length === 0 && (
-                    <div style={{ fontSize: 10, color: 'var(--text-2)' }}>No checkpoints yet.</div>
-                  )}
-                  {checkpoints.map((checkpoint) => (
-                    <div
-                      key={checkpoint.checkpoint_id}
-                      style={{
-                        border: '1px solid var(--border)',
-                        borderRadius: 'var(--radius)',
-                        background: 'var(--bg-3)',
-                        padding: '6px 8px',
-                        display: 'grid',
-                        gap: 4,
-                      }}
-                    >
-                      <div style={{ fontSize: 10, color: 'var(--text-1)' }}>
-                        {checkpoint.label || checkpoint.checkpoint_id}
-                      </div>
-                      <div style={{ fontSize: 9, color: 'var(--text-2)' }}>
-                        {formatDate(checkpoint.created_at)} · {checkpoint.message_count} msgs
-                      </div>
-                      <button
-                        onClick={() => handleRestoreCheckpoint(checkpoint.checkpoint_id)}
-                        disabled={checkpointBusy}
-                        style={{
-                          border: '1px solid var(--blue)',
-                          background: 'var(--blue-dim)',
-                          color: 'var(--blue)',
-                          borderRadius: 'var(--radius)',
-                          fontSize: 9,
-                          fontFamily: 'var(--font-mono)',
-                          padding: '4px 6px',
-                          display: 'flex',
-                          alignItems: 'center',
-                          justifyContent: 'center',
-                          gap: 4,
-                          cursor: checkpointBusy ? 'wait' : 'pointer',
-                        }}
-                      >
-                        <RotateCcw size={11} />
-                        RESTORE
-                      </button>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
-          </>
-        )}
-
-        {activeTab === 'providers' && <ProviderPanel />}
-
-        {activeTab === 'usage' && (
-          <div style={{ padding: '6px 8px', display: 'grid', gap: 10 }}>
-            {!usageSummary ? (
-              <div style={{
-                padding: '12px 10px',
-                border: '1px dashed var(--border-bright)',
-                borderRadius: 'var(--radius)',
-                color: 'var(--text-2)',
-                fontSize: 11,
-              }}>
-                No usage data yet. Start a conversation to see cost tracking.
-              </div>
-            ) : (
-              <>
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(120px, 1fr))', gap: 8 }}>
-                  <div style={{
-                    border: '1px solid var(--border)',
-                    borderRadius: 'var(--radius)',
-                    background: 'var(--bg-2)',
-                    padding: '8px 10px',
-                    display: 'grid',
-                    gap: 4,
-                  }}>
-                    <div style={{ fontSize: 10, color: 'var(--text-2)', letterSpacing: '0.05em' }}>TOTAL TOKENS (7D)</div>
-                    <div style={{ fontSize: 13, color: 'var(--text-0)', fontFamily: 'var(--font-mono)' }}>
-                      {usageTotalTokens.toLocaleString()}
-                    </div>
-                  </div>
-
-                  <div style={{
-                    border: '1px solid var(--border)',
-                    borderRadius: 'var(--radius)',
-                    background: 'var(--bg-2)',
-                    padding: '8px 10px',
-                    display: 'grid',
-                    gap: 4,
-                  }}>
-                    <div style={{ fontSize: 10, color: 'var(--text-2)', letterSpacing: '0.05em' }}>ESTIMATED COST</div>
-                    <div style={{ fontSize: 13, color: 'var(--text-0)', fontFamily: 'var(--font-mono)' }}>
-                      ${usageCost.toFixed(4)}
-                    </div>
-                  </div>
-                </div>
-
-                <div style={{
-                  border: '1px solid var(--border)',
-                  borderRadius: 'var(--radius)',
-                  background: 'var(--bg-2)',
-                  padding: 8,
-                }}>
-                  <div style={{ overflowX: 'auto' }}>
-                    <table style={{ fontSize: 11, borderCollapse: 'collapse', width: '100%', tableLayout: 'fixed' }}>
-                      <thead>
-                        <tr>
-                          <th style={{ width: '34%', textAlign: 'left', padding: '4px 8px', borderBottom: '0.5px solid var(--border)', color: 'var(--text-2)' }}>Model</th>
-                          <th style={{ width: '22%', textAlign: 'right', padding: '4px 8px', borderBottom: '0.5px solid var(--border)', color: 'var(--text-2)' }}>Input</th>
-                          <th style={{ width: '22%', textAlign: 'right', padding: '4px 8px', borderBottom: '0.5px solid var(--border)', color: 'var(--text-2)' }}>Output</th>
-                          <th style={{ width: '22%', textAlign: 'right', padding: '4px 8px', borderBottom: '0.5px solid var(--border)', color: 'var(--text-2)' }}>Est. cost</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {usageByModelRows.length === 0 && (
-                          <tr>
-                            <td colSpan={4} style={{ padding: '8px', color: 'var(--text-2)', fontSize: 11 }}>
-                              No model usage events yet.
-                            </td>
-                          </tr>
-                        )}
-                        {usageByModelRows.map(([model, row]) => {
-                          const rowCost = row.cost_usd_total ?? row.estimated_cost_usd ?? 0
-                          return (
-                            <tr key={model}>
-                              <td
-                                style={{
-                                  padding: '4px 8px',
-                                  borderBottom: '0.5px solid var(--border)',
-                                  color: 'var(--text-1)',
-                                  overflowWrap: 'anywhere',
-                                }}
-                              >
-                                {model}
-                              </td>
-                              <td
-                                style={{
-                                  padding: '4px 8px',
-                                  borderBottom: '0.5px solid var(--border)',
-                                  textAlign: 'right',
-                                  color: 'var(--text-1)',
-                                  whiteSpace: 'nowrap',
-                                  fontVariantNumeric: 'tabular-nums',
-                                }}
-                              >
-                                {row.input_tokens.toLocaleString()}
-                              </td>
-                              <td
-                                style={{
-                                  padding: '4px 8px',
-                                  borderBottom: '0.5px solid var(--border)',
-                                  textAlign: 'right',
-                                  color: 'var(--text-1)',
-                                  whiteSpace: 'nowrap',
-                                  fontVariantNumeric: 'tabular-nums',
-                                }}
-                              >
-                                {row.output_tokens.toLocaleString()}
-                              </td>
-                              <td
-                                style={{
-                                  padding: '4px 8px',
-                                  borderBottom: '0.5px solid var(--border)',
-                                  textAlign: 'right',
-                                  color: 'var(--text-1)',
-                                  whiteSpace: 'nowrap',
-                                  fontVariantNumeric: 'tabular-nums',
-                                }}
-                              >
-                                ${rowCost.toFixed(4)}
-                              </td>
-                            </tr>
-                          )
-                        })}
-                      </tbody>
-                    </table>
-                  </div>
-                </div>
-
-                {(usageCacheRead > 0 || usageCacheWrite > 0) && (
-                  <div style={{
-                    border: '1px solid var(--border)',
-                    borderRadius: 'var(--radius)',
-                    background: 'var(--bg-2)',
-                    color: 'var(--text-2)',
-                    padding: '8px 10px',
-                    fontSize: 11,
-                    fontFamily: 'var(--font-mono)',
-                  }}>
-                    Cache reads: {usageCacheRead.toLocaleString()} tokens · Saved ~${usageCacheSavings.toFixed(4)}
-                  </div>
-                )}
-              </>
-            )}
+            </div>
           </div>
-        )}
-      </div>
+          <button
+            type="button"
+            title="Collapse sidebar"
+            aria-label="Collapse sidebar"
+            onClick={onToggleCollapse}
+            style={{
+              border: 'none',
+              background: 'transparent',
+              color: 'var(--text-2)',
+              cursor: 'pointer',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              padding: 0,
+            }}
+          >
+            <PanelLeftClose size={14} />
+          </button>
+        </div>
 
-      {/* Footer */}
-      <div style={{
-        padding: '12px 16px',
-        borderTop: '1px solid var(--border)',
-        display: 'grid',
-        gap: 10,
-      }}>
-        <div>
-          <div style={{ fontSize: 10, color: 'var(--text-2)', letterSpacing: '0.05em', marginBottom: 6 }}>
-            API AUTH TOKEN
-          </div>
-          <input
-            type="password"
-            value={tokenDraft}
-            onChange={(e) => setTokenDraft(e.target.value)}
-            placeholder="optional bearer token"
+        <div style={{ padding: '10px 14px 8px' }}>
+          <button
+            type="button"
+            onClick={() => void handleNewChat()}
             style={{
               width: '100%',
-              background: 'var(--bg-0)',
-              border: '1px solid var(--border)',
-              color: 'var(--text-0)',
-              borderRadius: 'var(--radius)',
-              padding: '6px 8px',
-              fontSize: 11,
+              background: 'var(--accent-dim)',
+              border: '1px solid var(--accent)',
+              color: 'var(--accent)',
+              borderRadius: 8,
+              fontSize: 12,
               fontFamily: 'var(--font-mono)',
-              outline: 'none',
+              cursor: 'pointer',
+              padding: '8px 10px',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              gap: 7,
             }}
+          >
+            <Plus size={14} /> NEW SESSION
+          </button>
+        </div>
+
+        <div style={{ padding: '0 14px 8px', display: 'grid', gap: 2 }}>
+          <PanelNav
+            icon={<MessageSquare size={15} />}
+            label="Sessions"
+            active={activeView === 'sessions'}
+            onClick={() => setActiveView('sessions')}
           />
-          <div style={{ display: 'flex', gap: 6, marginTop: 6 }}>
-            <button
-              onClick={saveToken}
-              style={{
-                flex: 1,
-                background: 'var(--accent-dim)',
-                border: '1px solid var(--accent)',
-                color: 'var(--accent)',
-                borderRadius: 'var(--radius)',
-                cursor: 'pointer',
-                padding: '5px 8px',
-                fontSize: 10,
-                fontFamily: 'var(--font-mono)',
-              }}
-            >
-              {tokenSaved ? 'SAVED' : 'SAVE'}
-            </button>
-            <button
-              onClick={clearToken}
-              style={{
-                flex: 1,
-                background: 'var(--bg-2)',
-                border: '1px solid var(--border)',
-                color: 'var(--text-1)',
-                borderRadius: 'var(--radius)',
-                cursor: 'pointer',
-                padding: '5px 8px',
-                fontSize: 10,
-                fontFamily: 'var(--font-mono)',
-              }}
-            >
-              CLEAR
-            </button>
-          </div>
+          <PanelNav
+            icon={<Cpu size={15} />}
+            label="Providers"
+            active={activeView === 'providers'}
+            onClick={() => setActiveView('providers')}
+          />
+          <PanelNav
+            icon={<AgentGlyphIcon size={15} />}
+            label="Agents"
+            active={activeView === 'agents'}
+            onClick={() => setActiveView('agents')}
+          />
+          <PanelNav
+            icon={<Activity size={15} />}
+            label="Usage"
+            active={activeView === 'usage'}
+            onClick={() => setActiveView('usage')}
+          />
         </div>
 
-        <div style={{
-          border: '1px solid var(--border)',
-          borderRadius: 'var(--radius)',
-          padding: '8px 10px',
-          background: 'var(--bg-2)',
-          fontSize: 10,
-          color: 'var(--text-2)',
-          letterSpacing: '0.03em',
-          lineHeight: 1.5,
-        }}>
-          <div style={{ color: 'var(--text-1)', marginBottom: 4 }}>USAGE (7D)</div>
-          <div>Cost: ${usageCost.toFixed(4)}</div>
-          <div>In: {usageInput.toLocaleString()} tok</div>
-          <div>Out: {usageOutput.toLocaleString()} tok</div>
+        <div style={{ flex: 1, minHeight: 0, overflow: 'hidden' }}>
+          {activeView === 'sessions' && (
+            <div style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
+              <div style={{ padding: '6px 14px 8px' }}>
+                <div style={{ fontSize: 12, color: 'var(--text-2)', marginBottom: 8 }}>Search chats</div>
+                <input
+                  ref={searchInputRef}
+                  type="text"
+                  value={searchQuery}
+                  onChange={(event) => setSearchQuery(event.target.value)}
+                  placeholder="Search chats"
+                  style={{
+                    width: '100%',
+                    background: 'var(--bg-2)',
+                    border: '1px solid var(--border)',
+                    color: 'var(--text-0)',
+                    borderRadius: 8,
+                    padding: '7px 9px',
+                    fontSize: 12,
+                    outline: 'none',
+                  }}
+                />
+              </div>
+
+              <div style={{ flex: 1, overflowY: 'auto', padding: '0 10px 10px' }}>
+                {visibleSessions.length === 0 ? (
+                  <div
+                    style={{
+                      margin: '6px 4px 0',
+                      padding: '10px 12px',
+                      borderRadius: 10,
+                      border: '1px dashed var(--border)',
+                      color: 'var(--text-2)',
+                      fontSize: 12,
+                    }}
+                  >
+                    No sessions yet.
+                  </div>
+                ) : (
+                  visibleSessions.map((session) => (
+                    <SessionRow
+                      key={session.session_id}
+                      session={session}
+                      active={session.session_id === sessionId}
+                      onSelect={() => loadSession(session.session_id)}
+                      onDelete={() => deleteSession(session.session_id)}
+                    />
+                  ))
+                )}
+              </div>
+            </div>
+          )}
+
+          {activeView === 'providers' && (
+            <div style={{ height: '100%', overflowY: 'auto' }}>
+              <ProviderPanel />
+            </div>
+          )}
+
+          {activeView === 'agents' && (
+            <div style={{ height: '100%', overflowY: 'auto', padding: '8px 10px 10px', display: 'grid', gap: 8 }}>
+              <div
+                style={{
+                  border: '1px solid var(--border)',
+                  borderRadius: 10,
+                  background: 'var(--bg-2)',
+                  padding: '8px 10px',
+                  display: 'grid',
+                  gap: 4,
+                }}
+              >
+                <div style={{ fontSize: 12, color: 'var(--text-0)' }}>What you are seeing</div>
+                <div style={{ fontSize: 11, color: 'var(--text-2)', lineHeight: 1.4 }}>
+                  This tab summarizes your active execution tree for the current session.
+                </div>
+                <div style={{ fontSize: 11, color: 'var(--text-2)', lineHeight: 1.4 }}>
+                  Session is the root, tasks branch from the session, and agents branch from tasks.
+                </div>
+                <div style={{ fontSize: 11, color: 'var(--text-2)', lineHeight: 1.4 }}>
+                  Status colors: running, done, queued, and error.
+                </div>
+              </div>
+              {agentGraphError && (
+                <div
+                  style={{
+                    border: '1px solid var(--red)',
+                    borderRadius: 8,
+                    background: 'var(--red-dim)',
+                    color: 'var(--red)',
+                    fontSize: 11,
+                    padding: '8px 10px',
+                  }}
+                >
+                  {agentGraphError}
+                </div>
+              )}
+
+              <button
+                type="button"
+                onClick={() => setAgentGraphModalOpen(true)}
+                style={{
+                  border: '1px solid var(--border)',
+                  background: 'var(--bg-2)',
+                  borderRadius: 10,
+                  padding: '10px 10px 9px',
+                  margin: 0,
+                  textAlign: 'left',
+                  cursor: 'zoom-in',
+                  display: 'grid',
+                  gap: 9,
+                }}
+              >
+                <div
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    fontSize: 12,
+                    color: 'var(--text-0)',
+                  }}
+                >
+                  <span>Execution snapshot</span>
+                  <Maximize2 size={12} />
+                </div>
+
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 6 }}>
+                  <AgentMetric label="Sessions" value={agentSnapshot.sessionsCount} />
+                  <AgentMetric label="Tasks" value={agentSnapshot.tasksCount} />
+                  <AgentMetric label="Agents" value={agentSnapshot.agentsCount} />
+                  <AgentMetric label="Running" value={agentSnapshot.runningCount} />
+                  <AgentMetric label="Done" value={agentSnapshot.doneCount} />
+                  <AgentMetric label="Queued" value={agentSnapshot.queuedCount} />
+                </div>
+
+                <div style={{ borderTop: '1px solid var(--border)', paddingTop: 8, display: 'grid', gap: 5 }}>
+                  <div style={{ fontSize: 11, color: 'var(--text-2)' }}>Recent nodes</div>
+                  {agentSnapshot.recentNodes.length === 0 && (
+                    <div style={{ fontSize: 11, color: 'var(--text-2)' }}>No active tasks or agents yet.</div>
+                  )}
+                  {agentSnapshot.recentNodes.map((node) => {
+                    const tone = agentStatusTone(node.status)
+                    return (
+                      <div
+                        key={node.id}
+                        style={{
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'space-between',
+                          gap: 6,
+                          fontSize: 11,
+                        }}
+                      >
+                        <div className="truncate" style={{ color: 'var(--text-1)' }}>
+                          {node.typeLabel} • {node.label}
+                        </div>
+                        <span
+                          style={{
+                            color: tone.color,
+                            background: tone.background,
+                            borderRadius: 999,
+                            padding: '2px 7px',
+                            fontSize: 10,
+                            whiteSpace: 'nowrap',
+                          }}
+                        >
+                          {formatAgentStatus(node.status)}
+                        </span>
+                      </div>
+                    )
+                  })}
+                </div>
+
+                <div style={{ fontSize: 10, color: 'var(--text-2)' }}>
+                  Click to open the full relationship graph in the center modal.
+                </div>
+
+                {agentSnapshot.errorCount > 0 && (
+                  <div style={{ fontSize: 10, color: 'var(--red)' }}>
+                    {agentSnapshot.errorCount} node{agentSnapshot.errorCount === 1 ? '' : 's'} in error state.
+                  </div>
+                )}
+              </button>
+            </div>
+          )}
+
+          {activeView === 'usage' && (
+            <div style={{ height: '100%', overflowY: 'auto', padding: '10px 10px 12px', display: 'grid', gap: 8 }}>
+              <UsageCard label="Estimated cost (7D)" value={`$${usageCost.toFixed(4)}`} />
+              <UsageCard label="Input tokens" value={usageInput.toLocaleString()} />
+              <UsageCard label="Output tokens" value={usageOutput.toLocaleString()} />
+
+              <div style={{ border: '1px solid var(--border)', borderRadius: 10, background: 'var(--bg-2)', padding: 8 }}>
+                <div style={{ fontSize: 11, color: 'var(--text-2)', marginBottom: 6 }}>By model</div>
+                {usageByModelRows.length === 0 && (
+                  <div style={{ fontSize: 11, color: 'var(--text-2)' }}>No usage events yet.</div>
+                )}
+                {usageByModelRows.map(([model, row]) => {
+                  const cost = row.cost_usd_total ?? row.estimated_cost_usd ?? 0
+                  return (
+                    <div
+                      key={model}
+                      style={{
+                        fontSize: 11,
+                        color: 'var(--text-1)',
+                        borderTop: '1px solid var(--border)',
+                        paddingTop: 6,
+                        marginTop: 6,
+                      }}
+                    >
+                      <div style={{ color: 'var(--text-0)', marginBottom: 2 }}>{model}</div>
+                      <div>In {row.input_tokens.toLocaleString()} / Out {row.output_tokens.toLocaleString()}</div>
+                      <div>${cost.toFixed(4)}</div>
+                    </div>
+                  )
+                })}
+              </div>
+            </div>
+          )}
         </div>
 
-        <div style={{ fontSize: 10, color: 'var(--text-2)', letterSpacing: '0.05em' }}>
-          <div>POWERED BY CLAUDE API</div>
-          <div style={{ marginTop: 2, color: 'var(--accent)', opacity: 0.6 }}>v1.2.0</div>
-        </div>
-
-        <button
-          onClick={toggleTheme}
+        <div
           style={{
-            border: '1px solid var(--border)',
-            background: 'var(--bg-2)',
-            color: 'var(--text-1)',
-            borderRadius: 'var(--radius)',
-            cursor: 'pointer',
-            padding: '6px 8px',
-            fontSize: 10,
-            fontFamily: 'var(--font-mono)',
+            borderTop: '1px solid var(--border)',
+            padding: '9px 12px',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+          }}
+        >
+          <div style={{ fontSize: 10, color: 'var(--text-2)', letterSpacing: '0.06em' }}>
+            POWERED BY KŌDO
+          </div>
+          <button
+            type="button"
+            onClick={toggleTheme}
+            title={theme === 'dark' ? 'Switch to light theme' : 'Switch to dark theme'}
+            aria-label="Toggle theme"
+            style={{
+              width: 28,
+              height: 28,
+              borderRadius: 7,
+              border: '1px solid var(--border)',
+              background: 'var(--bg-2)',
+              color: 'var(--text-1)',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              cursor: 'pointer',
+            }}
+          >
+            {theme === 'dark' ? <Sun size={14} /> : <Moon size={14} />}
+          </button>
+        </div>
+      </div>
+
+      {agentGraphModalOpen && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-label="Agent graph modal"
+          onClick={() => setAgentGraphModalOpen(false)}
+          style={{
+            position: 'fixed',
+            inset: 0,
+            zIndex: 60,
+            background: 'color-mix(in srgb, var(--bg-0) 72%, black)',
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'center',
-            gap: 6,
-            letterSpacing: '0.07em',
+            padding: 20,
           }}
         >
-          {theme === 'dark' ? <Sun size={12} /> : <Moon size={12} />}
-          {theme === 'dark' ? 'LIGHT THEME' : 'DARK THEME'}
-        </button>
-      </div>
+          <div
+            onClick={(event) => event.stopPropagation()}
+            style={{
+              width: 'min(96vw, 1080px)',
+              maxHeight: '90vh',
+              borderRadius: 12,
+              border: '1px solid var(--border-bright)',
+              background: 'var(--bg-1)',
+              boxShadow: '0 22px 56px rgba(0, 0, 0, 0.42)',
+              display: 'flex',
+              flexDirection: 'column',
+              overflow: 'hidden',
+            }}
+          >
+            <div
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                padding: '12px 14px',
+                borderBottom: '1px solid var(--border)',
+              }}
+            >
+              <div style={{ display: 'grid', gap: 2 }}>
+                <div style={{ fontSize: 14, color: 'var(--text-0)', fontFamily: 'var(--font-display)', fontWeight: 700 }}>
+                  Agent Execution Graph
+                </div>
+                <div style={{ fontSize: 11, color: 'var(--text-2)' }}>
+                  Read flow top-to-bottom by status color and node type.
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setAgentGraphModalOpen(false)}
+                aria-label="Close graph modal"
+                style={{
+                  width: 30,
+                  height: 30,
+                  borderRadius: 8,
+                  border: '1px solid var(--border)',
+                  background: 'var(--bg-2)',
+                  color: 'var(--text-1)',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  cursor: 'pointer',
+                }}
+              >
+                <X size={15} />
+              </button>
+            </div>
+
+            <div style={{ padding: 14, overflow: 'auto' }}>
+              <AgentGraph nodes={agentNodes} variant="modal" />
+            </div>
+          </div>
+        </div>
+      )}
     </aside>
   )
 }
 
-function SessionItem({
+function PanelNav({
+  icon,
+  label,
+  active,
+  onClick,
+}: {
+  icon: JSX.Element
+  label: string
+  active: boolean
+  onClick: () => void
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      style={{
+        border: active ? '1px solid var(--border-bright)' : '1px solid transparent',
+        background: active ? 'var(--bg-3)' : 'transparent',
+        color: active ? 'var(--text-0)' : 'var(--text-1)',
+        fontSize: 13,
+        borderRadius: 8,
+        cursor: 'pointer',
+        padding: '7px 8px',
+        display: 'flex',
+        alignItems: 'center',
+        gap: 10,
+        textAlign: 'left',
+      }}
+      onMouseEnter={(event) => {
+        if (!active) event.currentTarget.style.background = 'var(--bg-2)'
+      }}
+      onMouseLeave={(event) => {
+        if (!active) event.currentTarget.style.background = 'transparent'
+      }}
+    >
+      {icon}
+      <span>{label}</span>
+    </button>
+  )
+}
+
+function SessionRow({
   session,
   active,
   onSelect,
   onDelete,
-  onRename,
-  formatDate,
-  searchQuery,
 }: {
   session: Session
   active: boolean
   onSelect: () => void
   onDelete: () => void
-  onRename: (title: string) => void
-  formatDate: (d: string) => string
-  searchQuery: string
 }) {
-  const [editing, setEditing] = useState(false)
-  const [draftTitle, setDraftTitle] = useState(session.title || 'Untitled')
-
-  useEffect(() => {
-    setDraftTitle(session.title || 'Untitled')
-  }, [session.title])
-
-  const submitRename = () => {
-    const next = draftTitle.trim()
-    if (!next || next === session.title) {
-      setEditing(false)
-      return
-    }
-    onRename(next)
-    setEditing(false)
-  }
-
   return (
     <div
       style={{
-        padding: '8px 10px',
-        borderRadius: 'var(--radius)',
-        cursor: 'pointer',
-        marginBottom: 2,
-        background: active ? 'var(--bg-3)' : 'transparent',
         border: active ? '1px solid var(--border-bright)' : '1px solid transparent',
+        background: active ? 'var(--bg-3)' : 'transparent',
+        borderRadius: 10,
+        padding: '8px 9px',
+        marginBottom: 2,
+        cursor: 'pointer',
         display: 'flex',
-        alignItems: 'flex-start',
+        alignItems: 'center',
         gap: 8,
-        transition: 'all 0.1s',
-        animation: 'slideIn 0.15s ease',
       }}
       onClick={onSelect}
-      onMouseEnter={e => {
-        if (!active) (e.currentTarget as HTMLElement).style.background = 'var(--bg-2)'
+      onMouseEnter={(event) => {
+        if (!active) event.currentTarget.style.background = 'var(--bg-2)'
       }}
-      onMouseLeave={e => {
-        if (!active) (e.currentTarget as HTMLElement).style.background = 'transparent'
+      onMouseLeave={(event) => {
+        if (!active) event.currentTarget.style.background = 'transparent'
       }}
     >
-      <MessageSquare size={13} color={active ? 'var(--accent)' : 'var(--text-2)'} style={{ marginTop: 2, flexShrink: 0 }} />
-      <div style={{ flex: 1, minWidth: 0 }}>
-        {!editing ? (
-          <div
-            className="truncate"
-            style={{ fontSize: 12, color: active ? 'var(--text-0)' : 'var(--text-1)' }}
-            onDoubleClick={(event) => {
-              event.stopPropagation()
-              setEditing(true)
-            }}
-            title="Double-click to rename"
-          >
-            {searchQuery.trim()
-              ? renderHighlightedText(session.title || 'Untitled', searchQuery)
-              : (session.title || 'Untitled')}
-          </div>
-        ) : (
-          <input
-            value={draftTitle}
-            onChange={(event) => setDraftTitle(event.target.value)}
-            onClick={(event) => event.stopPropagation()}
-            onKeyDown={(event) => {
-              if (event.key === 'Enter') {
-                event.preventDefault()
-                submitRename()
-              }
-              if (event.key === 'Escape') {
-                event.preventDefault()
-                setEditing(false)
-                setDraftTitle(session.title || 'Untitled')
-              }
-            }}
-            onBlur={submitRename}
-            autoFocus
-            style={{
-              width: '100%',
-              background: 'var(--bg-0)',
-              border: '1px solid var(--accent)',
-              borderRadius: 3,
-              color: 'var(--text-0)',
-              fontSize: 11,
-              fontFamily: 'var(--font-mono)',
-              padding: '3px 5px',
-              outline: 'none',
-            }}
-          />
-        )}
-        <div style={{ fontSize: 10, color: 'var(--text-2)', marginTop: 2 }}>
-          {formatDate(session.updated_at)} · {session.message_count} msgs{session.mode ? ` · ${session.mode}` : ''}
+      <MessageSquare size={13} color={active ? 'var(--text-0)' : 'var(--text-2)'} />
+      <div style={{ minWidth: 0, flex: 1 }}>
+        <div className="truncate" style={{ fontSize: 12, color: active ? 'var(--text-0)' : 'var(--text-1)' }}>
+          {session.title || 'Untitled'}
+        </div>
+        <div style={{ fontSize: 10, color: 'var(--text-2)' }}>
+          {formatDate(session.updated_at)}
         </div>
       </div>
       <button
-        onClick={e => { e.stopPropagation(); onDelete() }}
+        type="button"
+        onClick={(event) => {
+          event.stopPropagation()
+          onDelete()
+        }}
+        title="Delete session"
+        aria-label="Delete session"
         style={{
-          background: 'none', border: 'none', cursor: 'pointer',
-          color: 'var(--text-2)', padding: 2, borderRadius: 2,
-          opacity: 0, transition: 'opacity 0.15s',
-          flexShrink: 0,
-        }}
-        onMouseEnter={e => {
-          (e.currentTarget as HTMLElement).style.color = 'var(--red)'
-          ;(e.currentTarget as HTMLElement).style.opacity = '1'
-        }}
-        onMouseLeave={e => {
-          (e.currentTarget as HTMLElement).style.color = 'var(--text-2)'
-          ;(e.currentTarget as HTMLElement).style.opacity = '0'
+          border: 'none',
+          background: 'transparent',
+          color: 'var(--text-2)',
+          width: 20,
+          height: 20,
+          borderRadius: 4,
+          cursor: 'pointer',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
         }}
       >
         <Trash2 size={12} />
       </button>
+    </div>
+  )
+}
+
+function UsageCard({ label, value }: { label: string; value: string }) {
+  return (
+    <div
+      style={{
+        border: '1px solid var(--border)',
+        borderRadius: 10,
+        background: 'var(--bg-2)',
+        padding: '8px 10px',
+      }}
+    >
+      <div style={{ fontSize: 10, color: 'var(--text-2)' }}>{label}</div>
+      <div style={{ fontSize: 13, color: 'var(--text-0)', marginTop: 2 }}>{value}</div>
+    </div>
+  )
+}
+
+function AgentMetric({ label, value }: { label: string; value: number }) {
+  return (
+    <div
+      style={{
+        border: '1px solid var(--border)',
+        borderRadius: 8,
+        background: 'var(--bg-1)',
+        padding: '6px 8px',
+      }}
+    >
+      <div style={{ fontSize: 10, color: 'var(--text-2)' }}>{label}</div>
+      <div style={{ fontSize: 13, color: 'var(--text-0)', marginTop: 2 }}>{value.toLocaleString()}</div>
     </div>
   )
 }

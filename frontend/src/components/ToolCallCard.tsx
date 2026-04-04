@@ -143,6 +143,9 @@ export function ToolCallCard({ tc, isLast, searchQuery }: { tc: ToolCall; isLast
   const hasResult = tc.output !== undefined
   const isRunning = !hasResult && isLast
   const showLiveOutput = isRunning && Boolean(tc.streamLines && tc.streamLines.length > 0)
+  const generatedImageUrl = tc.tool === 'image_gen' && typeof tc.metadata?.url === 'string'
+    ? String(tc.metadata.url)
+    : ''
 
   useEffect(() => {
     if (!showLiveOutput || !liveOutputRef.current) return
@@ -296,6 +299,21 @@ export function ToolCallCard({ tc, isLast, searchQuery }: { tc: ToolCall; isLast
               <div key={`${line}-${idx}`}>{line}</div>
             ))}
           </div>
+        </div>
+      )}
+
+      {generatedImageUrl && (
+        <div style={{ padding: '0 10px 10px' }}>
+          <img
+            src={generatedImageUrl}
+            alt="Generated image"
+            style={{
+              maxWidth: '100%',
+              borderRadius: 'var(--radius)',
+              border: '1px solid var(--border)',
+              marginTop: 8,
+            }}
+          />
         </div>
       )}
     </div>

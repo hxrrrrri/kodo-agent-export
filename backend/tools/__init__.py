@@ -24,6 +24,7 @@ from .agent_stop import AgentStopTool
 from .skill_list import SkillListTool
 from .skill_get import SkillGetTool
 from .memory_write import MemoryWriteTool
+from .image_gen import ImageGenTool
 from .base import BaseTool, ToolResult
 
 ALL_TOOLS: list[BaseTool] = [
@@ -53,6 +54,7 @@ ALL_TOOLS: list[BaseTool] = [
     SkillListTool(),
     SkillGetTool(),
     MemoryWriteTool(),
+    ImageGenTool(),
 ]
 
 TOOL_MAP: dict[str, BaseTool] = {t.name: t for t in ALL_TOOLS}

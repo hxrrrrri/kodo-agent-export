@@ -9,7 +9,7 @@ import re
 import time
 import uuid
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Awaitable, Callable
 
 from .base import BaseTool, ToolResult
 from .path_guard import enforce_allowed_path
@@ -49,10 +49,12 @@ rl.on('line', async (line) => {
     return;
   }
 
-  const logs = [];
+    const writeLine = (text) => {
+        process.stdout.write(String(text) + '\n');
+    };
   context.console = {
-    log: (...args) => logs.push(args.map((v) => (typeof v === 'string' ? v : JSON.stringify(v))).join(' ')),
-    error: (...args) => logs.push('[stderr] ' + args.map((v) => (typeof v === 'string' ? v : JSON.stringify(v))).join(' ')),
+        log: (...args) => writeLine(args.map((v) => (typeof v === 'string' ? v : JSON.stringify(v))).join(' ')),
+        error: (...args) => writeLine('[stderr] ' + args.map((v) => (typeof v === 'string' ? v : JSON.stringify(v))).join(' ')),
   };
 
   const id = String(req.id ?? '');
@@ -65,12 +67,12 @@ rl.on('line', async (line) => {
       value = await value;
     }
     process.stdout.write(
-    `__KODO_RESULT__${JSON.stringify({ id, ok: true, stdout: logs.join('\n'), result: value === undefined ? null : value })}\n`,
+        `__KODO_RESULT__${JSON.stringify({ id, ok: true, result: value === undefined ? null : value })}\n`,
     );
   } catch (err) {
     const error = err && err.stack ? String(err.stack) : String(err);
     process.stdout.write(
-    `__KODO_RESULT__${JSON.stringify({ id, ok: false, stdout: logs.join('\n'), error })}\n`,
+        `__KODO_RESULT__${JSON.stringify({ id, ok: false, error })}\n`,
     );
   }
 });
@@ -108,6 +110,38 @@ def _session_key(session_id: str | None) -> str:
     return key or "default"
 
 
+class _ThreadSafeLineWriter(io.StringIO):
+    def __init__(
+        self,
+        *,
+        loop: asyncio.AbstractEventLoop,
+        queue: asyncio.Queue[str | None],
+        prefix: str = "",
+    ) -> None:
+        super().__init__()
+        self._loop = loop
+        self._queue = queue
+        self._prefix = prefix
+        self._line_buffer = ""
+
+    def write(self, value: str) -> int:
+        written = super().write(value)
+        self._line_buffer += value
+        while "\n" in self._line_buffer:
+            line, self._line_buffer = self._line_buffer.split("\n", 1)
+            self._loop.call_soon_threadsafe(self._queue.put_nowait, f"{self._prefix}{line}".rstrip("\r"))
+        return written
+
+    def flush_partial_line(self) -> None:
+        if not self._line_buffer:
+            return
+        self._loop.call_soon_threadsafe(
+            self._queue.put_nowait,
+            f"{self._prefix}{self._line_buffer}".rstrip("\r"),
+        )
+        self._line_buffer = ""
+
+
 def _run_python_cell(scope: dict[str, Any], code: str) -> tuple[str, str]:
     stdout_buffer = io.StringIO()
     stderr_buffer = io.StringIO()
@@ -120,6 +154,33 @@ def _run_python_cell(scope: dict[str, Any], code: str) -> tuple[str, str]:
                 print(repr(value))
         except SyntaxError:
             exec(compile(code, "<repl>", "exec"), scope)
+
+    return stdout_buffer.getvalue(), stderr_buffer.getvalue()
+
+
+def _run_python_cell_stream(
+    scope: dict[str, Any],
+    code: str,
+    *,
+    loop: asyncio.AbstractEventLoop,
+    queue: asyncio.Queue[str | None],
+) -> tuple[str, str]:
+    stdout_buffer = _ThreadSafeLineWriter(loop=loop, queue=queue)
+    stderr_buffer = _ThreadSafeLineWriter(loop=loop, queue=queue, prefix="[stderr] ")
+
+    try:
+        with contextlib.redirect_stdout(stdout_buffer), contextlib.redirect_stderr(stderr_buffer):
+            try:
+                compiled = compile(code, "<repl>", "eval")
+                value = eval(compiled, scope)
+                if value is not None:
+                    print(repr(value))
+            except SyntaxError:
+                exec(compile(code, "<repl>", "exec"), scope)
+    finally:
+        stdout_buffer.flush_partial_line()
+        stderr_buffer.flush_partial_line()
+        loop.call_soon_threadsafe(queue.put_nowait, None)
 
     return stdout_buffer.getvalue(), stderr_buffer.getvalue()
 
@@ -185,7 +246,11 @@ async def _ensure_node_session(key: str, cwd: str, reset: bool) -> NodeSession:
     return session
 
 
-async def _read_node_response(session: NodeSession, timeout: int) -> dict[str, Any]:
+async def _read_node_response(
+    session: NodeSession,
+    timeout: int,
+    on_output: Callable[[str], Awaitable[None]] | None = None,
+) -> dict[str, Any]:
     if session.process.stdout is None:
         raise RuntimeError("Node REPL stdout is unavailable")
 
@@ -205,6 +270,11 @@ async def _read_node_response(session: NodeSession, timeout: int) -> dict[str, A
             return payload
 
         passthrough.append(line)
+        if on_output is not None:
+            try:
+                await on_output(line)
+            except Exception:
+                pass
 
 
 class ReplTool(BaseTool):
@@ -267,6 +337,7 @@ class ReplTool(BaseTool):
         reset: bool = False,
         timeout: int = 20,
         cwd: str | None = None,
+        on_output: Callable[[str], Awaitable[None]] | None = None,
         **kwargs,
     ) -> ToolResult:
         _ensure_cleanup_loop()
@@ -280,13 +351,21 @@ class ReplTool(BaseTool):
         key = _session_key(session_id)
 
         if lang == "python":
-            return await self._execute_python(key, snippet, reset=reset, timeout=timeout)
+            return await self._execute_python(key, snippet, reset=reset, timeout=timeout, on_output=on_output)
         if lang == "node":
-            return await self._execute_node(key, snippet, reset=reset, timeout=timeout, cwd=cwd)
+            return await self._execute_node(key, snippet, reset=reset, timeout=timeout, cwd=cwd, on_output=on_output)
 
         return ToolResult(success=False, output="", error="language must be 'python' or 'node'")
 
-    async def _execute_python(self, key: str, snippet: str, *, reset: bool, timeout: int) -> ToolResult:
+    async def _execute_python(
+        self,
+        key: str,
+        snippet: str,
+        *,
+        reset: bool,
+        timeout: int,
+        on_output: Callable[[str], Awaitable[None]] | None,
+    ) -> ToolResult:
         if reset or key not in _PYTHON_SESSIONS:
             _PYTHON_SESSIONS[key] = PythonSession(
                 scope={
@@ -299,10 +378,40 @@ class ReplTool(BaseTool):
         session.last_used = time.monotonic()
 
         try:
-            stdout, stderr = await asyncio.wait_for(
-                asyncio.to_thread(_run_python_cell, session.scope, snippet),
-                timeout=timeout,
-            )
+            if on_output is None:
+                stdout, stderr = await asyncio.wait_for(
+                    asyncio.to_thread(_run_python_cell, session.scope, snippet),
+                    timeout=timeout,
+                )
+            else:
+                line_queue: asyncio.Queue[str | None] = asyncio.Queue()
+                loop = asyncio.get_running_loop()
+
+                python_task = asyncio.create_task(
+                    asyncio.to_thread(
+                        _run_python_cell_stream,
+                        session.scope,
+                        snippet,
+                        loop=loop,
+                        queue=line_queue,
+                    )
+                )
+                deadline = loop.time() + timeout
+                while True:
+                    remaining = deadline - loop.time()
+                    if remaining <= 0:
+                        python_task.cancel()
+                        raise asyncio.TimeoutError()
+
+                    streamed_line = await asyncio.wait_for(line_queue.get(), timeout=remaining)
+                    if streamed_line is None:
+                        break
+                    try:
+                        await on_output(streamed_line)
+                    except Exception:
+                        pass
+
+                stdout, stderr = await python_task
         except asyncio.TimeoutError:
             return ToolResult(success=False, output="", error=f"REPL execution timed out after {timeout}s")
         except Exception as exc:
@@ -333,6 +442,7 @@ class ReplTool(BaseTool):
         reset: bool,
         timeout: int,
         cwd: str | None,
+        on_output: Callable[[str], Awaitable[None]] | None,
     ) -> ToolResult:
         try:
             effective_cwd = enforce_allowed_path(cwd or ".")
@@ -362,7 +472,7 @@ class ReplTool(BaseTool):
                 session.last_used = time.monotonic()
                 session.process.stdin.write((json.dumps(payload, ensure_ascii=True) + "\n").encode("utf-8"))
                 await session.process.stdin.drain()
-                response = await _read_node_response(session, timeout)
+                response = await _read_node_response(session, timeout, on_output=on_output)
                 session.last_used = time.monotonic()
         except asyncio.TimeoutError:
             await _close_node_session(key)
