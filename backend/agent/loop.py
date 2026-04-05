@@ -376,6 +376,28 @@ def _infer_local_forced_tool_call(
     folder_question_terms = ("what folders", "which folders", "what directories", "which directories")
     file_question_terms = ("what files", "which files")
     recursive_terms = ("recursive", "recursively", "tree")
+    bug_terms = (
+        "find bug",
+        "findbugs",
+        "find bugs",
+        "bug hunt",
+        "bughunter",
+        "scan for bugs",
+        "review for bugs",
+        "audit for bugs",
+        "find issues",
+        "security issues",
+        "vulnerabilities",
+    )
+    project_scope_terms = (
+        "directory",
+        "project",
+        "repo",
+        "repository",
+        "codebase",
+        "folder",
+        "current",
+    )
 
     wants_folders = (
         any(term in prompt for term in folder_terms) and any(term in prompt for term in listing_terms)
@@ -389,15 +411,29 @@ def _infer_local_forced_tool_call(
     ) or prompt in {"ls", "dir", "list"}
     wants_pwd = any(token in prompt for token in ("current directory", "present working directory", "pwd", "where am i"))
     wants_recursive = any(term in prompt for term in recursive_terms)
+    wants_bug_scan = any(term in prompt for term in bug_terms) and any(term in prompt for term in project_scope_terms)
 
-    if not (wants_pwd or wants_folders or wants_files or wants_contents):
+    if not (wants_pwd or wants_folders or wants_files or wants_contents or wants_bug_scan):
         return None
 
     tool_name = "powershell" if os.name == "nt" else "bash"
     command = ""
     prefix = ""
 
-    if wants_folders:
+    if wants_bug_scan:
+        if tool_name == "powershell":
+            command = (
+                "$patterns = @('TODO','FIXME','BUG','HACK','XXX','except Exception','raise Exception','console.log','print('); "
+                "Get-ChildItem -Recurse -File "
+                "| Where-Object { $_.Extension -in '.py','.ts','.tsx','.js','.jsx','.java','.go','.rs','.cpp','.c','.cs','.php','.rb' } "
+                "| ForEach-Object { Select-String -Path $_.FullName -Pattern $patterns -SimpleMatch } "
+                "| Select-Object -First 250 "
+                "| ForEach-Object { \"$($_.Path):$($_.LineNumber): $($_.Line.Trim())\" }"
+            )
+        else:
+            command = "grep -RInE \"TODO|FIXME|BUG|HACK|XXX|except Exception|raise Exception|console\\.log|print\\(\" . | head -n 250"
+        prefix = "Potential bug markers (heuristic scan):"
+    elif wants_folders:
         if tool_name == "powershell":
             command = "Get-ChildItem -Directory -Name"
             if wants_recursive:

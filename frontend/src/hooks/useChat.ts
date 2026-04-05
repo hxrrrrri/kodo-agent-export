@@ -308,9 +308,13 @@ export function useChat() {
           timestamp: Date.now(),
         }))
       store.setMessages(messages)
-      const metadata = data.metadata as { mode?: string } | undefined
+      const metadata = data.metadata as { mode?: string; project_dir?: string } | undefined
       const mode = normalizeClientMode(metadata?.mode || 'execute', useChatStore.getState().availableModes)
       store.setSessionMode(mode)
+      const sessionProjectDir = String(metadata?.project_dir || '').trim()
+      if (sessionProjectDir) {
+        store.setProjectDir(sessionProjectDir)
+      }
 
       try {
         const checkpointsRes = await fetch(`${API}/sessions/${encodeURIComponent(sessionId)}/checkpoints`, {

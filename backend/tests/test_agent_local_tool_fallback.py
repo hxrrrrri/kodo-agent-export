@@ -46,3 +46,24 @@ def test_local_forced_tool_detects_pwd_request():
         assert "Get-Location" in command
     else:
         assert command == "pwd"
+
+
+def test_local_forced_tool_detects_bug_scan_intent():
+    forced = loop_mod._infer_local_forced_tool_call(
+        user_message="findbugs inside the directory its currently in",
+        provider="ollama",
+        project_dir="C:/workspace",
+    )
+
+    assert forced is not None
+    assert forced["tool"] in {"powershell", "bash"}
+    assert forced["input"]["timeout"] == 30
+    assert forced["input"]["cwd"] == "C:/workspace"
+    assert "Potential bug markers" in forced["prefix"]
+
+    command = str(forced["input"]["command"])
+    if os.name == "nt":
+        assert "Select-String" in command
+        assert "Get-ChildItem -Recurse -File" in command
+    else:
+        assert "grep -RInE" in command

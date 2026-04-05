@@ -49,6 +49,33 @@ def _max_streaming_lines() -> int:
     return max(1, min(value, 5000))
 
 
+def _translate_windows_unix_command(command: str) -> str | None:
+    """Translate common unix shell commands to PowerShell on Windows hosts."""
+    raw = (command or "").strip()
+    if not raw:
+        return None
+
+    normalized = " ".join(raw.split())
+    lowered = normalized.lower()
+
+    if lowered == "pwd":
+        return "(Get-Location).Path"
+
+    if lowered == "ls" or lowered.startswith("ls "):
+        recursive = "--recursive" in lowered or bool(re.search(r"(^|\s)-[a-z]*r[a-z]*(\s|$)", lowered))
+        force = bool(re.search(r"(^|\s)-[a-z]*a[a-z]*(\s|$)", lowered))
+
+        parts = ["Get-ChildItem"]
+        if recursive:
+            parts.append("-Recurse")
+        if force:
+            parts.append("-Force")
+        parts.append("-Name")
+        return " ".join(parts)
+
+    return None
+
+
 class BashTool(BaseTool):
     name = "bash"
     description = (
@@ -153,6 +180,19 @@ class BashTool(BaseTool):
         if not os.path.isdir(effective_cwd):
             return ToolResult(success=False, output="", error=f"Working directory not found: {effective_cwd}")
 
+        if os.name == "nt":
+            translated = _translate_windows_unix_command(command)
+            if translated:
+                from .powershell import PowerShellTool
+
+                ps_tool = PowerShellTool()
+                return await ps_tool.execute(
+                    command=translated,
+                    timeout=timeout,
+                    cwd=effective_cwd,
+                    on_output=on_output,
+                )
+
         proc: asyncio.subprocess.Process | None = None
         try:
             try:
@@ -204,10 +244,21 @@ class BashTool(BaseTool):
             if len(combined) > max_chars:
                 combined = combined[:max_chars] + "\n... [output truncated]"
 
+            error_text: str | None
+            if return_code == 0:
+                error_text = None
+            else:
+                detail = combined.strip()
+                if detail:
+                    compact = " ".join(detail.split())
+                    error_text = f"Exit code: {return_code}. {compact[:500]}"
+                else:
+                    error_text = f"Exit code: {return_code}"
+
             return ToolResult(
                 success=return_code == 0,
                 output=combined or "(no output)",
-                error=None if return_code == 0 else f"Exit code: {return_code}",
+                error=error_text,
                 metadata={"exit_code": return_code, "cwd": effective_cwd},
             )
         except (asyncio.TimeoutError, subprocess.TimeoutExpired):

@@ -67,6 +67,56 @@ def _normalize_optional_text(value: Any) -> str:
     return text
 
 
+def _looks_like_project_root(path: str) -> bool:
+    markers = (
+        ".git",
+        "backend",
+        "frontend",
+        "README.md",
+        "pyproject.toml",
+        "package.json",
+    )
+    return any(Path(path, marker).exists() for marker in markers)
+
+
+def _validate_project_dir_candidate(path: str) -> str | None:
+    candidate = _normalize_optional_text(path)
+    if not candidate:
+        return None
+
+    try:
+        safe = enforce_allowed_path(candidate)
+    except ValueError:
+        return None
+
+    if not os.path.isdir(safe):
+        return None
+    return safe
+
+
+def _infer_default_project_dir() -> str | None:
+    env_candidates = [
+        os.getenv("KODO_DEFAULT_PROJECT_DIR", ""),
+        os.getenv("PROJECT_DIR", ""),
+    ]
+
+    cwd = os.getcwd()
+    parent = os.path.abspath(os.path.join(cwd, os.pardir))
+    candidates = [*env_candidates, cwd, parent]
+
+    first_valid: str | None = None
+    for raw in candidates:
+        safe = _validate_project_dir_candidate(raw)
+        if not safe:
+            continue
+        if first_valid is None:
+            first_valid = safe
+        if _looks_like_project_root(safe):
+            return safe
+
+    return first_valid
+
+
 def _extract_text_content(content: Any) -> str:
     if isinstance(content, str):
         return content
@@ -511,7 +561,7 @@ async def send_message(req: ChatRequest, request: Request):
     await enforce_rate_limit(request, SEND_RATE_LIMITER, "send")
     request_id = getattr(request.state, "request_id", None)
 
-    project_dir = req.project_dir
+    project_dir = _normalize_optional_text(req.project_dir)
     if project_dir:
         try:
             project_dir = enforce_allowed_path(project_dir)
@@ -540,6 +590,20 @@ async def send_message(req: ChatRequest, request: Request):
     if not stored_mode:
         stored_mode = DEFAULT_MODE
     stored_model_override = _normalize_optional_text(metadata.get("model_override")) if isinstance(metadata, dict) else ""
+    stored_project_dir = _normalize_optional_text(metadata.get("project_dir")) if isinstance(metadata, dict) else ""
+
+    if not project_dir and stored_project_dir:
+        project_dir = _validate_project_dir_candidate(stored_project_dir)
+
+    if not project_dir:
+        project_dir = _infer_default_project_dir()
+
+    if project_dir:
+        await memory_manager.update_session_metadata(
+            session_id,
+            {"project_dir": project_dir},
+            create_if_missing=True,
+        )
 
     try:
         effective_mode = _resolve_mode(req.mode, stored_mode)
