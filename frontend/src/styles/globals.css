@@ -480,3 +480,67 @@ aside {
 
 .fade-in { animation: fadeIn 0.2s ease forwards; }
 .slide-in { animation: slideIn 0.2s ease forwards; }
+
+.user-message-shell {
+  position: relative;
+}
+
+.user-message-actions {
+  position: absolute;
+  right: 10px;
+  top: -13px;
+  display: inline-flex;
+  gap: 6px;
+  opacity: 0;
+  transform: translateY(5px) scale(0.98);
+  pointer-events: none;
+  transition: opacity 180ms ease, transform 180ms ease;
+  z-index: 2;
+}
+
+.user-message-shell:hover .user-message-actions,
+.user-message-shell:focus-within .user-message-actions {
+  opacity: 1;
+  transform: translateY(0) scale(1);
+  pointer-events: auto;
+}
+
+.user-message-action-btn {
+  width: 26px;
+  height: 26px;
+  border-radius: 999px;
+  border: 1px solid var(--border-bright);
+  background: var(--bg-2);
+  color: var(--text-2);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: transform 160ms ease, color 160ms ease, border-color 160ms ease, background-color 160ms ease;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.2);
+}
+
+.user-message-action-btn:hover {
+  border-color: var(--accent);
+  color: var(--text-0);
+  transform: translateY(-1px);
+}
+
+.user-message-action-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+  transform: none;
+}
+
+.user-message-action-btn.is-success {
+  border-color: var(--green);
+  color: var(--green);
+}
+
+@media (hover: none) {
+  .user-message-actions {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+    pointer-events: auto;
+  }
+}

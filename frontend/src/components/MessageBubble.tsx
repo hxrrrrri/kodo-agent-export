@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { Volume2, Square } from 'lucide-react'
+import { Copy, Pencil, RotateCcw, Volume2, Square } from 'lucide-react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter'
@@ -142,8 +142,23 @@ function AdvisorReviewCard({ review }: { review: AdvisorReview }) {
   )
 }
 
-export function MessageBubble({ message, searchQuery }: { message: Message; searchQuery?: string }) {
+type MessageBubbleProps = {
+  message: Message
+  searchQuery?: string
+  onEditUserPrompt?: (content: string) => void
+  onRetryUserPrompt?: (content: string) => void
+  disableUserRetry?: boolean
+}
+
+export function MessageBubble({
+  message,
+  searchQuery,
+  onEditUserPrompt,
+  onRetryUserPrompt,
+  disableUserRetry = false,
+}: MessageBubbleProps) {
   const [copiedIndex, setCopiedIndex] = useState<number | null>(null)
+  const [userPromptCopied, setUserPromptCopied] = useState(false)
   const [isSpeaking, setIsSpeaking] = useState(false)
   const audioRef = useRef<HTMLAudioElement | null>(null)
   const audioUrlRef = useRef<string>('')
@@ -262,16 +277,71 @@ export function MessageBubble({ message, searchQuery }: { message: Message; sear
   }
 
   if (isUser) {
+    const handleCopyUserPrompt = async () => {
+      const text = String(message.content || '')
+      if (!text.trim()) return
+      try {
+        await navigator.clipboard.writeText(text)
+        setUserPromptCopied(true)
+        window.setTimeout(() => {
+          setUserPromptCopied(false)
+        }, 1400)
+      } catch {
+        setUserPromptCopied(false)
+      }
+    }
+
+    const handleEditUserPrompt = () => {
+      if (!onEditUserPrompt) return
+      onEditUserPrompt(String(message.content || ''))
+    }
+
+    const handleRetryUserPrompt = () => {
+      if (!onRetryUserPrompt || disableUserRetry) return
+      onRetryUserPrompt(String(message.content || ''))
+    }
+
     return (
       <div
-        className="fade-in message-enter"
+        className="fade-in message-enter user-message-shell"
         style={{
           display: 'flex',
           justifyContent: 'flex-end',
           marginBottom: 20,
         }}
       >
-        <div style={{
+        <div className="user-message-actions" role="group" aria-label="User message actions">
+          <button
+            type="button"
+            className={`user-message-action-btn${userPromptCopied ? ' is-success' : ''}`}
+            onClick={() => { void handleCopyUserPrompt() }}
+            aria-label={userPromptCopied ? 'Prompt copied' : 'Copy prompt'}
+            title={userPromptCopied ? 'Copied' : 'Copy prompt'}
+          >
+            <Copy size={13} />
+          </button>
+          <button
+            type="button"
+            className="user-message-action-btn"
+            onClick={handleEditUserPrompt}
+            disabled={!onEditUserPrompt}
+            aria-label="Edit prompt"
+            title="Edit prompt"
+          >
+            <Pencil size={13} />
+          </button>
+          <button
+            type="button"
+            className="user-message-action-btn"
+            onClick={handleRetryUserPrompt}
+            disabled={!onRetryUserPrompt || disableUserRetry}
+            aria-label="Retry prompt"
+            title={disableUserRetry ? 'Wait for current response to finish' : 'Retry prompt'}
+          >
+            <RotateCcw size={13} />
+          </button>
+        </div>
+        <div className="user-message-body" style={{
           maxWidth: '75%',
           background: 'var(--bg-3)',
           border: '1px solid var(--border-bright)',

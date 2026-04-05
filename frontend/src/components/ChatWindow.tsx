@@ -307,6 +307,8 @@ export function ChatWindow({ editorOpen, onToggleEditor }: ChatWindowProps) {
     runDream,
   } = useChat()
   const [input, setInput] = useState('')
+  const [isEditingPrompt, setIsEditingPrompt] = useState(false)
+  const [preEditInput, setPreEditInput] = useState('')
   const [showProjectInput, setShowProjectInput] = useState(false)
   const [projectDirPicking, setProjectDirPicking] = useState(false)
   const [projectDirPickerError, setProjectDirPickerError] = useState('')
@@ -328,6 +330,7 @@ export function ChatWindow({ editorOpen, onToggleEditor }: ChatWindowProps) {
   const [terminalCwd, setTerminalCwd] = useState('')
   const terminalCwdRef = useRef('')
   const messageListRef = useRef<HTMLDivElement>(null)
+  const composerRef = useRef<HTMLDivElement>(null)
   const bottomRef = useRef<HTMLDivElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const paletteRef = useRef<HTMLDivElement>(null)
@@ -478,6 +481,8 @@ export function ChatWindow({ editorOpen, onToggleEditor }: ChatWindowProps) {
 
   useEffect(() => {
     setInput('')
+    setIsEditingPrompt(false)
+    setPreEditInput('')
     setPendingImage(null)
     setPendingFiles([])
     setAttachmentError('')
@@ -549,6 +554,28 @@ export function ChatWindow({ editorOpen, onToggleEditor }: ChatWindowProps) {
     window.addEventListener('mousedown', onDocumentMouseDown)
     return () => window.removeEventListener('mousedown', onDocumentMouseDown)
   }, [themeMenuOpen])
+
+  useEffect(() => {
+    if (!isEditingPrompt) return
+
+    const onDocumentMouseDown = (event: MouseEvent) => {
+      if (!composerRef.current) return
+      if (composerRef.current.contains(event.target as Node)) return
+
+      const restore = preEditInput
+      setIsEditingPrompt(false)
+      setPreEditInput('')
+      setInput(restore)
+      requestAnimationFrame(() => {
+        if (!textareaRef.current) return
+        textareaRef.current.style.height = 'auto'
+        textareaRef.current.style.height = Math.min(textareaRef.current.scrollHeight, 200) + 'px'
+      })
+    }
+
+    window.addEventListener('mousedown', onDocumentMouseDown)
+    return () => window.removeEventListener('mousedown', onDocumentMouseDown)
+  }, [isEditingPrompt, preEditInput])
 
   useEffect(() => {
     const previous = previousMessageSearchRef.current
@@ -720,6 +747,71 @@ export function ChatWindow({ editorOpen, onToggleEditor }: ChatWindowProps) {
     return response.json() as Promise<{ extracted?: string[] }>
   }, [])
 
+  const getSendStreamHandlers = useCallback(() => ({
+    onToolStart: (event: Record<string, unknown>) => {
+      const tool = String(event.tool || '').trim()
+      setActiveTool(tool || null)
+    },
+    onToolOutput: (line: string) => {
+      setTerminalLines((prev) => [...prev, line])
+      setShowTerminal(true)
+      setTerminalRunning(true)
+    },
+    onToolResult: (event: Record<string, unknown>) => {
+      setActiveTool(null)
+      const toolName = String(event.tool || '').toLowerCase()
+      if (toolName === 'bash' || toolName === 'powershell' || toolName === 'repl') {
+        setTerminalRunning(false)
+      }
+    },
+    onDone: () => {
+      setActiveTool(null)
+    },
+    onError: () => {
+      setActiveTool(null)
+    },
+  }), [])
+
+  const focusComposerWithText = useCallback((value: string, shouldFocus = true) => {
+    const next = String(value || '')
+    setInput(next)
+    requestAnimationFrame(() => {
+      if (!textareaRef.current) return
+      textareaRef.current.style.height = 'auto'
+      textareaRef.current.style.height = Math.min(textareaRef.current.scrollHeight, 200) + 'px'
+      if (shouldFocus) {
+        textareaRef.current.focus()
+        textareaRef.current.selectionStart = textareaRef.current.value.length
+        textareaRef.current.selectionEnd = textareaRef.current.value.length
+      }
+    })
+  }, [])
+
+  const cancelPromptEdit = useCallback((focusComposer = true) => {
+    if (!isEditingPrompt) return
+    const restore = preEditInput
+    setIsEditingPrompt(false)
+    setPreEditInput('')
+    focusComposerWithText(restore, focusComposer)
+  }, [focusComposerWithText, isEditingPrompt, preEditInput])
+
+  const handleEditUserPrompt = useCallback((content: string) => {
+    const text = String(content || '')
+    if (!text.trim()) return
+    if (!isEditingPrompt) {
+      setPreEditInput(input)
+    }
+    setIsEditingPrompt(true)
+    focusComposerWithText(text)
+  }, [focusComposerWithText, input, isEditingPrompt])
+
+  const handleRetryUserPrompt = useCallback((content: string) => {
+    if (observerMode || isLoading || attachmentUploading) return
+    const text = String(content || '').trim()
+    if (!text) return
+    sendMessage(text, undefined, [], getSendStreamHandlers())
+  }, [attachmentUploading, getSendStreamHandlers, isLoading, observerMode, sendMessage])
+
   const handleSend = useCallback(async () => {
     const msg = input.trim()
     if (msg === '/stop') {
@@ -779,40 +871,19 @@ export function ChatWindow({ editorOpen, onToggleEditor }: ChatWindowProps) {
       }
 
       setInput('')
+      setIsEditingPrompt(false)
+      setPreEditInput('')
       setPendingImage(null)
       setPendingFiles([])
       if (textareaRef.current) textareaRef.current.style.height = 'auto'
 
-      sendMessage(msg, imagePayload, attachmentBlocks, {
-        onToolStart: (event) => {
-          const tool = String(event.tool || '').trim()
-          setActiveTool(tool || null)
-        },
-        onToolOutput: (line) => {
-          setTerminalLines((prev) => [...prev, line])
-          setShowTerminal(true)
-          setTerminalRunning(true)
-        },
-        onToolResult: (event) => {
-          setActiveTool(null)
-          const toolName = String(event.tool || '').toLowerCase()
-          if (toolName === 'bash' || toolName === 'powershell' || toolName === 'repl') {
-            setTerminalRunning(false)
-          }
-        },
-        onDone: () => {
-          setActiveTool(null)
-        },
-        onError: () => {
-          setActiveTool(null)
-        },
-      })
+      sendMessage(msg, imagePayload, attachmentBlocks, getSendStreamHandlers())
     } catch (error) {
       setAttachmentError(String(error))
     } finally {
       setAttachmentUploading(false)
     }
-  }, [attachmentUploading, input, isLoading, observerMode, pendingFiles, pendingImage, projectDir, sendMessage, stopGeneration, uploadZipAttachment])
+  }, [attachmentUploading, getSendStreamHandlers, input, isLoading, observerMode, pendingFiles, pendingImage, projectDir, sendMessage, stopGeneration, uploadZipAttachment])
 
   const runTerminalCommand = useCallback(async (command: string): Promise<{ cwd?: string }> => {
     const trimmed = command.trim()
@@ -2402,7 +2473,14 @@ export function ChatWindow({ editorOpen, onToggleEditor }: ChatWindowProps) {
         )}
 
         {filteredMessages.map((msg) => (
-          <MessageBubble key={msg.id} message={msg} searchQuery={messageSearchQuery} />
+          <MessageBubble
+            key={msg.id}
+            message={msg}
+            searchQuery={messageSearchQuery}
+            onEditUserPrompt={handleEditUserPrompt}
+            onRetryUserPrompt={handleRetryUserPrompt}
+            disableUserRetry={observerMode || isLoading || attachmentUploading}
+          />
         ))}
 
         {isMessageFilteringActive && filteredMessages.length === 0 && (
@@ -2478,7 +2556,7 @@ export function ChatWindow({ editorOpen, onToggleEditor }: ChatWindowProps) {
         background: 'var(--bg-1)',
         flexShrink: 0,
       }}>
-        <div style={{ position: 'relative' }}>
+        <div ref={composerRef} style={{ position: 'relative' }}>
           {showCommandSuggestions && (
             <div style={{
               position: 'absolute',
@@ -2618,6 +2696,59 @@ export function ChatWindow({ editorOpen, onToggleEditor }: ChatWindowProps) {
             }}>
               <CircleAlert size={12} />
               {attachmentError}
+            </div>
+          )}
+
+          {isEditingPrompt && (
+            <div style={{
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              gap: 8,
+              marginBottom: 8,
+              border: '1px solid var(--accent)',
+              background: 'var(--accent-dim)',
+              borderRadius: 'var(--radius)',
+              padding: '6px 8px 6px 10px',
+              animation: 'fadeIn 0.15s ease',
+            }}>
+              <span style={{
+                fontSize: 10,
+                letterSpacing: '0.07em',
+                color: 'var(--text-0)',
+                fontFamily: 'var(--font-mono)',
+              }}>
+                EDITING PREVIOUS PROMPT
+              </span>
+              <button
+                type="button"
+                onClick={() => cancelPromptEdit()}
+                title="Cancel editing"
+                aria-label="Cancel editing"
+                style={{
+                  width: 22,
+                  height: 22,
+                  borderRadius: 999,
+                  border: '1px solid var(--border-bright)',
+                  background: 'var(--bg-1)',
+                  color: 'var(--text-1)',
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  cursor: 'pointer',
+                  transition: 'all 0.15s',
+                }}
+                onMouseEnter={(event) => {
+                  event.currentTarget.style.borderColor = 'var(--accent)'
+                  event.currentTarget.style.color = 'var(--text-0)'
+                }}
+                onMouseLeave={(event) => {
+                  event.currentTarget.style.borderColor = 'var(--border-bright)'
+                  event.currentTarget.style.color = 'var(--text-1)'
+                }}
+              >
+                <X size={12} />
+              </button>
             </div>
           )}
 

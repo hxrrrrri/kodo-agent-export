@@ -1,5 +1,5 @@
-import { describe, expect, it } from 'vitest'
-import { render, screen } from '@testing-library/react'
+import { describe, expect, it, vi } from 'vitest'
+import { fireEvent, render, screen } from '@testing-library/react'
 
 import { MessageBubble } from './MessageBubble'
 
@@ -25,5 +25,33 @@ describe('MessageBubble', () => {
   it('does not crash with empty content', () => {
     const emptyMsg = { ...baseMsg, content: '' }
     expect(() => render(<MessageBubble message={emptyMsg} searchQuery="" />)).not.toThrow()
+  })
+
+  it('shows copy/edit/retry actions for user messages and wires handlers', () => {
+    const userMsg = { ...baseMsg, role: 'user' as const, content: 'retry this prompt' }
+    const onEditUserPrompt = (content: string) => content
+    const onRetryUserPrompt = (content: string) => content
+
+    const editSpy = vi.fn(onEditUserPrompt)
+    const retrySpy = vi.fn(onRetryUserPrompt)
+
+    render(
+      <MessageBubble
+        message={userMsg}
+        searchQuery=""
+        onEditUserPrompt={editSpy}
+        onRetryUserPrompt={retrySpy}
+      />, 
+    )
+
+    expect(screen.getByTitle(/copy prompt/i)).toBeTruthy()
+    const editButton = screen.getByTitle(/edit prompt/i)
+    const retryButton = screen.getByTitle(/retry prompt/i)
+
+    fireEvent.click(editButton)
+    fireEvent.click(retryButton)
+
+    expect(editSpy).toHaveBeenCalledWith('retry this prompt')
+    expect(retrySpy).toHaveBeenCalledWith('retry this prompt')
   })
 })
