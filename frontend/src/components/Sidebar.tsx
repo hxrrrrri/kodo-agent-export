@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { MouseEvent as ReactMouseEvent, useEffect, useMemo, useRef, useState } from 'react'
 import {
   Activity,
   Cpu,
@@ -16,16 +16,17 @@ import {
   Sun,
   Trash2,
   X,
+  Zap,
 } from 'lucide-react'
 import { useChat } from '../hooks/useChat'
-import { THEME_TONES } from '../store/chatStore'
-import { Session } from '../store/chatStore'
+import { Session, THEME_TONES, useChatStore } from '../store/chatStore'
 import { buildApiHeaders, parseApiError } from '../lib/api'
 import { ProviderPanel } from './ProviderPanel'
 import { AgentGraph, AgentNode } from './AgentGraph'
 import { KodoLogoMark } from './KodoLogoMark'
 import { ReplayPanel } from './ReplayPanel'
 import { PromptLibraryPanel } from './PromptLibraryPanel'
+import { PromptCompressorPanel } from './PromptCompressorPanel'
 import { SkillBuilderPanel } from './SkillBuilderPanel'
 import { CodeReviewPanel } from './CodeReviewPanel'
 
@@ -34,7 +35,7 @@ type SidebarProps = {
   onToggleCollapse: () => void
 }
 
-type SidebarView = 'sessions' | 'providers' | 'agents' | 'usage' | 'prompts' | 'skills' | 'review' | 'settings'
+type SidebarView = 'sessions' | 'providers' | 'agents' | 'usage' | 'prompts' | 'compressor' | 'skills' | 'review' | 'settings'
 
 type RuntimeTask = {
   task_id: string
@@ -83,6 +84,36 @@ type StoredApiKeys = {
 
 const API_KEY_STORAGE = 'kodo_api_keys'
 const SETTINGS_REQUEST_TIMEOUT_MS = 10000
+const SIDEBAR_PANEL_WIDTH_STORAGE_KEY = 'kodo_sidebar_panel_width'
+const SIDEBAR_PANEL_DEFAULT_WIDTH = 238
+const SIDEBAR_PANEL_MIN_WIDTH = 220
+const SIDEBAR_PANEL_MAX_WIDTH = 560
+
+function readStoredSidebarPanelWidth(): number {
+  if (typeof window === 'undefined') return SIDEBAR_PANEL_DEFAULT_WIDTH
+
+  const saved = Number.parseFloat(window.localStorage.getItem(SIDEBAR_PANEL_WIDTH_STORAGE_KEY) || '')
+  if (Number.isFinite(saved) && saved > 0) return saved
+
+  const fromCss = Number.parseFloat(
+    getComputedStyle(document.documentElement).getPropertyValue('--sidebar-panel-width').trim(),
+  )
+  if (Number.isFinite(fromCss) && fromCss > 0) return fromCss
+
+  return SIDEBAR_PANEL_DEFAULT_WIDTH
+}
+
+function sidebarPanelMaxWidth(): number {
+  if (typeof window === 'undefined') return SIDEBAR_PANEL_MAX_WIDTH
+  return Math.max(
+    SIDEBAR_PANEL_MIN_WIDTH + 40,
+    Math.min(SIDEBAR_PANEL_MAX_WIDTH, Math.floor(window.innerWidth * 0.7)),
+  )
+}
+
+function clampSidebarPanelWidth(width: number): number {
+  return Math.max(SIDEBAR_PANEL_MIN_WIDTH, Math.min(sidebarPanelMaxWidth(), Math.round(width)))
+}
 
 async function fetchWithTimeout(input: RequestInfo | URL, init: RequestInit = {}, timeoutMs = SETTINGS_REQUEST_TIMEOUT_MS): Promise<Response> {
   const controller = new AbortController()
@@ -320,8 +351,13 @@ export function Sidebar({ collapsed, onToggleCollapse }: SidebarProps) {
   const [showApiKeys, setShowApiKeys] = useState(false)
   const [apiKeys, setApiKeys] = useState<StoredApiKeys>({})
   const [apiKeyStatus, setApiKeyStatus] = useState<Record<string, 'idle' | 'ok' | 'error'>>({})
+  const [sidebarPanelWidth, setSidebarPanelWidth] = useState<number>(() =>
+    clampSidebarPanelWidth(readStoredSidebarPanelWidth()),
+  )
+  const [sidebarResizing, setSidebarResizing] = useState(false)
   const searchInputRef = useRef<HTMLInputElement>(null)
   const bootstrappedRef = useRef(false)
+  const sidebarResizeStartRef = useRef<{ x: number; width: number } | null>(null)
 
   useEffect(() => {
     if (bootstrappedRef.current) return
@@ -329,6 +365,59 @@ export function Sidebar({ collapsed, onToggleCollapse }: SidebarProps) {
     void loadModes()
     void loadSessions()
   }, [loadModes, loadSessions])
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    window.localStorage.setItem(SIDEBAR_PANEL_WIDTH_STORAGE_KEY, String(sidebarPanelWidth))
+  }, [sidebarPanelWidth])
+
+  useEffect(() => {
+    const onResize = () => {
+      setSidebarPanelWidth((prev) => clampSidebarPanelWidth(prev))
+    }
+
+    window.addEventListener('resize', onResize)
+    return () => {
+      window.removeEventListener('resize', onResize)
+    }
+  }, [])
+
+  useEffect(() => {
+    if (!sidebarResizing) return
+
+    const onMouseMove = (event: MouseEvent) => {
+      const start = sidebarResizeStartRef.current
+      if (!start) return
+      const delta = event.clientX - start.x
+      setSidebarPanelWidth(clampSidebarPanelWidth(start.width + delta))
+    }
+
+    const onMouseUp = () => {
+      sidebarResizeStartRef.current = null
+      setSidebarResizing(false)
+    }
+
+    const previousCursor = document.body.style.cursor
+    const previousUserSelect = document.body.style.userSelect
+    document.body.style.cursor = 'col-resize'
+    document.body.style.userSelect = 'none'
+
+    window.addEventListener('mousemove', onMouseMove)
+    window.addEventListener('mouseup', onMouseUp)
+
+    return () => {
+      window.removeEventListener('mousemove', onMouseMove)
+      window.removeEventListener('mouseup', onMouseUp)
+      document.body.style.cursor = previousCursor
+      document.body.style.userSelect = previousUserSelect
+    }
+  }, [sidebarResizing])
+
+  useEffect(() => {
+    if (!collapsed) return
+    sidebarResizeStartRef.current = null
+    setSidebarResizing(false)
+  }, [collapsed])
 
   useEffect(() => {
     if (activeView !== 'agents') return
@@ -807,23 +896,35 @@ export function Sidebar({ collapsed, onToggleCollapse }: SidebarProps) {
     setTheme(THEME_TONES[theme] === 'dark' ? 'light' : 'dark')
   }
 
+  const startSidebarResize = (event: ReactMouseEvent<HTMLDivElement>) => {
+    if (collapsed || event.button !== 0) return
+    event.preventDefault()
+    sidebarResizeStartRef.current = {
+      x: event.clientX,
+      width: sidebarPanelWidth,
+    }
+    setSidebarResizing(true)
+  }
+
   const isLightTheme = THEME_TONES[theme] === 'light'
+  const expandedSidebarWidth = `calc(var(--sidebar-rail-width) + ${sidebarPanelWidth}px)`
 
   return (
     <aside
       style={{
         width: collapsed
           ? 'var(--sidebar-rail-width)'
-          : 'calc(var(--sidebar-rail-width) + var(--sidebar-panel-width))',
+          : expandedSidebarWidth,
         minWidth: collapsed
           ? 'var(--sidebar-rail-width)'
-          : 'calc(var(--sidebar-rail-width) + var(--sidebar-panel-width))',
-        transition: 'width 220ms ease, min-width 220ms ease',
+          : expandedSidebarWidth,
+        transition: sidebarResizing ? 'none' : 'width 220ms ease, min-width 220ms ease',
         background: 'var(--bg-1)',
         borderRight: '1px solid var(--border)',
         display: 'flex',
         height: '100%',
         overflow: 'hidden',
+        position: 'relative',
       }}
     >
       <div
@@ -920,6 +1021,15 @@ export function Sidebar({ collapsed, onToggleCollapse }: SidebarProps) {
           active={activeView === 'prompts'}
         />
         <RailButton
+          icon={<Zap size={15} />}
+          label="Prompt compressor"
+          onClick={() => {
+            setActiveView('compressor')
+            if (collapsed) onToggleCollapse()
+          }}
+          active={activeView === 'compressor'}
+        />
+        <RailButton
           icon={<Hammer size={15} />}
           label="Skills"
           onClick={() => {
@@ -940,11 +1050,14 @@ export function Sidebar({ collapsed, onToggleCollapse }: SidebarProps) {
 
       <div
         style={{
-          width: collapsed ? 0 : 'var(--sidebar-panel-width)',
+          width: collapsed ? 0 : `${sidebarPanelWidth}px`,
+          minWidth: collapsed ? 0 : `${sidebarPanelWidth}px`,
           opacity: collapsed ? 0 : 1,
           transform: collapsed ? 'translateX(-10px)' : 'translateX(0)',
           pointerEvents: collapsed ? 'none' : 'auto',
-          transition: 'opacity 150ms ease, transform 220ms ease, width 220ms ease',
+          transition: sidebarResizing
+            ? 'opacity 150ms ease, transform 220ms ease'
+            : 'opacity 150ms ease, transform 220ms ease, width 220ms ease',
           display: 'flex',
           flexDirection: 'column',
           overflow: 'hidden',
@@ -1084,6 +1197,12 @@ export function Sidebar({ collapsed, onToggleCollapse }: SidebarProps) {
             label="Prompts"
             active={activeView === 'prompts'}
             onClick={() => setActiveView('prompts')}
+          />
+          <PanelNav
+            icon={<Zap size={15} />}
+            label="Compressor"
+            active={activeView === 'compressor'}
+            onClick={() => setActiveView('compressor')}
           />
           <PanelNav
             icon={<Hammer size={15} />}
@@ -1593,6 +1712,28 @@ export function Sidebar({ collapsed, onToggleCollapse }: SidebarProps) {
             <PromptLibraryPanel />
           )}
 
+          {activeView === 'compressor' && (
+            <div style={{ height: '100%', minHeight: 0, padding: '0 12px 12px', overflowY: 'auto' }}>
+              <div
+                style={{
+                  fontSize: 11,
+                  fontWeight: 500,
+                  color: 'var(--text-2)',
+                  textTransform: 'uppercase',
+                  letterSpacing: '.06em',
+                  padding: '12px 0 8px',
+                }}
+              >
+                Prompt compressor
+              </div>
+              <PromptCompressorPanel
+                onUsePrompt={(compressed) => {
+                  useChatStore.getState().setInput(compressed)
+                }}
+              />
+            </div>
+          )}
+
           {activeView === 'skills' && (
             <SkillBuilderPanel />
           )}
@@ -1880,6 +2021,27 @@ export function Sidebar({ collapsed, onToggleCollapse }: SidebarProps) {
           </button>
         </div>
       </div>
+
+      {!collapsed && (
+        <div
+          role="separator"
+          aria-orientation="vertical"
+          aria-label="Resize sidebar"
+          title="Drag to resize sidebar"
+          onMouseDown={startSidebarResize}
+          style={{
+            position: 'absolute',
+            top: 0,
+            right: 0,
+            width: 8,
+            height: '100%',
+            cursor: 'col-resize',
+            zIndex: 55,
+            background: sidebarResizing ? 'var(--accent-dim)' : 'transparent',
+            borderLeft: sidebarResizing ? '1px solid var(--accent)' : '1px solid transparent',
+          }}
+        />
+      )}
 
       {agentGraphModalOpen && (
         <div

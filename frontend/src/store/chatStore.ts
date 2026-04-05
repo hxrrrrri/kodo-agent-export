@@ -157,6 +157,7 @@ interface ChatState {
   sessionId: string | null
   sessions: Session[]
   messages: Message[]
+  input: string
   isLoading: boolean
   error: string | null
   projectDir: string
@@ -173,6 +174,7 @@ interface ChatState {
   setSessionId: (id: string | null) => void
   setSessions: (sessions: Session[]) => void
   setMessages: (messages: Message[]) => void
+  setInput: (text: string) => void
   addMessage: (message: Message) => void
   updateLastMessage: (updater: (msg: Message) => Message) => void
   updateMessageById: (id: string, updater: (msg: Message) => Message) => void
@@ -195,6 +197,7 @@ export const useChatStore = create<ChatState>((set) => ({
   sessionId: null,
   sessions: [],
   messages: [],
+  input: '',
   isLoading: false,
   error: null,
   projectDir: '',
@@ -211,6 +214,12 @@ export const useChatStore = create<ChatState>((set) => ({
   setSessionId: (id) => set({ sessionId: id }),
   setSessions: (sessions) => set({ sessions }),
   setMessages: (messages) => set({ messages }),
+  setInput: (input) => {
+    set({ input })
+    if (typeof window !== 'undefined' && typeof window.dispatchEvent === 'function') {
+      window.dispatchEvent(new CustomEvent('kodo:insert-prompt', { detail: { text: input } }))
+    }
+  },
   addMessage: (message) => set((s) => ({ messages: [...s.messages, message] })),
   updateLastMessage: (updater) =>
     set((s) => {
