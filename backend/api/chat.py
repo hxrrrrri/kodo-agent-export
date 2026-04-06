@@ -561,7 +561,7 @@ async def send_message(req: ChatRequest, request: Request):
     await enforce_rate_limit(request, SEND_RATE_LIMITER, "send")
     request_id = getattr(request.state, "request_id", None)
 
-    project_dir = _normalize_optional_text(req.project_dir)
+    project_dir: str | None = _normalize_optional_text(req.project_dir) or None
     if project_dir:
         try:
             project_dir = enforce_allowed_path(project_dir)
