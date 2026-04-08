@@ -1067,14 +1067,14 @@ async def execute_command(message: str, session_id: str, project_dir: str | None
         if action == "status":
             if action_args:
                 return CommandExecutionResult(name="crg", text="Usage: /crg status [--repo <path>]")
-            payload: dict[str, Any] = {
+            crg_status_payload: dict[str, Any] = {
                 "status": "ok",
                 "crg_available": crg_manager.crg_available(),
                 "repo_root": repo_root,
             }
-            if payload["crg_available"]:
-                payload["graph_stats"] = crg_manager.list_graph_stats(repo_root=repo_root)
-            return CommandExecutionResult(name="crg", text=_pretty_json(payload))
+            if bool(crg_status_payload.get("crg_available")):
+                crg_status_payload["graph_stats"] = crg_manager.list_graph_stats(repo_root=repo_root)
+            return CommandExecutionResult(name="crg", text=_pretty_json(crg_status_payload))
 
         if action == "build":
             full_rebuild = _pop_flag(action_args, "--full")
