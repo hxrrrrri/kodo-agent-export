@@ -3,9 +3,11 @@ import os
 import shlex
 from dataclasses import dataclass
 from datetime import datetime
+from typing import Any
 
 from agent.coordinator import agent_coordinator
 from agent.modes import DEFAULT_MODE, get_mode, list_modes, normalize_mode
+from code_review_graph_integration import manager as crg_manager
 from doctor import run_report, run_runtime_checks
 from mcp.registry import mcp_registry
 from memory.manager import memory_manager
@@ -35,6 +37,7 @@ KNOWN_ROOT_COMMANDS = [
     "/privacy",
     "/tasks",
     "/mcp",
+    "/crg",
     "/agents",
     "/skills",
     "/teleport",
@@ -61,6 +64,7 @@ COMMAND_REGISTRY: dict[str, str] = {
     "/privacy": "Show no-telemetry privacy status",
     "/tasks": "Manage background tasks",
     "/mcp": "Manage and call MCP servers",
+    "/crg": "Operate code-review-graph analysis workflows",
     "/agents": "Manage spawned sub-agents",
     "/skills": "Inspect bundled skills",
     "/teleport": "Quick-switch session mode with aliases",
@@ -180,6 +184,16 @@ def _help_text() -> str:
         "/mcp remove <name> - Remove MCP server entry",
         "/mcp tools <name> - Show discovered/configured tools",
         "/mcp call <name> <tool> [json_args] - Execute MCP tool",
+        "/crg status - Show code-review-graph availability and graph stats",
+        "/crg build [--full] [--postprocess full|minimal|none] [--repo <path>] - Build or update graph",
+        "/crg detect [base] [--detail standard|minimal] [--repo <path>] - Analyze changed files risk",
+        "/crg impact [base] [--depth N] [--repo <path>] - Compute blast radius",
+        "/crg review [base] [--depth N] [--repo <path>] - Build review context bundle",
+        "/crg query <pattern> <target> [--detail standard|minimal] [--repo <path>] - Structural graph query",
+        "/crg search <query> [--kind Kind] [--limit N] [--repo <path>] - Semantic/keyword search",
+        "/crg arch [--repo <path>] - Architecture overview",
+        "/crg flows [--sort criticality|depth|node_count|name] [--limit N] [--repo <path>] - List flows",
+        "/crg stats [--repo <path>] - Graph stats",
         "/agents - List spawned sub-agents",
         "/agents spawn <goal> - Spawn sub-agent",
         "/agents get <agent_id> - Show sub-agent details",
@@ -262,6 +276,73 @@ async def _format_mcp_servers() -> str:
         argv = " ".join([command] + [str(arg) for arg in args])
         lines.append(f"- {name}: {argv}".strip())
     return "\n".join(lines)
+
+
+def _truncate_text(text: str, max_chars: int = 3500) -> str:
+    value = str(text or "")
+    if len(value) <= max_chars:
+        return value
+    return value[:max_chars] + "\n... (truncated)"
+
+
+def _pretty_json(payload: Any, max_chars: int = 3500) -> str:
+    try:
+        rendered = json.dumps(payload, indent=2, default=str)
+    except TypeError:
+        rendered = str(payload)
+    return _truncate_text(rendered, max_chars=max_chars)
+
+
+def _crg_help_text() -> str:
+    return "\n".join([
+        "Code Review Graph commands:",
+        "/crg status",
+        "/crg build [--full] [--postprocess full|minimal|none] [--repo <path>]",
+        "/crg detect [base] [--detail standard|minimal] [--repo <path>]",
+        "/crg impact [base] [--depth N] [--repo <path>]",
+        "/crg review [base] [--depth N] [--repo <path>]",
+        "/crg query <pattern> <target> [--detail standard|minimal] [--repo <path>]",
+        "/crg search <query> [--kind Kind] [--limit N] [--repo <path>]",
+        "/crg arch [--repo <path>]",
+        "/crg flows [--sort criticality|depth|node_count|name] [--limit N] [--repo <path>]",
+        "/crg stats [--repo <path>]",
+    ])
+
+
+def _pop_flag(args: list[str], flag: str) -> bool:
+    if flag in args:
+        args.remove(flag)
+        return True
+    return False
+
+
+def _pop_option(args: list[str], flag: str) -> str | None:
+    if flag not in args:
+        return None
+    idx = args.index(flag)
+    if idx + 1 >= len(args):
+        raise ValueError(f"Missing value for {flag}")
+    value = args[idx + 1]
+    del args[idx:idx + 2]
+    return value
+
+
+def _pop_int_option(args: list[str], flag: str, default: int) -> int:
+    raw = _pop_option(args, flag)
+    if raw is None:
+        return default
+    try:
+        return int(raw)
+    except ValueError as e:
+        raise ValueError(f"{flag} must be an integer") from e
+
+
+def _resolve_crg_repo_root(explicit_repo: str | None, project_dir: str | None) -> str | None:
+    candidate = str(explicit_repo or "").strip() or str(project_dir or "").strip()
+    if candidate:
+        return candidate
+    root = crg_manager.get_crg_repo_root()
+    return str(root) if root else None
 
 
 async def _format_agents() -> str:
@@ -967,6 +1048,197 @@ async def execute_command(message: str, session_id: str, project_dir: str | None
             return CommandExecutionResult(name="mcp", text=pretty)
 
         return CommandExecutionResult(name="mcp", text="Usage: /mcp [list|add|remove|tools|call]")
+
+    if command == "/crg":
+        if not args:
+            return CommandExecutionResult(name="crg", text=_crg_help_text())
+
+        action = args[0].lower()
+        if action in {"help", "list"}:
+            return CommandExecutionResult(name="crg", text=_crg_help_text())
+
+        action_args = args[1:].copy()
+        try:
+            explicit_repo = _pop_option(action_args, "--repo")
+        except ValueError as e:
+            return CommandExecutionResult(name="crg", text=str(e))
+        repo_root = _resolve_crg_repo_root(explicit_repo, project_dir)
+
+        if action == "status":
+            if action_args:
+                return CommandExecutionResult(name="crg", text="Usage: /crg status [--repo <path>]")
+            payload: dict[str, Any] = {
+                "status": "ok",
+                "crg_available": crg_manager.crg_available(),
+                "repo_root": repo_root,
+            }
+            if payload["crg_available"]:
+                payload["graph_stats"] = crg_manager.list_graph_stats(repo_root=repo_root)
+            return CommandExecutionResult(name="crg", text=_pretty_json(payload))
+
+        if action == "build":
+            full_rebuild = _pop_flag(action_args, "--full")
+            try:
+                postprocess = _pop_option(action_args, "--postprocess") or "full"
+            except ValueError as e:
+                return CommandExecutionResult(name="crg", text=str(e))
+            if postprocess not in {"full", "minimal", "none"}:
+                return CommandExecutionResult(
+                    name="crg",
+                    text="--postprocess must be one of: full, minimal, none",
+                )
+            if action_args:
+                return CommandExecutionResult(
+                    name="crg",
+                    text="Usage: /crg build [--full] [--postprocess full|minimal|none] [--repo <path>]",
+                )
+            result = crg_manager.build_graph(
+                repo_root=repo_root,
+                full_rebuild=full_rebuild,
+                postprocess=postprocess,
+            )
+            return CommandExecutionResult(name="crg", text=_pretty_json(result))
+
+        if action == "detect":
+            try:
+                detail_level = _pop_option(action_args, "--detail") or "standard"
+            except ValueError as e:
+                return CommandExecutionResult(name="crg", text=str(e))
+            if detail_level not in {"standard", "minimal"}:
+                return CommandExecutionResult(name="crg", text="--detail must be one of: standard, minimal")
+            if len(action_args) > 1:
+                return CommandExecutionResult(
+                    name="crg",
+                    text="Usage: /crg detect [base] [--detail standard|minimal] [--repo <path>]",
+                )
+            base = action_args[0] if action_args else "HEAD~1"
+            result = crg_manager.detect_changes(
+                repo_root=repo_root,
+                base=base,
+                detail_level=detail_level,
+            )
+            return CommandExecutionResult(name="crg", text=_pretty_json(result))
+
+        if action == "impact":
+            try:
+                depth = _pop_int_option(action_args, "--depth", 2)
+            except ValueError as e:
+                return CommandExecutionResult(name="crg", text=str(e))
+            if len(action_args) > 1:
+                return CommandExecutionResult(
+                    name="crg",
+                    text="Usage: /crg impact [base] [--depth N] [--repo <path>]",
+                )
+            base = action_args[0] if action_args else "HEAD~1"
+            result = crg_manager.get_impact_radius(
+                repo_root=repo_root,
+                base=base,
+                max_depth=depth,
+            )
+            return CommandExecutionResult(name="crg", text=_pretty_json(result))
+
+        if action == "review":
+            try:
+                depth = _pop_int_option(action_args, "--depth", 2)
+            except ValueError as e:
+                return CommandExecutionResult(name="crg", text=str(e))
+            if len(action_args) > 1:
+                return CommandExecutionResult(
+                    name="crg",
+                    text="Usage: /crg review [base] [--depth N] [--repo <path>]",
+                )
+            base = action_args[0] if action_args else "HEAD~1"
+            result = crg_manager.get_review_context(
+                repo_root=repo_root,
+                base=base,
+                max_depth=depth,
+            )
+            return CommandExecutionResult(name="crg", text=_pretty_json(result))
+
+        if action == "query":
+            try:
+                detail_level = _pop_option(action_args, "--detail") or "standard"
+            except ValueError as e:
+                return CommandExecutionResult(name="crg", text=str(e))
+            if detail_level not in {"standard", "minimal"}:
+                return CommandExecutionResult(name="crg", text="--detail must be one of: standard, minimal")
+            if len(action_args) < 2:
+                return CommandExecutionResult(
+                    name="crg",
+                    text=(
+                        "Usage: /crg query <pattern> <target> [--detail standard|minimal] [--repo <path>]\n"
+                        "Patterns: callers_of, callees_of, imports_of, importers_of, children_of, tests_for, inheritors_of, file_summary"
+                    ),
+                )
+            pattern = action_args[0]
+            target = " ".join(action_args[1:]).strip()
+            result = crg_manager.query_graph(
+                pattern=pattern,
+                target=target,
+                repo_root=repo_root,
+                detail_level=detail_level,
+            )
+            return CommandExecutionResult(name="crg", text=_pretty_json(result))
+
+        if action == "search":
+            try:
+                kind = _pop_option(action_args, "--kind")
+                limit = _pop_int_option(action_args, "--limit", 20)
+            except ValueError as e:
+                return CommandExecutionResult(name="crg", text=str(e))
+            query = " ".join(action_args).strip()
+            if not query:
+                return CommandExecutionResult(
+                    name="crg",
+                    text="Usage: /crg search <query> [--kind Kind] [--limit N] [--repo <path>]",
+                )
+            result = crg_manager.semantic_search(
+                query=query,
+                kind=kind,
+                limit=limit,
+                repo_root=repo_root,
+            )
+            return CommandExecutionResult(name="crg", text=_pretty_json(result))
+
+        if action in {"arch", "architecture"}:
+            if action_args:
+                return CommandExecutionResult(name="crg", text="Usage: /crg arch [--repo <path>]")
+            result = crg_manager.get_architecture_overview(repo_root=repo_root)
+            return CommandExecutionResult(name="crg", text=_pretty_json(result))
+
+        if action == "flows":
+            try:
+                sort_by = _pop_option(action_args, "--sort") or "criticality"
+                limit = _pop_int_option(action_args, "--limit", 50)
+            except ValueError as e:
+                return CommandExecutionResult(name="crg", text=str(e))
+            if sort_by not in {"criticality", "depth", "node_count", "name"}:
+                return CommandExecutionResult(
+                    name="crg",
+                    text="--sort must be one of: criticality, depth, node_count, name",
+                )
+            if action_args:
+                return CommandExecutionResult(
+                    name="crg",
+                    text="Usage: /crg flows [--sort criticality|depth|node_count|name] [--limit N] [--repo <path>]",
+                )
+            result = crg_manager.list_flows(
+                repo_root=repo_root,
+                sort_by=sort_by,
+                limit=limit,
+            )
+            return CommandExecutionResult(name="crg", text=_pretty_json(result))
+
+        if action == "stats":
+            if action_args:
+                return CommandExecutionResult(name="crg", text="Usage: /crg stats [--repo <path>]")
+            result = crg_manager.list_graph_stats(repo_root=repo_root)
+            return CommandExecutionResult(name="crg", text=_pretty_json(result))
+
+        return CommandExecutionResult(
+            name="crg",
+            text="Usage: /crg [status|build|detect|impact|review|query|search|arch|flows|stats|help]",
+        )
 
     if command == "/agents":
         if not args:

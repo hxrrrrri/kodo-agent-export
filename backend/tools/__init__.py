@@ -28,6 +28,15 @@ from .image_gen import ImageGenTool
 from .screenshot import ScreenshotTool
 from .database_query import DatabaseQueryTool
 from .send_email import SendEmailTool
+from .crg_build_graph import CRGBuildGraphTool
+from .crg_detect_changes import CRGDetectChangesTool
+from .crg_get_impact_radius import CRGGetImpactRadiusTool
+from .crg_query_graph import CRGQueryGraphTool
+from .crg_semantic_search import CRGSemanticSearchTool
+from .crg_get_architecture import CRGGetArchitectureTool
+from .crg_list_flows import CRGListFlowsTool
+from .crg_refactor import CRGRefactorTool
+from .crg_get_review_context import CRGGetReviewContextTool
 from .base import BaseTool, ToolResult
 
 ALL_TOOLS: list[BaseTool] = [
@@ -61,6 +70,15 @@ ALL_TOOLS: list[BaseTool] = [
     ScreenshotTool(),
     DatabaseQueryTool(),
     SendEmailTool(),
+    CRGBuildGraphTool(),
+    CRGDetectChangesTool(),
+    CRGGetImpactRadiusTool(),
+    CRGQueryGraphTool(),
+    CRGSemanticSearchTool(),
+    CRGGetArchitectureTool(),
+    CRGListFlowsTool(),
+    CRGRefactorTool(),
+    CRGGetReviewContextTool(),
 ]
 
 TOOL_MAP: dict[str, BaseTool] = {t.name: t for t in ALL_TOOLS}

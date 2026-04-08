@@ -64,6 +64,36 @@ function extractGeneratedImageUrl(content: string): string | null {
   return match[0].replace(/[),.;!?]+$/, '')
 }
 
+async function copyTextToClipboard(text: string): Promise<boolean> {
+  const value = String(text || '')
+  if (!value.trim()) return false
+
+  try {
+    if (typeof navigator !== 'undefined' && navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(value)
+      return true
+    }
+  } catch {
+    // Fall back to execCommand clipboard path below.
+  }
+
+  try {
+    if (typeof document === 'undefined') return false
+    const el = document.createElement('textarea')
+    el.value = value
+    el.setAttribute('readonly', '')
+    el.style.position = 'absolute'
+    el.style.left = '-9999px'
+    document.body.appendChild(el)
+    el.select()
+    const ok = document.execCommand('copy')
+    document.body.removeChild(el)
+    return ok
+  } catch {
+    return false
+  }
+}
+
 function CursorBlink() {
   return (
     <span style={{
@@ -159,6 +189,7 @@ export function MessageBubble({
 }: MessageBubbleProps) {
   const [copiedIndex, setCopiedIndex] = useState<number | null>(null)
   const [userPromptCopied, setUserPromptCopied] = useState(false)
+  const [assistantResponseCopied, setAssistantResponseCopied] = useState(false)
   const [isSpeaking, setIsSpeaking] = useState(false)
   const audioRef = useRef<HTMLAudioElement | null>(null)
   const audioUrlRef = useRef<string>('')
@@ -276,19 +307,27 @@ export function MessageBubble({
     }
   }
 
+  const handleCopyAssistantResponse = async () => {
+    const text = String(message.content || '')
+    if (!text.trim()) return
+    const copied = await copyTextToClipboard(text)
+    if (!copied) return
+    setAssistantResponseCopied(true)
+    window.setTimeout(() => {
+      setAssistantResponseCopied(false)
+    }, 1400)
+  }
+
   if (isUser) {
     const handleCopyUserPrompt = async () => {
       const text = String(message.content || '')
       if (!text.trim()) return
-      try {
-        await navigator.clipboard.writeText(text)
-        setUserPromptCopied(true)
-        window.setTimeout(() => {
-          setUserPromptCopied(false)
-        }, 1400)
-      } catch {
+      const copied = await copyTextToClipboard(text)
+      if (!copied) return
+      setUserPromptCopied(true)
+      window.setTimeout(() => {
         setUserPromptCopied(false)
-      }
+      }, 1400)
     }
 
     const handleEditUserPrompt = () => {
@@ -470,10 +509,14 @@ export function MessageBubble({
             <ReactMarkdown
               remarkPlugins={[remarkGfm]}
               components={{
-                code({ node, className, children, ...props }) {
-                  const match = /language-(\w+)/.exec(className || '')
-                  const isInline = !match
-                  if (isInline) {
+                code({ node, inline, className, children, ...props }: any) {
+                  const match = /language-([\w-]+)/.exec(className || '')
+                  const rawValue = String(children || '')
+                  const startLine = Number((node as any)?.position?.start?.line || 0)
+                  const endLine = Number((node as any)?.position?.end?.line || 0)
+                  const spansMultipleLines = startLine > 0 && endLine > 0 && endLine > startLine
+                  const isInlineCode = Boolean(inline) || (!match && !rawValue.includes('\n') && !spansMultipleLines)
+                  if (isInlineCode) {
                     return (
                       <code
                         style={{
@@ -491,6 +534,8 @@ export function MessageBubble({
                       </code>
                     )
                   }
+                  const language = match?.[1] || 'text'
+                  const rawCode = rawValue.replace(/\n$/, '')
                   codeBlockIndex += 1
                   const blockIndex = codeBlockIndex
                   return (
@@ -506,12 +551,12 @@ export function MessageBubble({
                         alignItems: 'center',
                         justifyContent: 'space-between',
                       }}>
-                        <span>{match[1].toUpperCase()}</span>
+                        <span>{language.toUpperCase()}</span>
                         <button
                           type="button"
                           onClick={() => {
-                            const rawCode = String(children).replace(/\n$/, '')
-                            void navigator.clipboard.writeText(rawCode).then(() => {
+                            void copyTextToClipboard(rawCode).then((copied) => {
+                              if (!copied) return
                               setCopiedIndex(blockIndex)
                               window.setTimeout(() => {
                                 setCopiedIndex((prev) => (prev === blockIndex ? null : prev))
@@ -535,7 +580,7 @@ export function MessageBubble({
                       </div>
                       <SyntaxHighlighter
                         style={vscDarkPlus}
-                        language={match[1]}
+                        language={language}
                         PreTag="div"
                         customStyle={{
                           margin: 0,
@@ -545,7 +590,7 @@ export function MessageBubble({
                           padding: '12px 16px',
                         }}
                       >
-                        {String(children).replace(/\n$/, '')}
+                        {rawCode}
                       </SyntaxHighlighter>
                     </div>
                   )
@@ -615,6 +660,40 @@ export function MessageBubble({
         </div>
       )}
 
+      {message.content.trim() && (
+        <div
+          style={{
+            marginTop: 10,
+            display: 'flex',
+            justifyContent: 'flex-end',
+          }}
+        >
+          <button
+            type="button"
+            onClick={() => { void handleCopyAssistantResponse() }}
+            aria-label={assistantResponseCopied ? 'Response copied' : 'Copy response'}
+            title={assistantResponseCopied ? 'Copied' : 'Copy response'}
+            style={{
+              border: `1px solid ${assistantResponseCopied ? 'var(--green)' : 'var(--border)'}`,
+              background: 'var(--bg-2)',
+              color: assistantResponseCopied ? 'var(--green)' : 'var(--text-1)',
+              borderRadius: 6,
+              cursor: 'pointer',
+              fontSize: 11,
+              fontFamily: 'var(--font-mono)',
+              padding: '5px 8px',
+              letterSpacing: '0.04em',
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: 6,
+            }}
+          >
+            <Copy size={12} />
+            <span>{assistantResponseCopied ? 'Copied' : 'Copy response'}</span>
+          </button>
+        </div>
+      )}
+
       {/* Usage */}
       {message.usage && (
         <div style={{
@@ -625,13 +704,13 @@ export function MessageBubble({
           gap: 12,
           flexWrap: 'wrap',
         }}>
-          <span>↑ {message.usage.input_tokens} tokens</span>
-          <span>↓ {message.usage.output_tokens} tokens</span>
+          <span>↑ {Number(message.usage.input_tokens || 0).toLocaleString()} tokens</span>
+          <span>↓ {Number(message.usage.output_tokens || 0).toLocaleString()} tokens</span>
           {message.usage.input_cache_read_tokens ? (
-            <span>cache read {message.usage.input_cache_read_tokens}</span>
+            <span>Cache read {Number(message.usage.input_cache_read_tokens).toLocaleString()}</span>
           ) : null}
           {message.usage.input_cache_write_tokens ? (
-            <span>cache write {message.usage.input_cache_write_tokens}</span>
+            <span>Cache write {Number(message.usage.input_cache_write_tokens).toLocaleString()}</span>
           ) : null}
           <span>{message.usage.model}</span>
         </div>

@@ -35,7 +35,7 @@ type SidebarProps = {
   onToggleCollapse: () => void
 }
 
-type SidebarView = 'sessions' | 'providers' | 'agents' | 'usage' | 'prompts' | 'compressor' | 'skills' | 'review' | 'settings'
+type SidebarView = 'sessions' | 'providers' | 'agents' | 'usage' | 'prompts' | 'compressor' | 'skills' | 'crg' | 'review' | 'settings'
 
 type RuntimeTask = {
   task_id: string
@@ -308,6 +308,19 @@ function RailButton({
   )
 }
 
+function GraphGlyphIcon({ size = 15 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" aria-hidden="true">
+      <circle cx="5" cy="6" r="2.2" stroke="currentColor" strokeWidth={1.8} />
+      <circle cx="19" cy="6" r="2.2" stroke="currentColor" strokeWidth={1.8} />
+      <circle cx="12" cy="18" r="2.2" stroke="currentColor" strokeWidth={1.8} />
+      <path d="M7 7.6L10.4 15.8" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" />
+      <path d="M17 7.6L13.6 15.8" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" />
+      <path d="M7.4 6H16.6" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" />
+    </svg>
+  )
+}
+
 export function Sidebar({ collapsed, onToggleCollapse }: SidebarProps) {
   const {
     sessions,
@@ -318,6 +331,8 @@ export function Sidebar({ collapsed, onToggleCollapse }: SidebarProps) {
     loadSession,
     newSession,
     deleteSession,
+    sendMessage,
+    isLoading,
     usageSummary,
     projectDir,
     searchQuery,
@@ -348,6 +363,14 @@ export function Sidebar({ collapsed, onToggleCollapse }: SidebarProps) {
   const [settingsSaving, setSettingsSaving] = useState(false)
   const [settingsError, setSettingsError] = useState('')
   const [settingsData, setSettingsData] = useState<SettingsPayload>({})
+  const [crgBase, setCrgBase] = useState('HEAD~1')
+  const [crgPattern, setCrgPattern] = useState('callers_of')
+  const [crgTarget, setCrgTarget] = useState('send_message')
+  const [crgQuery, setCrgQuery] = useState('send_message')
+  const [crgCustomCommand, setCrgCustomCommand] = useState('/crg status')
+  const [crgRunning, setCrgRunning] = useState(false)
+  const [crgLastCommand, setCrgLastCommand] = useState('')
+  const [crgHelpOpen, setCrgHelpOpen] = useState(false)
   const [showApiKeys, setShowApiKeys] = useState(false)
   const [apiKeys, setApiKeys] = useState<StoredApiKeys>({})
   const [apiKeyStatus, setApiKeyStatus] = useState<Record<string, 'idle' | 'ok' | 'error'>>({})
@@ -570,6 +593,19 @@ export function Sidebar({ collapsed, onToggleCollapse }: SidebarProps) {
       window.removeEventListener('keydown', onKeyDown)
     }
   }, [agentGraphModalOpen])
+
+  useEffect(() => {
+    if (!crgHelpOpen) return
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setCrgHelpOpen(false)
+      }
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => {
+      window.removeEventListener('keydown', onKeyDown)
+    }
+  }, [crgHelpOpen])
 
   const visibleSessions = useMemo(() => {
     const tokens = searchQuery
@@ -861,12 +897,58 @@ export function Sidebar({ collapsed, onToggleCollapse }: SidebarProps) {
     }
   }, [activeView])
 
+  useEffect(() => {
+    if (activeView !== 'crg') {
+      setCrgHelpOpen(false)
+    }
+  }, [activeView])
+
   const usageSource = usageData || usageSummary
   const usageCost = usageSource?.totals?.cost_usd_total ?? usageSource?.totals?.estimated_cost_usd ?? 0
   const usageInput = usageSource?.totals?.input_tokens ?? 0
   const usageOutput = usageSource?.totals?.output_tokens ?? 0
   const usageByModelRows = Object.entries((usageSource?.by_model || {}) as Record<string, any>)
   const usageBySessionRows = Object.entries((usageSource?.by_session || {}) as Record<string, any>)
+  const normalizedCrgBase = crgBase.trim() || 'HEAD~1'
+  const crgCommands = [
+    { command: '/crg status', use: 'Check availability, active repo root, and graph health.', example: '/crg status' },
+    { command: '/crg build [--full]', use: 'Build or refresh graph index (run first).', example: '/crg build --full' },
+    { command: '/crg detect [base]', use: 'PR-style risk summary: risk score, priorities, test gaps.', example: '/crg detect HEAD~1' },
+    { command: '/crg impact [base]', use: 'Blast radius: what files/functions/tests may be affected.', example: '/crg impact HEAD~1 --depth 2' },
+    { command: '/crg review [base]', use: 'Richer review context bundle for changed code.', example: '/crg review HEAD~1 --depth 2' },
+    { command: '/crg query <pattern> <target>', use: 'Structural lookup (callers, callees, tests, imports, file summary).', example: '/crg query callers_of send_message' },
+    { command: '/crg search <query>', use: 'Semantic/keyword search over graph nodes.', example: '/crg search "auth token refresh"' },
+    { command: '/crg arch', use: 'High-level architecture and module clustering.', example: '/crg arch' },
+    { command: '/crg flows', use: 'Critical execution flows / call chains.', example: '/crg flows --sort criticality --limit 30' },
+    { command: '/crg stats', use: 'Node/edge/file stats for graph coverage.', example: '/crg stats' },
+  ]
+  const crgScenarioGuides = [
+    {
+      title: 'First-time setup',
+      steps: ['/crg status', '/crg build --full', '/crg arch', '/crg stats'],
+      why: 'Confirms setup and creates baseline map of the codebase.',
+    },
+    {
+      title: 'Before PR review',
+      steps: ['/crg build', '/crg detect HEAD~1', '/crg review HEAD~1', '/crg query tests_for <changed_symbol>'],
+      why: 'Finds risky areas quickly and highlights missing test coverage.',
+    },
+    {
+      title: 'Before refactor',
+      steps: ['/crg query callers_of <symbol>', '/crg query callees_of <symbol>', '/crg impact HEAD~1'],
+      why: 'Shows dependencies first so refactors avoid hidden breakage.',
+    },
+    {
+      title: 'When onboarding',
+      steps: ['/crg arch', '/crg flows --sort criticality', '/crg search <domain term>'],
+      why: 'Gives fast understanding of architecture and key execution paths.',
+    },
+  ]
+  const crgBenefits = [
+    'Reduces token usage by doing structural analysis locally and sending compact summaries to the model.',
+    'Cuts context bloat by narrowing file reads to high-impact symbols instead of whole directories.',
+    'Improves review quality with explicit risk/test-gap signals before writing or reviewing code.',
+  ]
 
   const openSearch = () => {
     setActiveView('sessions')
@@ -894,6 +976,24 @@ export function Sidebar({ collapsed, onToggleCollapse }: SidebarProps) {
 
   const toggleTheme = () => {
     setTheme(THEME_TONES[theme] === 'dark' ? 'light' : 'dark')
+  }
+
+  const insertCrgCommand = (command: string) => {
+    const text = command.trim()
+    if (!text) return
+    useChatStore.getState().setInput(text)
+  }
+
+  const runCrgCommand = async (command: string) => {
+    const text = command.trim()
+    if (!text || isLoading || crgRunning) return
+    setCrgRunning(true)
+    setCrgLastCommand(text)
+    try {
+      await sendMessage(text)
+    } finally {
+      setCrgRunning(false)
+    }
   }
 
   const startSidebarResize = (event: ReactMouseEvent<HTMLDivElement>) => {
@@ -1037,6 +1137,15 @@ export function Sidebar({ collapsed, onToggleCollapse }: SidebarProps) {
             if (collapsed) onToggleCollapse()
           }}
           active={activeView === 'skills'}
+        />
+        <RailButton
+          icon={<GraphGlyphIcon size={15} />}
+          label="Code graph"
+          onClick={() => {
+            setActiveView('crg')
+            if (collapsed) onToggleCollapse()
+          }}
+          active={activeView === 'crg'}
         />
 
         <div style={{ flex: 1 }} />
@@ -1209,6 +1318,12 @@ export function Sidebar({ collapsed, onToggleCollapse }: SidebarProps) {
             label="Skills"
             active={activeView === 'skills'}
             onClick={() => setActiveView('skills')}
+          />
+          <PanelNav
+            icon={<GraphGlyphIcon size={15} />}
+            label="Code Graph"
+            active={activeView === 'crg'}
+            onClick={() => setActiveView('crg')}
           />
           <PanelNav
             icon={<FileText size={15} />}
@@ -1738,6 +1853,387 @@ export function Sidebar({ collapsed, onToggleCollapse }: SidebarProps) {
             <SkillBuilderPanel />
           )}
 
+          {activeView === 'crg' && (
+            <div style={{ height: '100%', overflowY: 'auto', padding: '10px 10px 12px', display: 'grid', gap: 8 }}>
+              <div style={{ border: '1px solid var(--border)', borderRadius: 10, background: 'var(--bg-2)', padding: 8, display: 'grid', gap: 6 }}>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+                  <div style={{ fontSize: 12, color: 'var(--text-0)' }}>Code Review Graph</div>
+                  <button
+                    type="button"
+                    onClick={() => setCrgHelpOpen(true)}
+                    title="What is Code Review Graph?"
+                    aria-label="Open Code Review Graph help"
+                    style={{
+                      width: 20,
+                      height: 20,
+                      borderRadius: 999,
+                      border: '1px solid var(--border)',
+                      background: 'var(--bg-3)',
+                      color: 'var(--text-1)',
+                      fontSize: 12,
+                      fontWeight: 700,
+                      cursor: 'pointer',
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      lineHeight: 1,
+                    }}
+                  >
+                    ?
+                  </button>
+                </div>
+                <div style={{ fontSize: 11, color: 'var(--text-2)', lineHeight: 1.4 }}>
+                  Run CRG slash commands without typing. Results stream into the chat as tool calls.
+                </div>
+                <div style={{ fontSize: 10, color: 'var(--text-2)' }}>
+                  Repo context: {projectDir?.trim() ? projectDir : 'Auto-detected by CRG'}
+                </div>
+                {crgLastCommand && (
+                  <div style={{ fontSize: 10, color: 'var(--accent)' }}>
+                    Last command: {crgLastCommand}
+                  </div>
+                )}
+              </div>
+
+              <div style={{ border: '1px solid var(--border)', borderRadius: 10, background: 'var(--bg-2)', padding: 8, display: 'grid', gap: 6 }}>
+                <div style={{ fontSize: 12, color: 'var(--text-0)' }}>Quick Actions</div>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6 }}>
+                  <button
+                    type="button"
+                    onClick={() => void runCrgCommand('/crg status')}
+                    disabled={isLoading || crgRunning}
+                    style={{
+                      border: '1px solid var(--border)',
+                      borderRadius: 8,
+                      background: 'var(--bg-3)',
+                      color: 'var(--text-0)',
+                      fontSize: 10,
+                      cursor: isLoading || crgRunning ? 'not-allowed' : 'pointer',
+                      padding: '6px 7px',
+                      opacity: isLoading || crgRunning ? 0.6 : 1,
+                    }}
+                  >
+                    Run status
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => void runCrgCommand('/crg build')}
+                    disabled={isLoading || crgRunning}
+                    style={{
+                      border: '1px solid var(--border)',
+                      borderRadius: 8,
+                      background: 'var(--bg-3)',
+                      color: 'var(--text-0)',
+                      fontSize: 10,
+                      cursor: isLoading || crgRunning ? 'not-allowed' : 'pointer',
+                      padding: '6px 7px',
+                      opacity: isLoading || crgRunning ? 0.6 : 1,
+                    }}
+                  >
+                    Run build
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => void runCrgCommand('/crg arch')}
+                    disabled={isLoading || crgRunning}
+                    style={{
+                      border: '1px solid var(--border)',
+                      borderRadius: 8,
+                      background: 'var(--bg-3)',
+                      color: 'var(--text-0)',
+                      fontSize: 10,
+                      cursor: isLoading || crgRunning ? 'not-allowed' : 'pointer',
+                      padding: '6px 7px',
+                      opacity: isLoading || crgRunning ? 0.6 : 1,
+                    }}
+                  >
+                    Run arch
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => void runCrgCommand('/crg stats')}
+                    disabled={isLoading || crgRunning}
+                    style={{
+                      border: '1px solid var(--border)',
+                      borderRadius: 8,
+                      background: 'var(--bg-3)',
+                      color: 'var(--text-0)',
+                      fontSize: 10,
+                      cursor: isLoading || crgRunning ? 'not-allowed' : 'pointer',
+                      padding: '6px 7px',
+                      opacity: isLoading || crgRunning ? 0.6 : 1,
+                    }}
+                  >
+                    Run stats
+                  </button>
+                </div>
+              </div>
+
+              <div style={{ border: '1px solid var(--border)', borderRadius: 10, background: 'var(--bg-2)', padding: 8, display: 'grid', gap: 6 }}>
+                <div style={{ fontSize: 12, color: 'var(--text-0)' }}>Change Review</div>
+                <label style={{ display: 'grid', gap: 4, fontSize: 10, color: 'var(--text-2)' }}>
+                  Base ref
+                  <input
+                    value={crgBase}
+                    onChange={(event) => setCrgBase(event.target.value)}
+                    placeholder="HEAD~1"
+                    style={{
+                      width: '100%',
+                      background: 'var(--bg-1)',
+                      border: '1px solid var(--border)',
+                      borderRadius: 8,
+                      color: 'var(--text-0)',
+                      padding: '6px 8px',
+                      fontSize: 11,
+                    }}
+                  />
+                </label>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6 }}>
+                  <button
+                    type="button"
+                    onClick={() => insertCrgCommand(`/crg detect ${normalizedCrgBase}`)}
+                    style={{
+                      border: '1px solid var(--border)',
+                      borderRadius: 8,
+                      background: 'var(--bg-1)',
+                      color: 'var(--text-1)',
+                      fontSize: 10,
+                      cursor: 'pointer',
+                      padding: '6px 7px',
+                    }}
+                  >
+                    Insert detect
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => void runCrgCommand(`/crg detect ${normalizedCrgBase}`)}
+                    disabled={isLoading || crgRunning}
+                    style={{
+                      border: '1px solid var(--border)',
+                      borderRadius: 8,
+                      background: 'var(--bg-3)',
+                      color: 'var(--text-0)',
+                      fontSize: 10,
+                      cursor: isLoading || crgRunning ? 'not-allowed' : 'pointer',
+                      padding: '6px 7px',
+                      opacity: isLoading || crgRunning ? 0.6 : 1,
+                    }}
+                  >
+                    Run detect
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => insertCrgCommand(`/crg impact ${normalizedCrgBase}`)}
+                    style={{
+                      border: '1px solid var(--border)',
+                      borderRadius: 8,
+                      background: 'var(--bg-1)',
+                      color: 'var(--text-1)',
+                      fontSize: 10,
+                      cursor: 'pointer',
+                      padding: '6px 7px',
+                    }}
+                  >
+                    Insert impact
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => void runCrgCommand(`/crg review ${normalizedCrgBase}`)}
+                    disabled={isLoading || crgRunning}
+                    style={{
+                      border: '1px solid var(--border)',
+                      borderRadius: 8,
+                      background: 'var(--bg-3)',
+                      color: 'var(--text-0)',
+                      fontSize: 10,
+                      cursor: isLoading || crgRunning ? 'not-allowed' : 'pointer',
+                      padding: '6px 7px',
+                      opacity: isLoading || crgRunning ? 0.6 : 1,
+                    }}
+                  >
+                    Run review
+                  </button>
+                </div>
+              </div>
+
+              <div style={{ border: '1px solid var(--border)', borderRadius: 10, background: 'var(--bg-2)', padding: 8, display: 'grid', gap: 6 }}>
+                <div style={{ fontSize: 12, color: 'var(--text-0)' }}>Structural Query</div>
+                <select
+                  value={crgPattern}
+                  onChange={(event) => setCrgPattern(event.target.value)}
+                  style={{
+                    width: '100%',
+                    background: 'var(--bg-1)',
+                    border: '1px solid var(--border)',
+                    borderRadius: 8,
+                    color: 'var(--text-0)',
+                    padding: '6px 8px',
+                    fontSize: 11,
+                  }}
+                >
+                  <option value="callers_of">callers_of</option>
+                  <option value="callees_of">callees_of</option>
+                  <option value="imports_of">imports_of</option>
+                  <option value="importers_of">importers_of</option>
+                  <option value="children_of">children_of</option>
+                  <option value="tests_for">tests_for</option>
+                  <option value="inheritors_of">inheritors_of</option>
+                  <option value="file_summary">file_summary</option>
+                </select>
+                <input
+                  value={crgTarget}
+                  onChange={(event) => setCrgTarget(event.target.value)}
+                  placeholder="symbol or file path"
+                  style={{
+                    width: '100%',
+                    background: 'var(--bg-1)',
+                    border: '1px solid var(--border)',
+                    borderRadius: 8,
+                    color: 'var(--text-0)',
+                    padding: '6px 8px',
+                    fontSize: 11,
+                  }}
+                />
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6 }}>
+                  <button
+                    type="button"
+                    onClick={() => insertCrgCommand(`/crg query ${crgPattern} ${crgTarget || 'send_message'}`)}
+                    style={{
+                      border: '1px solid var(--border)',
+                      borderRadius: 8,
+                      background: 'var(--bg-1)',
+                      color: 'var(--text-1)',
+                      fontSize: 10,
+                      cursor: 'pointer',
+                      padding: '6px 7px',
+                    }}
+                  >
+                    Insert query
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => void runCrgCommand(`/crg query ${crgPattern} ${crgTarget || 'send_message'}`)}
+                    disabled={isLoading || crgRunning}
+                    style={{
+                      border: '1px solid var(--border)',
+                      borderRadius: 8,
+                      background: 'var(--bg-3)',
+                      color: 'var(--text-0)',
+                      fontSize: 10,
+                      cursor: isLoading || crgRunning ? 'not-allowed' : 'pointer',
+                      padding: '6px 7px',
+                      opacity: isLoading || crgRunning ? 0.6 : 1,
+                    }}
+                  >
+                    Run query
+                  </button>
+                </div>
+              </div>
+
+              <div style={{ border: '1px solid var(--border)', borderRadius: 10, background: 'var(--bg-2)', padding: 8, display: 'grid', gap: 6 }}>
+                <div style={{ fontSize: 12, color: 'var(--text-0)' }}>Semantic Search + Custom Command</div>
+                <input
+                  value={crgQuery}
+                  onChange={(event) => setCrgQuery(event.target.value)}
+                  placeholder="search terms"
+                  style={{
+                    width: '100%',
+                    background: 'var(--bg-1)',
+                    border: '1px solid var(--border)',
+                    borderRadius: 8,
+                    color: 'var(--text-0)',
+                    padding: '6px 8px',
+                    fontSize: 11,
+                  }}
+                />
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6 }}>
+                  <button
+                    type="button"
+                    onClick={() => insertCrgCommand(`/crg search ${crgQuery || 'send_message'}`)}
+                    style={{
+                      border: '1px solid var(--border)',
+                      borderRadius: 8,
+                      background: 'var(--bg-1)',
+                      color: 'var(--text-1)',
+                      fontSize: 10,
+                      cursor: 'pointer',
+                      padding: '6px 7px',
+                    }}
+                  >
+                    Insert search
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => void runCrgCommand(`/crg search ${crgQuery || 'send_message'}`)}
+                    disabled={isLoading || crgRunning}
+                    style={{
+                      border: '1px solid var(--border)',
+                      borderRadius: 8,
+                      background: 'var(--bg-3)',
+                      color: 'var(--text-0)',
+                      fontSize: 10,
+                      cursor: isLoading || crgRunning ? 'not-allowed' : 'pointer',
+                      padding: '6px 7px',
+                      opacity: isLoading || crgRunning ? 0.6 : 1,
+                    }}
+                  >
+                    Run search
+                  </button>
+                </div>
+                <textarea
+                  value={crgCustomCommand}
+                  onChange={(event) => setCrgCustomCommand(event.target.value)}
+                  rows={2}
+                  placeholder="/crg status"
+                  style={{
+                    width: '100%',
+                    background: 'var(--bg-1)',
+                    border: '1px solid var(--border)',
+                    borderRadius: 8,
+                    color: 'var(--text-0)',
+                    padding: '6px 8px',
+                    fontSize: 11,
+                    resize: 'vertical',
+                  }}
+                />
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6 }}>
+                  <button
+                    type="button"
+                    onClick={() => insertCrgCommand(crgCustomCommand)}
+                    style={{
+                      border: '1px solid var(--border)',
+                      borderRadius: 8,
+                      background: 'var(--bg-1)',
+                      color: 'var(--text-1)',
+                      fontSize: 10,
+                      cursor: 'pointer',
+                      padding: '6px 7px',
+                    }}
+                  >
+                    Insert custom
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => void runCrgCommand(crgCustomCommand)}
+                    disabled={isLoading || crgRunning}
+                    style={{
+                      border: '1px solid var(--border)',
+                      borderRadius: 8,
+                      background: 'var(--bg-3)',
+                      color: 'var(--text-0)',
+                      fontSize: 10,
+                      cursor: isLoading || crgRunning ? 'not-allowed' : 'pointer',
+                      padding: '6px 7px',
+                      opacity: isLoading || crgRunning ? 0.6 : 1,
+                    }}
+                  >
+                    {crgRunning ? 'Running...' : 'Run custom'}
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+
           {activeView === 'review' && (
             <CodeReviewPanel sessionId={sessionId} projectDir={projectDir} />
           )}
@@ -2041,6 +2537,150 @@ export function Sidebar({ collapsed, onToggleCollapse }: SidebarProps) {
             borderLeft: sidebarResizing ? '1px solid var(--accent)' : '1px solid transparent',
           }}
         />
+      )}
+
+      {crgHelpOpen && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-label="Code Review Graph help"
+          onClick={() => setCrgHelpOpen(false)}
+          style={{
+            position: 'fixed',
+            inset: 0,
+            zIndex: 62,
+            background: 'color-mix(in srgb, var(--bg-0) 70%, black)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            padding: 20,
+          }}
+        >
+          <div
+            onClick={(event) => event.stopPropagation()}
+            style={{
+              width: 'min(96vw, 980px)',
+              maxHeight: '90vh',
+              borderRadius: 12,
+              border: '1px solid var(--border-bright)',
+              background: 'var(--bg-1)',
+              boxShadow: '0 22px 56px rgba(0, 0, 0, 0.42)',
+              display: 'flex',
+              flexDirection: 'column',
+              overflow: 'hidden',
+            }}
+          >
+            <div
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                padding: '12px 14px',
+                borderBottom: '1px solid var(--border)',
+              }}
+            >
+              <div style={{ display: 'grid', gap: 2 }}>
+                <div style={{
+                  fontSize: 14,
+                  color: 'var(--text-0)',
+                  fontFamily: 'var(--font-display)',
+                  fontWeight: 700,
+                  lineHeight: 1.3,
+                }}>
+                  Code Review Graph Guide
+                </div>
+                <div style={{ fontSize: 11, color: 'var(--text-2)' }}>
+                  What it does, when to use each command, and how it saves tokens.
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setCrgHelpOpen(false)}
+                aria-label="Close CRG help"
+                style={{
+                  width: 30,
+                  height: 30,
+                  borderRadius: 8,
+                  border: '1px solid var(--border)',
+                  background: 'var(--bg-2)',
+                  color: 'var(--text-1)',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  cursor: 'pointer',
+                }}
+              >
+                <X size={15} />
+              </button>
+            </div>
+
+            <div style={{ padding: 14, overflow: 'auto', display: 'grid', gap: 10 }}>
+              <div style={{ border: '1px solid var(--border)', borderRadius: 10, background: 'var(--bg-2)', padding: 10, display: 'grid', gap: 6 }}>
+                <div style={{ fontSize: 12, color: 'var(--text-0)' }}>What It Is</div>
+                <div style={{ fontSize: 11, color: 'var(--text-1)', lineHeight: 1.45 }}>
+                  CRG is a local structural code graph. It analyzes relationships (callers, callees, imports, tests, flows) so KODO can reason over concise graph facts instead of repeatedly sending large source chunks to the model.
+                </div>
+              </div>
+
+              <div style={{ border: '1px solid var(--border)', borderRadius: 10, background: 'var(--bg-2)', padding: 10, display: 'grid', gap: 8 }}>
+                <div style={{ fontSize: 12, color: 'var(--text-0)' }}>Commands + Examples</div>
+                {crgCommands.map((item) => (
+                  <div
+                    key={item.command}
+                    style={{
+                      border: '1px solid var(--border)',
+                      borderRadius: 8,
+                      background: 'var(--bg-1)',
+                      padding: '7px 8px',
+                      display: 'grid',
+                      gap: 4,
+                    }}
+                  >
+                    <div style={{ fontSize: 11, color: 'var(--accent)', fontFamily: 'var(--font-mono)' }}>{item.command}</div>
+                    <div style={{ fontSize: 11, color: 'var(--text-1)' }}>{item.use}</div>
+                    <div style={{ fontSize: 10, color: 'var(--text-2)', fontFamily: 'var(--font-mono)' }}>Example: {item.example}</div>
+                  </div>
+                ))}
+              </div>
+
+              <div style={{ border: '1px solid var(--border)', borderRadius: 10, background: 'var(--bg-2)', padding: 10, display: 'grid', gap: 8 }}>
+                <div style={{ fontSize: 12, color: 'var(--text-0)' }}>Scenario Playbooks (Order To Use)</div>
+                {crgScenarioGuides.map((scenario) => (
+                  <div
+                    key={scenario.title}
+                    style={{
+                      border: '1px solid var(--border)',
+                      borderRadius: 8,
+                      background: 'var(--bg-1)',
+                      padding: '7px 8px',
+                      display: 'grid',
+                      gap: 5,
+                    }}
+                  >
+                    <div style={{ fontSize: 11, color: 'var(--text-0)' }}>{scenario.title}</div>
+                    <div style={{ fontSize: 10, color: 'var(--text-2)' }}>{scenario.why}</div>
+                    <div style={{ display: 'grid', gap: 3 }}>
+                      {scenario.steps.map((step, index) => (
+                        <div key={`${scenario.title}-${step}-${index}`} style={{ fontSize: 10, color: 'var(--accent)', fontFamily: 'var(--font-mono)' }}>
+                          {index + 1}. {step}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+              </div>
+
+              <div style={{ border: '1px solid var(--border)', borderRadius: 10, background: 'var(--bg-2)', padding: 10, display: 'grid', gap: 6 }}>
+                <div style={{ fontSize: 12, color: 'var(--text-0)' }}>Benefits</div>
+                {crgBenefits.map((benefit, index) => (
+                  <div key={`benefit-${index}`} style={{ fontSize: 11, color: 'var(--text-1)', lineHeight: 1.45 }}>
+                    {index + 1}. {benefit}
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        </div>
       )}
 
       {agentGraphModalOpen && (

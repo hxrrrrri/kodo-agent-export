@@ -16,6 +16,32 @@ describe('MessageBubble', () => {
     expect(screen.getByText(/Hello world test/i)).toBeTruthy()
   })
 
+  it('shows a bottom copy action for assistant responses', () => {
+    render(<MessageBubble message={baseMsg} searchQuery="" />)
+    expect(screen.getByRole('button', { name: /copy response/i })).toBeTruthy()
+  })
+
+  it('renders dynamic usage metrics at the bottom of assistant messages', () => {
+    const usageMsg = {
+      ...baseMsg,
+      usage: {
+        input_tokens: 1234,
+        output_tokens: 567,
+        input_cache_read_tokens: 890,
+        input_cache_write_tokens: 12,
+        model: 'gpt-5',
+      },
+    }
+
+    render(<MessageBubble message={usageMsg} searchQuery="" />)
+
+    expect(screen.getByText(/↑ 1,234 tokens/)).toBeTruthy()
+    expect(screen.getByText(/↓ 567 tokens/)).toBeTruthy()
+    expect(screen.getByText(/Cache read 890/i)).toBeTruthy()
+    expect(screen.getByText(/Cache write 12/i)).toBeTruthy()
+    expect(screen.getByText(/gpt-5/i)).toBeTruthy()
+  })
+
   it('renders user message with correct role styling', () => {
     const userMsg = { ...baseMsg, role: 'user' as const, content: 'User says hi' }
     render(<MessageBubble message={userMsg} searchQuery="" />)
@@ -53,5 +79,14 @@ describe('MessageBubble', () => {
 
     expect(editSpy).toHaveBeenCalledWith('retry this prompt')
     expect(retrySpy).toHaveBeenCalledWith('retry this prompt')
+  })
+
+  it('keeps inline code readable without block-level copy boxes', () => {
+    const inlineMsg = { ...baseMsg, content: 'hello im ravi (`=` good boy)' }
+    render(<MessageBubble message={inlineMsg} searchQuery="" />)
+
+    expect(screen.getByText(/hello im ravi/i)).toBeTruthy()
+    expect(screen.getByText(/good boy/i)).toBeTruthy()
+    expect(screen.queryByText('COPY')).toBeNull()
   })
 })

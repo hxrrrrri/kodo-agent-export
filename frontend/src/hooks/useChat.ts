@@ -89,6 +89,117 @@ function extractImageAttachment(content: unknown): ImageAttachment | undefined {
   return undefined
 }
 
+function asFiniteNumber(value: unknown): number {
+  const parsed = Number(value)
+  return Number.isFinite(parsed) ? parsed : 0
+}
+
+function normalizeTimestamp(value: unknown): number {
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return value
+  }
+  if (typeof value === 'string' && value.trim()) {
+    const fromIso = Date.parse(value)
+    if (Number.isFinite(fromIso)) {
+      return fromIso
+    }
+    const fromNumeric = Number(value)
+    if (Number.isFinite(fromNumeric)) {
+      return fromNumeric
+    }
+  }
+  return Date.now()
+}
+
+function normalizeUsage(value: unknown): Message['usage'] | undefined {
+  if (!value || typeof value !== 'object') return undefined
+  const raw = value as Record<string, unknown>
+
+  const hasUsageField = (
+    raw.input_tokens !== undefined
+    || raw.output_tokens !== undefined
+    || raw.model !== undefined
+    || raw.input_cache_read_tokens !== undefined
+    || raw.input_cache_write_tokens !== undefined
+  )
+  if (!hasUsageField) return undefined
+
+  const usage: Message['usage'] = {
+    input_tokens: asFiniteNumber(raw.input_tokens),
+    output_tokens: asFiniteNumber(raw.output_tokens),
+    model: String(raw.model || '').trim() || 'unknown',
+  }
+
+  const cacheRead = asFiniteNumber(raw.input_cache_read_tokens)
+  const cacheWrite = asFiniteNumber(raw.input_cache_write_tokens)
+  if (cacheRead > 0) {
+    usage.input_cache_read_tokens = cacheRead
+  }
+  if (cacheWrite > 0) {
+    usage.input_cache_write_tokens = cacheWrite
+  }
+  return usage
+}
+
+function normalizeToolCalls(value: unknown): ToolCall[] | undefined {
+  if (!Array.isArray(value)) return undefined
+
+  const rows: ToolCall[] = []
+  for (const item of value) {
+    if (!item || typeof item !== 'object') continue
+    const raw = item as Record<string, unknown>
+
+    const rawInput = raw.input
+    const input = rawInput && typeof rawInput === 'object' && !Array.isArray(rawInput)
+      ? (rawInput as Record<string, unknown>)
+      : {}
+
+    const streamSource = Array.isArray(raw.streamLines)
+      ? raw.streamLines
+      : (Array.isArray(raw.stream_lines) ? raw.stream_lines : [])
+    const streamLines = streamSource
+      .map((line) => String(line || ''))
+      .filter((line) => line.length > 0)
+
+    const output = raw.output === undefined || raw.output === null ? undefined : String(raw.output)
+    const toolName = String(raw.tool || '').trim()
+    if (!toolName && !output && streamLines.length === 0) continue
+
+    const metadata = raw.metadata && typeof raw.metadata === 'object' && !Array.isArray(raw.metadata)
+      ? (raw.metadata as Record<string, unknown>)
+      : undefined
+
+    const entry: ToolCall = {
+      tool: toolName || 'tool',
+      input,
+    }
+
+    const toolUseId = String(raw.tool_use_id || raw.toolUseId || '').trim()
+    if (toolUseId) {
+      entry.tool_use_id = toolUseId
+    }
+    if (output !== undefined) {
+      entry.output = output
+    }
+    if (typeof raw.success === 'boolean') {
+      entry.success = raw.success
+    }
+    if (typeof raw.approved === 'boolean') {
+      entry.approved = raw.approved
+    }
+    if (streamLines.length > 0) {
+      entry.streamLines = streamLines
+    }
+    if (metadata) {
+      entry.metadata = metadata
+    }
+
+    rows.push(entry)
+  }
+
+  return rows.length > 0 ? rows : undefined
+}
+
 function buildStructuredContent(
   text: string,
   imageAttachment?: ImageAttachment,
@@ -296,17 +407,40 @@ export function useChat() {
       const data = await res.json()
       store.setSessionId(sessionId)
 
-      // Convert raw history to display messages
-      const messages: Message[] = data.messages
-        .filter((m: { role: string }) => m.role !== 'system')
-        .map((m: { role: string; content: unknown; advisor_review?: AdvisorReview }) => ({
-          id: genId(),
-          role: m.role as 'user' | 'assistant',
-          content: extractTextContent(m.content),
-          imageAttachment: extractImageAttachment(m.content),
-          advisorReview: m.role === 'assistant' ? (m.advisor_review || undefined) : undefined,
-          timestamp: Date.now(),
-        }))
+      // Convert raw history to display messages.
+      const rawMessages: unknown[] = Array.isArray(data.messages) ? data.messages : []
+      const messages: Message[] = rawMessages
+        .filter((item: unknown): item is Record<string, unknown> => Boolean(item && typeof item === 'object'))
+        .filter((item) => String(item.role || '').toLowerCase() !== 'system')
+        .map((item) => {
+          const role = String(item.role || '').toLowerCase() === 'user' ? 'user' : 'assistant'
+          const content = extractTextContent(item.content)
+          const imageFromContent = extractImageAttachment(item.content)
+          const directImage = item.image_attachment
+          const imageFromDirectAttachment = (() => {
+            if (!directImage || typeof directImage !== 'object') return undefined
+            const typed = directImage as Record<string, unknown>
+            const url = typeof typed.url === 'string' ? String(typed.url) : undefined
+            const data = typeof typed.data === 'string' ? String(typed.data) : undefined
+            const media_type = typeof typed.media_type === 'string' ? String(typed.media_type) : undefined
+            if (!url && !data) return undefined
+            return { url, data, media_type }
+          })()
+          const imageAttachment = imageFromContent || imageFromDirectAttachment
+
+          return {
+            id: genId(),
+            role,
+            content,
+            imageAttachment,
+            advisorReview: role === 'assistant' && item.advisor_review && typeof item.advisor_review === 'object'
+              ? (item.advisor_review as AdvisorReview)
+              : undefined,
+            toolCalls: role === 'assistant' ? normalizeToolCalls(item.tool_calls) : undefined,
+            usage: role === 'assistant' ? normalizeUsage(item.usage) : undefined,
+            timestamp: normalizeTimestamp(item.timestamp),
+          }
+        })
       store.setMessages(messages)
       const metadata = data.metadata as { mode?: string; project_dir?: string } | undefined
       const mode = normalizeClientMode(metadata?.mode || 'execute', useChatStore.getState().availableModes)

@@ -693,7 +693,15 @@ async def send_message(req: ChatRequest, request: Request):
 
             updated_history = list(history) + [
                 {"role": "user", "content": user_text},
-                {"role": "assistant", "content": result.text},
+                {
+                    "role": "assistant",
+                    "content": result.text,
+                    "usage": {
+                        "input_tokens": 0,
+                        "output_tokens": 0,
+                        "model": "command-router",
+                    },
+                },
             ]
             title = user_text[:60] + ("..." if len(user_text) > 60 else "")
             latest_mode = effective_mode
@@ -1438,6 +1446,16 @@ async def list_commands_endpoint(request: Request):
             {"name": "/mcp remove <name>", "description": "Remove MCP server entry"},
             {"name": "/mcp tools <name>", "description": "List configured MCP tools for server"},
             {"name": "/mcp call <name> <tool> [json_args]", "description": "Call MCP tool with optional JSON arguments"},
+            {"name": "/crg status", "description": "Show code-review-graph availability and graph stats"},
+            {"name": "/crg build [--full] [--postprocess full|minimal|none] [--repo <path>]", "description": "Build or update the code review graph"},
+            {"name": "/crg detect [base] [--detail standard|minimal] [--repo <path>]", "description": "Analyze change risk and review priorities"},
+            {"name": "/crg impact [base] [--depth N] [--repo <path>]", "description": "Compute blast radius for recent changes"},
+            {"name": "/crg review [base] [--depth N] [--repo <path>]", "description": "Build full review context for changes"},
+            {"name": "/crg query <pattern> <target> [--detail standard|minimal] [--repo <path>]", "description": "Run a structural graph query"},
+            {"name": "/crg search <query> [--kind Kind] [--limit N] [--repo <path>]", "description": "Semantic/keyword code graph search"},
+            {"name": "/crg arch [--repo <path>]", "description": "Generate architecture overview from graph"},
+            {"name": "/crg flows [--sort criticality|depth|node_count|name] [--limit N] [--repo <path>]", "description": "List execution flows"},
+            {"name": "/crg stats [--repo <path>]", "description": "Show graph node/edge stats"},
             {"name": "/agents", "description": "List spawned sub-agents"},
             {"name": "/agents spawn <goal>", "description": "Spawn sub-agent"},
             {"name": "/agents get <agent_id>", "description": "Get sub-agent details"},

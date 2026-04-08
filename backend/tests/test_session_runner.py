@@ -14,6 +14,22 @@ class FakeAgentLoop:
         self.model = model_override or 'gpt-4o'
 
     async def run(self, user_message, history, approval_callback=None):
+        yield {
+            'type': 'tool_start',
+            'tool': 'bash',
+            'tool_use_id': 'tool-1',
+            'input': {'command': 'echo hello'},
+            'approved': True,
+        }
+        yield {'type': 'tool_output', 'tool_use_id': 'tool-1', 'line': 'hello'}
+        yield {
+            'type': 'tool_result',
+            'tool': 'bash',
+            'tool_use_id': 'tool-1',
+            'output': 'hello',
+            'success': True,
+            'metadata': {'exit_code': 0},
+        }
         yield {'type': 'text', 'content': 'hello '}
         yield {'type': 'text', 'content': 'world'}
         yield {'type': 'done', 'usage': {'input_tokens': 10, 'output_tokens': 8, 'model': self.model}}
@@ -57,6 +73,11 @@ async def test_session_runner_stream_and_save(monkeypatch):
     saved_messages = saved['messages']
     assert isinstance(saved_messages, list)
     assert saved_messages[-1]['role'] == 'assistant'
+    assert saved_messages[-1]['content'] == 'hello world'
+    assert saved_messages[-1]['usage'] == {'input_tokens': 10, 'output_tokens': 8, 'model': 'gpt-4o'}
+    assert saved_messages[-1]['tool_calls'][0]['tool'] == 'bash'
+    assert saved_messages[-1]['tool_calls'][0]['output'] == 'hello'
+    assert saved_messages[-1]['tool_calls'][0]['stream_lines'] == ['hello']
     saved_metadata = saved['metadata']
     assert isinstance(saved_metadata, dict)
     assert saved_metadata.get('mode') == 'execute'

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
 import re
@@ -298,6 +299,7 @@ class SessionRunner:
     ) -> AsyncGenerator[dict[str, Any], None]:
         assistant_parts: list[str] = []
         usage_payload: dict[str, Any] | None = None
+        tool_calls: list[dict[str, Any]] = []
         error_message: str | None = None
         events_count = 0
 
@@ -322,6 +324,22 @@ class SessionRunner:
             return
 
         try:
+            def _resolve_tool_call_index(tool_use_id: str) -> int:
+                if tool_use_id:
+                    for idx, call in enumerate(tool_calls):
+                        if str(call.get("tool_use_id", "")) == tool_use_id:
+                            return idx
+                return len(tool_calls) - 1
+
+            def _safe_metadata(value: Any) -> dict[str, Any] | None:
+                if not isinstance(value, dict):
+                    return None
+                try:
+                    json.dumps(value)
+                    return value
+                except Exception:
+                    return {"raw": str(value)}
+
             async for event in agent.run(user_message, history, approval_callback=approval_callback):
                 events_count += 1
                 event_type = str(event.get("type", ""))
@@ -329,6 +347,58 @@ class SessionRunner:
                     assistant_parts.append(str(event.get("content", "")))
                 elif event_type == "done" and isinstance(event.get("usage"), dict):
                     usage_payload = event.get("usage")
+                elif event_type == "tool_start":
+                    tool_name = str(event.get("tool", "")).strip()
+                    tool_use_id = str(event.get("tool_use_id", "")).strip()
+                    raw_input = event.get("input", {})
+                    tool_input = raw_input if isinstance(raw_input, dict) else {}
+                    row: dict[str, Any] = {
+                        "tool": tool_name,
+                        "input": tool_input,
+                        "stream_lines": [],
+                    }
+                    if tool_use_id:
+                        row["tool_use_id"] = tool_use_id
+                    if "approved" in event:
+                        row["approved"] = bool(event.get("approved"))
+                    tool_calls.append(row)
+                elif event_type == "tool_output":
+                    line = str(event.get("line", ""))
+                    if line:
+                        tool_use_id = str(event.get("tool_use_id", "")).strip()
+                        idx = _resolve_tool_call_index(tool_use_id)
+                        if idx >= 0:
+                            row = dict(tool_calls[idx])
+                            stream_lines = row.get("stream_lines", [])
+                            if not isinstance(stream_lines, list):
+                                stream_lines = []
+                            stream_lines.append(line)
+                            row["stream_lines"] = stream_lines
+                            tool_calls[idx] = row
+                elif event_type == "tool_result":
+                    tool_use_id = str(event.get("tool_use_id", "")).strip()
+                    idx = _resolve_tool_call_index(tool_use_id)
+                    if idx < 0:
+                        row = {
+                            "tool": str(event.get("tool", "")).strip(),
+                            "input": {},
+                            "stream_lines": [],
+                        }
+                        if tool_use_id:
+                            row["tool_use_id"] = tool_use_id
+                        tool_calls.append(row)
+                        idx = len(tool_calls) - 1
+
+                    row = dict(tool_calls[idx])
+                    if tool_use_id and not row.get("tool_use_id"):
+                        row["tool_use_id"] = tool_use_id
+                    row["output"] = str(event.get("output", ""))
+                    if "success" in event:
+                        row["success"] = bool(event.get("success"))
+                    metadata = _safe_metadata(event.get("metadata"))
+                    if metadata is not None:
+                        row["metadata"] = metadata
+                    tool_calls[idx] = row
                 elif event_type == "error":
                     error_message = str(event.get("message", "Session runner failed"))
 
@@ -343,7 +413,15 @@ class SessionRunner:
 
         assistant_text = "".join(assistant_parts)
         updated_history = list(messages)
-        updated_history.append({"role": "assistant", "content": assistant_text})
+        assistant_entry: dict[str, Any] = {
+            "role": "assistant",
+            "content": assistant_text,
+        }
+        if isinstance(usage_payload, dict):
+            assistant_entry["usage"] = usage_payload
+        if tool_calls:
+            assistant_entry["tool_calls"] = tool_calls
+        updated_history.append(assistant_entry)
 
         existing_payload = await memory_manager.load_session_payload(session_id)
         existing_metadata = existing_payload.get("metadata", {}) if isinstance(existing_payload, dict) else {}
