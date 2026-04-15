@@ -7,7 +7,6 @@ import { vscDarkPlus } from 'react-syntax-highlighter/dist/esm/styles/prism'
 import { AdvisorReview, ArtifactItem, Message, PreviewItem } from '../store/chatStore'
 import { buildApiHeaders, parseApiError } from '../lib/api'
 import { ToolCallCard } from './ToolCallCard'
-import { KodoThinkingIndicator } from './kodothinkingindicator'
 
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -693,14 +692,7 @@ export function MessageBubble({
         )}
       </div>
 
-      {/* Thinking animation — shown only when streaming with no content/tools yet */}
-      {message.isStreaming
-        && !message.content
-        && !(message.toolCalls && message.toolCalls.length > 0)
-        && (
-          <KodoThinkingIndicator activeTool={null} />
-        )
-      }
+      {/* Thinking animation handled by FloatingTodoPanel / ChatWindow KodoThinkingIndicator */}
 
       {/* Advisor review */}
       {message.advisorReview && <AdvisorReviewCard review={message.advisorReview} />}

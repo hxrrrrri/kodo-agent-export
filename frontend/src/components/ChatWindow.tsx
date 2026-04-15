@@ -330,33 +330,18 @@ function FloatingTodoPanel({ items }: { items: TodoItem[] }) {
         }}
       >
         <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
-          {/* Kodo mini-orbit or static check */}
+          {/* Status dot */}
           {allDone ? (
             <svg width="11" height="11" viewBox="0 0 12 12" fill="none" style={{ display: 'block', flexShrink: 0 }}>
               <polyline points="2,6.5 5,9.5 10,3" stroke="var(--green)" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" />
             </svg>
           ) : (
-            <span style={{ position: 'relative', width: 11, height: 11, display: 'inline-flex', flexShrink: 0 }}>
-              <span style={{
-                position: 'absolute', inset: 0, borderRadius: '50%',
-                border: '1px solid var(--accent)', opacity: 0.35,
-                animation: 'pulse-accent 1.8s ease-in-out infinite',
-              }} />
-              <span style={{
-                position: 'absolute', inset: 0, display: 'flex',
-                alignItems: 'center', justifyContent: 'center',
-                animation: 'kodo-orbit 1.4s linear infinite',
-              }}>
-                <span style={{ width: 3, height: 3, borderRadius: '50%', background: 'var(--accent)', boxShadow: '0 0 3px var(--accent)' }} />
-              </span>
-              <span style={{
-                position: 'absolute', inset: 0, display: 'flex',
-                alignItems: 'center', justifyContent: 'center',
-                animation: 'kodo-logo-pulse 2s ease-in-out infinite',
-              }}>
-                <span style={{ width: 4, height: 4, borderRadius: '50%', background: 'var(--accent)' }} />
-              </span>
-            </span>
+            <span style={{
+              display: 'inline-block', width: 7, height: 7, borderRadius: '50%',
+              background: 'var(--accent)',
+              animation: 'pulse-accent 1.8s ease-in-out infinite',
+              flexShrink: 0,
+            }} />
           )}
           <span style={{
             fontFamily: 'var(--font-mono)',
@@ -406,27 +391,11 @@ function FloatingTodoPanel({ items }: { items: TodoItem[] }) {
                     </svg>
                   )}
                   {isActive && (
-                    <span style={{ position: 'relative', width: 11, height: 11, display: 'inline-flex', flexShrink: 0 }}>
-                      <span style={{
-                        position: 'absolute', inset: 0, borderRadius: '50%',
-                        border: '1px solid var(--accent)', opacity: 0.35,
-                        animation: 'pulse-accent 1.8s ease-in-out infinite',
-                      }} />
-                      <span style={{
-                        position: 'absolute', inset: 0, display: 'flex',
-                        alignItems: 'center', justifyContent: 'center',
-                        animation: 'kodo-orbit 1.4s linear infinite',
-                      }}>
-                        <span style={{ width: 3, height: 3, borderRadius: '50%', background: 'var(--accent)', boxShadow: '0 0 3px var(--accent)' }} />
-                      </span>
-                      <span style={{
-                        position: 'absolute', inset: 0, display: 'flex',
-                        alignItems: 'center', justifyContent: 'center',
-                        animation: 'kodo-logo-pulse 2s ease-in-out infinite',
-                      }}>
-                        <span style={{ width: 4, height: 4, borderRadius: '50%', background: 'var(--accent)' }} />
-                      </span>
-                    </span>
+                    <span style={{
+                      display: 'inline-block', width: 7, height: 7, borderRadius: '50%',
+                      background: 'var(--accent)',
+                      animation: 'pulse-accent 1.8s ease-in-out infinite',
+                    }} />
                   )}
                   {isPending && (
                     <span style={{
