@@ -33,6 +33,7 @@ class SettingsPayload(BaseModel):
     kodo_enable_prompt_cache: bool | None = None
     kodo_enable_auto_title: bool | None = None
     kodo_enable_caveman: bool | None = None
+    kodo_enable_krawlx: bool | None = None
 
 
 READABLE_KEYS = {
@@ -53,6 +54,7 @@ READABLE_KEYS = {
     "KODO_ENABLE_PROMPT_CACHE",
     "KODO_ENABLE_AUTO_TITLE",
     "KODO_ENABLE_CAVEMAN",
+    "KODO_ENABLE_KRAWLX",
     "MAX_CONTEXT_MESSAGES",
     "MAX_STREAMING_LINES",
     "REPL_SESSION_TIMEOUT_SECONDS",
@@ -117,5 +119,6 @@ async def update_settings(body: SettingsPayload, request: Request):
     apply("KODO_ENABLE_PROMPT_CACHE", body.kodo_enable_prompt_cache)
     apply("KODO_ENABLE_AUTO_TITLE", body.kodo_enable_auto_title)
     apply("KODO_ENABLE_CAVEMAN", body.kodo_enable_caveman)
+    apply("KODO_ENABLE_KRAWLX", body.kodo_enable_krawlx)
 
     return {"updated": updated}

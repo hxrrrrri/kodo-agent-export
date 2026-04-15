@@ -7,6 +7,7 @@ from .file_edit import FileEditTool
 from .grep import GrepTool
 from .glob_tool import GlobTool
 from .web_fetch import WebFetchTool
+from .krawlx import KrawlXTool
 from .web_search import WebSearchTool
 from .git_tool import GitTool
 from .task_create import TaskCreateTool
@@ -50,6 +51,7 @@ ALL_TOOLS: list[BaseTool] = [
     GrepTool(),
     GlobTool(),
     WebFetchTool(),
+    KrawlXTool(),
     WebSearchTool(),
     GitTool(),
     TaskCreateTool(),

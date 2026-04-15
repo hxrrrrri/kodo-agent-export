@@ -73,3 +73,24 @@ def test_settings_patch_caveman_roundtrip(tmp_path, monkeypatch):
 
     saved = env_path.read_text(encoding="utf-8")
     assert "KODO_ENABLE_CAVEMAN=1" in saved
+
+
+def test_settings_patch_krawlx_roundtrip(tmp_path, monkeypatch):
+    monkeypatch.delenv("API_AUTH_TOKEN", raising=False)
+    env_path = tmp_path / ".env"
+    env_path.write_text("KODO_ENABLE_KRAWLX=0\n", encoding="utf-8")
+    monkeypatch.setenv("KODO_SETTINGS_DOTENV_PATH", str(env_path))
+
+    patch_response = client.patch(
+        "/api/settings",
+        json={"kodo_enable_krawlx": True},
+    )
+    assert patch_response.status_code == 200
+    assert patch_response.json()["updated"]["kodo_enable_krawlx"] == "1"
+
+    get_response = client.get("/api/settings")
+    assert get_response.status_code == 200
+    assert get_response.json()["settings"]["kodo_enable_krawlx"] == "1"
+
+    saved = env_path.read_text(encoding="utf-8")
+    assert "KODO_ENABLE_KRAWLX=1" in saved

@@ -33,6 +33,8 @@ KNOWN_ROOT_COMMANDS = [
     "/stop",
     "/cost",
     "/search",
+    "/krawlx",
+    "/crawlx",
     "/git",
     "/session",
     "/memory",
@@ -65,6 +67,8 @@ COMMAND_REGISTRY: dict[str, str] = {
     "/stop": "Stop current response generation",
     "/cost": "Show token and estimated cost usage",
     "/search": "Search the web via configured providers",
+    "/krawlx": "Crawl a website via KrawlX secure crawler",
+    "/crawlx": "Alias for /krawlx",
     "/git": "Run safe, read-only git commands",
     "/session": "List and inspect sessions",
     "/memory": "Manage global memory notes",
@@ -169,6 +173,8 @@ def _help_text() -> str:
         "/stop - Stop current response generation",
         "/cost [days] - Show token and estimated cost usage",
         "/search <query> - Search the web and return top results",
+        "/krawlx <url> [--max-pages N] [--max-depth N] [--timeout S] [--same-origin true|false] [--obey-robots true|false] [--include regex1,regex2] [--exclude regex1,regex2] - Crawl website with KrawlX",
+        "/crawlx ... - Alias for /krawlx",
         "/git <subcommand> - Run safe read-only git command",
         "/git log|status|diff - Shortcut git commands",
         "/session - List recent sessions",
@@ -358,6 +364,24 @@ def _pop_int_option(args: list[str], flag: str, default: int) -> int:
         return int(raw)
     except ValueError as e:
         raise ValueError(f"{flag} must be an integer") from e
+
+
+def _parse_bool_option(value: str, flag: str) -> bool:
+    normalized = str(value or "").strip().lower()
+    if normalized in {"1", "true", "yes", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "off"}:
+        return False
+    raise ValueError(f"{flag} must be one of: true|false|1|0|yes|no|on|off")
+
+
+def _krawlx_usage() -> str:
+    return (
+        "Usage: /krawlx <url> "
+        "[--max-pages N] [--max-depth N] [--timeout S] "
+        "[--same-origin true|false] [--obey-robots true|false] "
+        "[--include regex1,regex2] [--exclude regex1,regex2]"
+    )
 
 
 def _resolve_crg_repo_root(explicit_repo: str | None, project_dir: str | None) -> str | None:
@@ -815,6 +839,108 @@ async def execute_command(message: str, session_id: str, project_dir: str | None
             return CommandExecutionResult(name="search", text="\n".join(lines))
 
         return CommandExecutionResult(name="search", text=tool_result.text)
+
+    if command in {"/krawlx", "/crawlx"}:
+        if not feature_enabled("KRAWLX"):
+            return CommandExecutionResult(
+                name="krawlx",
+                text="KrawlX is disabled. Enable KODO_ENABLE_KRAWLX=1 in settings.",
+            )
+
+        if not args:
+            return CommandExecutionResult(name="krawlx", text=_krawlx_usage())
+
+        seed_url = args[0].strip()
+        if not seed_url:
+            return CommandExecutionResult(name="krawlx", text=_krawlx_usage())
+
+        crawl_args = args[1:].copy()
+        try:
+            max_pages = _pop_int_option(crawl_args, "--max-pages", 20)
+            max_depth = _pop_int_option(crawl_args, "--max-depth", 2)
+
+            timeout_seconds = 10.0
+            timeout_raw = _pop_option(crawl_args, "--timeout")
+            if timeout_raw is not None:
+                timeout_seconds = float(timeout_raw)
+                if timeout_seconds <= 0:
+                    raise ValueError("--timeout must be a positive number")
+
+            same_origin = True
+            same_origin_raw = _pop_option(crawl_args, "--same-origin")
+            if same_origin_raw is not None:
+                same_origin = _parse_bool_option(same_origin_raw, "--same-origin")
+
+            obey_robots = True
+            obey_robots_raw = _pop_option(crawl_args, "--obey-robots")
+            if obey_robots_raw is not None:
+                obey_robots = _parse_bool_option(obey_robots_raw, "--obey-robots")
+
+            include_raw = _pop_option(crawl_args, "--include")
+            exclude_raw = _pop_option(crawl_args, "--exclude")
+        except ValueError as e:
+            return CommandExecutionResult(name="krawlx", text=f"{e}\n\n{_krawlx_usage()}")
+
+        if crawl_args:
+            extras = " ".join(crawl_args)
+            return CommandExecutionResult(
+                name="krawlx",
+                text=f"Unknown argument(s): {extras}\n\n{_krawlx_usage()}",
+            )
+
+        include_patterns = [item.strip() for item in str(include_raw or "").split(",") if item.strip()]
+        exclude_patterns = [item.strip() for item in str(exclude_raw or "").split(",") if item.strip()]
+
+        tool_result = await _run_tool_command(
+            "krawlx_crawl",
+            url=seed_url,
+            max_pages=max_pages,
+            max_depth=max_depth,
+            same_origin=same_origin,
+            obey_robots=obey_robots,
+            include_patterns=include_patterns,
+            exclude_patterns=exclude_patterns,
+            timeout_seconds=timeout_seconds,
+        )
+
+        payload_text = tool_result.text.strip()
+        if payload_text.startswith("{"):
+            try:
+                payload = json.loads(payload_text)
+            except json.JSONDecodeError:
+                return CommandExecutionResult(name="krawlx", text=tool_result.text)
+
+            if isinstance(payload, dict):
+                stats = payload.get("stats") if isinstance(payload.get("stats"), dict) else {}
+                fetched = int(stats.get("pages_fetched", 0) or 0)
+                visited = int(stats.get("visited_urls", 0) or 0)
+                blocked = int(stats.get("blocked_urls", 0) or 0)
+                errors = int(stats.get("errors", 0) or 0)
+
+                lines = [
+                    "KrawlX crawl completed.",
+                    f"Pages fetched: {fetched}",
+                    f"Visited URLs: {visited}",
+                    f"Blocked URLs: {blocked}",
+                    f"Errors: {errors}",
+                ]
+
+                pages = payload.get("pages")
+                if isinstance(pages, list) and pages:
+                    lines.append("")
+                    lines.append("Top pages:")
+                    for row in pages[:5]:
+                        if not isinstance(row, dict):
+                            continue
+                        page_url = str(row.get("url", "")).strip()
+                        if page_url:
+                            lines.append(f"- {page_url}")
+
+                lines.append("")
+                lines.append("Tip: increase --max-pages (up to 200 per run) for larger crawls.")
+                return CommandExecutionResult(name="krawlx", text="\n".join(lines))
+
+        return CommandExecutionResult(name="krawlx", text=tool_result.text)
 
     if command == "/git":
         if not args:

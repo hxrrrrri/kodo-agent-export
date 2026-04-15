@@ -840,6 +840,7 @@ export function Sidebar({ collapsed, onToggleCollapse }: SidebarProps) {
           kodo_enable_prompt_cache: toBool(settingsData.kodo_enable_prompt_cache),
           kodo_enable_auto_title: toBool(settingsData.kodo_enable_auto_title),
           kodo_enable_caveman: toBool(settingsData.kodo_enable_caveman),
+          kodo_enable_krawlx: toBool(settingsData.kodo_enable_krawlx),
         }),
       })
       if (!response.ok) {
@@ -2254,6 +2255,7 @@ export function Sidebar({ collapsed, onToggleCollapse }: SidebarProps) {
                   ['kodo_enable_prompt_cache', 'Prompt cache'],
                   ['kodo_enable_auto_title', 'Auto title'],
                   ['kodo_enable_caveman', 'Caveman toolkit'],
+                  ['kodo_enable_krawlx', 'KrawlX crawler'],
                   ['kodo_no_telemetry', 'Disable telemetry'],
                 ].map(([key, label]) => {
                   const value = String(settingsData[key] || '').toLowerCase()
