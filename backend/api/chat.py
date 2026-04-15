@@ -834,6 +834,14 @@ async def send_message(req: ChatRequest, request: Request):
             await publish_session_event(session_id, meta_event)
             yield f"data: {json.dumps(meta_event)}\n\n"
 
+            # Build and emit todo plan for commands
+            cmd_todos = _build_todo_plan(user_text, is_command=True)
+            if cmd_todos:
+                _todo_set_in_progress_if_needed(cmd_todos)
+                cmd_todo_plan_event = {"type": "todo_plan", "todos": _clone_todos(cmd_todos)}
+                await publish_session_event(session_id, cmd_todo_plan_event)
+                yield f"data: {json.dumps(cmd_todo_plan_event)}\n\n"
+
             try:
                 raw_overrides = getattr(request.state, "api_key_overrides", None)
                 safe_overrides = raw_overrides if isinstance(raw_overrides, dict) else {}
@@ -844,6 +852,11 @@ async def send_message(req: ChatRequest, request: Request):
                     api_key_overrides=safe_overrides,
                 )
             except Exception as e:
+                if cmd_todos:
+                    _todo_revert_in_progress_to_pending(cmd_todos)
+                    cmd_todo_err = {"type": "todo_update", "todos": _clone_todos(cmd_todos)}
+                    await publish_session_event(session_id, cmd_todo_err)
+                    yield f"data: {json.dumps(cmd_todo_err)}\n\n"
                 log_audit_event(
                     "chat_command_error",
                     request_id=request_id,
@@ -854,6 +867,13 @@ async def send_message(req: ChatRequest, request: Request):
                 await publish_session_event(session_id, error_event)
                 yield f"data: {json.dumps(error_event)}\n\n"
                 return
+
+            # Command parsed/executed — advance first todo
+            if cmd_todos:
+                _todo_advance_after_success(cmd_todos)
+                cmd_todo_adv = {"type": "todo_update", "todos": _clone_todos(cmd_todos)}
+                await publish_session_event(session_id, cmd_todo_adv)
+                yield f"data: {json.dumps(cmd_todo_adv)}\n\n"
 
             updated_history = list(history) + [
                 {"role": "user", "content": user_text},
@@ -899,6 +919,20 @@ async def send_message(req: ChatRequest, request: Request):
                     await publish_session_event(session_id, event)
                     yield f"data: {json.dumps(event)}\n\n"
 
+                    # Advance command todo on each tool success
+                    if cmd_todos and event.get("type") == "tool_result" and event.get("success"):
+                        if _todo_advance_after_success(cmd_todos):
+                            cmd_adv_event = {"type": "todo_update", "todos": _clone_todos(cmd_todos)}
+                            await publish_session_event(session_id, cmd_adv_event)
+                            yield f"data: {json.dumps(cmd_adv_event)}\n\n"
+
+                # Mark all complete after run_prompt stream finishes
+                if cmd_todos:
+                    _todo_mark_all_completed(cmd_todos)
+                    cmd_done_event = {"type": "todo_update", "todos": _clone_todos(cmd_todos)}
+                    await publish_session_event(session_id, cmd_done_event)
+                    yield f"data: {json.dumps(cmd_done_event)}\n\n"
+
                 advisor_review = _build_advisor_review(user_text, "".join(assistant_parts), latest_mode)
                 advisor_event = {"type": "advisor_review", "review": advisor_review}
                 await publish_session_event(session_id, advisor_event)
@@ -934,6 +968,13 @@ async def send_message(req: ChatRequest, request: Request):
                     usage=usage_event,
                 )
                 return
+
+            # Non-agentic command: mark all complete before done event
+            if cmd_todos:
+                _todo_mark_all_completed(cmd_todos)
+                cmd_final_event = {"type": "todo_update", "todos": _clone_todos(cmd_todos)}
+                await publish_session_event(session_id, cmd_final_event)
+                yield f"data: {json.dumps(cmd_final_event)}\n\n"
 
             await memory_manager.save_session(
                 session_id,
@@ -977,6 +1018,14 @@ async def send_message(req: ChatRequest, request: Request):
         await publish_session_event(session_id, meta_event)
         yield f"data: {json.dumps(meta_event)}\n\n"
 
+        # Build and emit the initial todo plan immediately after meta
+        active_todos = _build_todo_plan(user_text, is_command=False)
+        if active_todos:
+            _todo_set_in_progress_if_needed(active_todos)
+            todo_plan_event = {"type": "todo_plan", "todos": _clone_todos(active_todos)}
+            await publish_session_event(session_id, todo_plan_event)
+            yield f"data: {json.dumps(todo_plan_event)}\n\n"
+
         try:
             async for event in runner.stream(
                 session_id=session_id,
@@ -994,6 +1043,20 @@ async def send_message(req: ChatRequest, request: Request):
                 # Stream event to client
                 await publish_session_event(session_id, event)
                 yield f"data: {json.dumps(event)}\n\n"
+
+                # Advance todo after each successful tool result
+                if active_todos and event.get("type") == "tool_result" and event.get("success"):
+                    if _todo_advance_after_success(active_todos):
+                        todo_update_event = {"type": "todo_update", "todos": _clone_todos(active_todos)}
+                        await publish_session_event(session_id, todo_update_event)
+                        yield f"data: {json.dumps(todo_update_event)}\n\n"
+
+                # Mark all complete when agent signals done
+                if active_todos and event.get("type") == "done":
+                    if _todo_mark_all_completed(active_todos):
+                        todo_done_event = {"type": "todo_update", "todos": _clone_todos(active_todos)}
+                        await publish_session_event(session_id, todo_done_event)
+                        yield f"data: {json.dumps(todo_done_event)}\n\n"
 
             run_result = getattr(runner, "_last_result", None)
             provider_name = run_result.provider if run_result is not None else None
@@ -1043,6 +1106,12 @@ async def send_message(req: ChatRequest, request: Request):
                 pass
 
         except Exception as e:
+            # On error: revert in-progress item back to pending so user can retry
+            if active_todos:
+                _todo_revert_in_progress_to_pending(active_todos)
+                todo_err_event = {"type": "todo_update", "todos": _clone_todos(active_todos)}
+                await publish_session_event(session_id, todo_err_event)
+                yield f"data: {json.dumps(todo_err_event)}\n\n"
             log_audit_event("chat_send_error", request_id=request_id, session_id=session_id, error=str(e))
             error_event = {'type': 'error', 'message': _safe_error_message(e)}
             await publish_session_event(session_id, error_event)

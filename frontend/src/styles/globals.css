@@ -333,6 +333,146 @@
   --terminal-selection: rgba(155, 217, 255, 0.28);
 }
 
+:root[data-theme='fusion'] {
+  --bg-0: #080808;
+  --bg-1: #0d0d0d;
+  --bg-2: #141414;
+  --bg-3: #1e1e1e;
+  --border: rgba(255, 255, 255, 0.07);
+  --border-bright: rgba(255, 255, 255, 0.14);
+
+  --text-0: #f0ede8;
+  --text-1: #888880;
+  --text-2: #3e3e3a;
+
+  --accent: #c0553a;
+  --accent-dim: rgba(192, 85, 58, 0.14);
+  --accent-glow: rgba(192, 85, 58, 0.28);
+
+  --green: #5fc489;
+  --green-dim: rgba(95, 196, 137, 0.13);
+  --yellow: #c8a84b;
+  --yellow-dim: rgba(200, 168, 75, 0.14);
+  --red: #e8001d;
+  --red-dim: rgba(232, 0, 29, 0.15);
+  --blue: #7a9ebf;
+  --blue-dim: rgba(122, 158, 191, 0.13);
+
+  --logo-primary: #c0553a;
+  --logo-secondary: #c0553a;
+
+  --font-mono: 'DM Mono', 'Space Mono', 'JetBrains Mono', monospace;
+  --font-display: 'Cormorant Garamond', 'Syne', serif;
+
+  --radius: 8px;
+  --page-gradient: #080808;
+  --terminal-bg: #080808;
+  --terminal-fg: #888880;
+  --terminal-cursor: #c0553a;
+  --terminal-selection: rgba(192, 85, 58, 0.22);
+}
+
+/* Fusion ambient orb layer */
+.fusion-orb-layer {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 0;
+  overflow: hidden;
+}
+
+.fusion-orb {
+  position: absolute;
+  border-radius: 50%;
+  filter: blur(90px);
+  opacity: 0.22;
+  animation: fusion-orb-drift 24s ease-in-out infinite alternate;
+}
+
+.fusion-orb-1 {
+  width: 520px;
+  height: 520px;
+  background: radial-gradient(circle, #c0553a 0%, transparent 70%);
+  top: -160px;
+  left: -100px;
+  animation-duration: 22s;
+  animation-delay: 0s;
+}
+
+.fusion-orb-2 {
+  width: 400px;
+  height: 400px;
+  background: radial-gradient(circle, #7a9ebf 0%, transparent 70%);
+  bottom: -120px;
+  right: -60px;
+  animation-duration: 28s;
+  animation-delay: -9s;
+  opacity: 0.14;
+}
+
+.fusion-orb-3 {
+  width: 300px;
+  height: 300px;
+  background: radial-gradient(circle, #c8a84b 0%, transparent 70%);
+  top: 45%;
+  left: 55%;
+  animation-duration: 35s;
+  animation-delay: -16s;
+  opacity: 0.1;
+}
+
+@keyframes fusion-orb-drift {
+  0%   { transform: translate(0, 0) scale(1); }
+  33%  { transform: translate(40px, 30px) scale(1.06); }
+  66%  { transform: translate(-20px, 50px) scale(0.96); }
+  100% { transform: translate(30px, -20px) scale(1.03); }
+}
+
+/* Fusion glass sidebar + inputs */
+:root[data-theme='fusion'] aside {
+  background: rgba(13, 13, 13, 0.72);
+  backdrop-filter: blur(20px) saturate(120%);
+  -webkit-backdrop-filter: blur(20px) saturate(120%);
+  border-right: 1px solid rgba(255, 255, 255, 0.06);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
+}
+
+:root[data-theme='fusion'] button,
+:root[data-theme='fusion'] input,
+:root[data-theme='fusion'] select,
+:root[data-theme='fusion'] textarea {
+  transition:
+    background-color 240ms cubic-bezier(0.16, 1, 0.3, 1),
+    color 240ms cubic-bezier(0.16, 1, 0.3, 1),
+    border-color 240ms cubic-bezier(0.16, 1, 0.3, 1),
+    box-shadow 240ms cubic-bezier(0.16, 1, 0.3, 1),
+    opacity 240ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+/* Fusion scrollbar */
+:root[data-theme='fusion'] ::-webkit-scrollbar-thumb {
+  background: rgba(192, 85, 58, 0.28);
+}
+:root[data-theme='fusion'] ::-webkit-scrollbar-thumb:hover {
+  background: rgba(192, 85, 58, 0.48);
+}
+
+/* Fusion dvsy-reveal entry animation */
+@keyframes dvsy-reveal {
+  0%   { opacity: 0; transform: translateY(10px); filter: blur(4px); }
+  100% { opacity: 1; transform: translateY(0);    filter: blur(0); }
+}
+
+:root[data-theme='fusion'] .message-enter {
+  animation: dvsy-reveal 0.7s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+/* Fusion nothing-pulse on accent elements */
+@keyframes nothing-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(192, 85, 58, 0); }
+  50%       { box-shadow: 0 0 0 3px rgba(192, 85, 58, 0.22); }
+}
+
 *, *::before, *::after {
   box-sizing: border-box;
   margin: 0;

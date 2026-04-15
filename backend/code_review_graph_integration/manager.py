@@ -17,22 +17,29 @@ from typing import Any
 logger = logging.getLogger("kodo.crg")
 
 
+def _crg_import_error() -> str | None:
+    try:
+        import code_review_graph  # noqa: F401
+
+        return None
+    except Exception as exc:
+        return str(exc)
+
+
 def crg_available() -> bool:
     disabled = os.environ.get("CRG_DISABLED", "").strip().lower()
     if disabled in {"1", "true", "yes", "on"}:
         return False
-    try:
-        import code_review_graph  # noqa: F401
-
-        return True
-    except ImportError:
-        return False
+    return _crg_import_error() is None
 
 
 def _unavailable() -> dict[str, Any]:
+    detail = _crg_import_error()
+    suffix = f" Import error: {detail}" if detail else ""
     return {
         "status": "unavailable",
-        "error": "code-review-graph not installed. Run: pip install code-review-graph",
+        "error": "code-review-graph unavailable. Run: pip install code-review-graph tree-sitter tree-sitter-language-pack"
+        + suffix,
         "crg_available": False,
     }
 

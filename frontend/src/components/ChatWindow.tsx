@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState, KeyboardEvent, MouseEvent as ReactMouseEvent } from 'react'
-import { Send, Square, FolderOpen, Zap, ImagePlus, X, Search, Terminal as TerminalIcon, Paperclip, CircleAlert, BookOpen, Mic, Palette, Check } from 'lucide-react'
+import { Send, Square, FolderOpen, Zap, ImagePlus, X, Search, Terminal as TerminalIcon, Paperclip, CircleAlert, BookOpen, Mic, Palette, Check, ChevronDown, ChevronUp } from 'lucide-react'
 import { useChat } from '../hooks/useChat'
 import { MessageBubble } from './MessageBubble'
-import { CommandDefinition, THEME_OPTIONS, ThemeKey } from '../store/chatStore'
+import { CommandDefinition, THEME_OPTIONS, ThemeKey, TodoItem } from '../store/chatStore'
 import { TerminalPanel } from './TerminalPanel'
 import { NotebookPanel } from './NotebookPanel'
 import { KodoLogoMark } from './KodoLogoMark'
@@ -296,6 +296,162 @@ function decodeBase64ToBytes(data: string): Uint8Array {
   return Uint8Array.from(binary, (char) => char.charCodeAt(0))
 }
 
+// ─── Floating Todo Panel ──────────────────────────────────────────────────────
+function FloatingTodoPanel({ items }: { items: TodoItem[] }) {
+  const [collapsed, setCollapsed] = useState(false)
+  const allDone = items.length > 0 && items.every((i) => i.status === 'completed')
+  const doneCount = items.filter((i) => i.status === 'completed').length
+
+  if (items.length === 0) return null
+
+  return (
+    <div style={{
+      marginBottom: 8,
+      background: 'var(--bg-1)',
+      border: '1px solid var(--border)',
+      borderRadius: 'var(--radius)',
+      overflow: 'hidden',
+      animation: 'fadeIn 0.18s ease',
+    }}>
+      {/* Header row */}
+      <button
+        type="button"
+        onClick={() => setCollapsed((v) => !v)}
+        style={{
+          width: '100%',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          padding: '6px 10px',
+          background: 'none',
+          border: 'none',
+          cursor: 'pointer',
+          gap: 8,
+        }}
+      >
+        <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
+          {/* Kodo mini-orbit or static check */}
+          {allDone ? (
+            <svg width="11" height="11" viewBox="0 0 12 12" fill="none" style={{ display: 'block', flexShrink: 0 }}>
+              <polyline points="2,6.5 5,9.5 10,3" stroke="var(--green)" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
+          ) : (
+            <span style={{ position: 'relative', width: 11, height: 11, display: 'inline-flex', flexShrink: 0 }}>
+              <span style={{
+                position: 'absolute', inset: 0, borderRadius: '50%',
+                border: '1px solid var(--accent)', opacity: 0.35,
+                animation: 'pulse-accent 1.8s ease-in-out infinite',
+              }} />
+              <span style={{
+                position: 'absolute', inset: 0, display: 'flex',
+                alignItems: 'center', justifyContent: 'center',
+                animation: 'kodo-orbit 1.4s linear infinite',
+              }}>
+                <span style={{ width: 3, height: 3, borderRadius: '50%', background: 'var(--accent)', boxShadow: '0 0 3px var(--accent)' }} />
+              </span>
+              <span style={{
+                position: 'absolute', inset: 0, display: 'flex',
+                alignItems: 'center', justifyContent: 'center',
+                animation: 'kodo-logo-pulse 2s ease-in-out infinite',
+              }}>
+                <span style={{ width: 4, height: 4, borderRadius: '50%', background: 'var(--accent)' }} />
+              </span>
+            </span>
+          )}
+          <span style={{
+            fontFamily: 'var(--font-mono)',
+            fontSize: 11,
+            letterSpacing: '0.06em',
+            color: allDone ? 'var(--green)' : 'var(--text-1)',
+            textTransform: 'uppercase',
+          }}>
+            Todo
+          </span>
+          <span style={{
+            fontFamily: 'var(--font-mono)',
+            fontSize: 10,
+            color: 'var(--text-2)',
+            letterSpacing: '0.02em',
+          }}>
+            {doneCount}/{items.length}
+          </span>
+        </div>
+        <span style={{ color: 'var(--text-2)', display: 'flex', alignItems: 'center' }}>
+          {collapsed ? <ChevronDown size={12} /> : <ChevronUp size={12} />}
+        </span>
+      </button>
+
+      {/* Task rows */}
+      {!collapsed && (
+        <div style={{ padding: '2px 10px 8px', display: 'flex', flexDirection: 'column', gap: 2 }}>
+          {items.map((item) => {
+            const isCompleted = item.status === 'completed'
+            const isActive    = item.status === 'in_progress'
+            const isPending   = item.status === 'pending'
+            return (
+              <div
+                key={item.id}
+                style={{
+                  display: 'flex', alignItems: 'center', gap: 8,
+                  padding: '2px 0',
+                  opacity: isCompleted ? 0.5 : 1,
+                  transition: 'opacity 0.2s ease',
+                }}
+              >
+                {/* Glyph */}
+                <span style={{ flexShrink: 0, width: 14, display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}>
+                  {isCompleted && (
+                    <svg width="11" height="11" viewBox="0 0 12 12" fill="none" style={{ display: 'block' }}>
+                      <polyline points="2,6.5 5,9.5 10,3" stroke="var(--green)" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" />
+                    </svg>
+                  )}
+                  {isActive && (
+                    <span style={{ position: 'relative', width: 11, height: 11, display: 'inline-flex', flexShrink: 0 }}>
+                      <span style={{
+                        position: 'absolute', inset: 0, borderRadius: '50%',
+                        border: '1px solid var(--accent)', opacity: 0.35,
+                        animation: 'pulse-accent 1.8s ease-in-out infinite',
+                      }} />
+                      <span style={{
+                        position: 'absolute', inset: 0, display: 'flex',
+                        alignItems: 'center', justifyContent: 'center',
+                        animation: 'kodo-orbit 1.4s linear infinite',
+                      }}>
+                        <span style={{ width: 3, height: 3, borderRadius: '50%', background: 'var(--accent)', boxShadow: '0 0 3px var(--accent)' }} />
+                      </span>
+                      <span style={{
+                        position: 'absolute', inset: 0, display: 'flex',
+                        alignItems: 'center', justifyContent: 'center',
+                        animation: 'kodo-logo-pulse 2s ease-in-out infinite',
+                      }}>
+                        <span style={{ width: 4, height: 4, borderRadius: '50%', background: 'var(--accent)' }} />
+                      </span>
+                    </span>
+                  )}
+                  {isPending && (
+                    <span style={{
+                      display: 'inline-block', width: 8, height: 8,
+                      borderRadius: '50%', border: '1.5px solid var(--border-bright)', opacity: 0.45,
+                    }} />
+                  )}
+                </span>
+                {/* Label */}
+                <span style={{
+                  fontFamily: 'var(--font-mono)', fontSize: 11,
+                  color: isActive ? 'var(--text-0)' : 'var(--text-2)',
+                  lineHeight: 1.5, letterSpacing: '0.01em',
+                }}>
+                  {item.title}
+                </span>
+              </div>
+            )
+          })}
+        </div>
+      )}
+    </div>
+  )
+}
+
 export function ChatWindow({ editorOpen, onToggleEditor }: ChatWindowProps) {
   const {
     messages,
@@ -377,6 +533,17 @@ export function ChatWindow({ editorOpen, onToggleEditor }: ChatWindowProps) {
   const lastAdvisorVerdict = messages.length > 0
     ? (messages[messages.length - 1] as any)?.advisorVerdict?.verdict ?? null
     : null
+
+  // Active todo items — from the latest assistant message that has todos
+  const activeTodoItems: TodoItem[] = useMemo(() => {
+    for (let i = messages.length - 1; i >= 0; i--) {
+      const m = messages[i]
+      if (m.role === 'assistant' && m.todoItems && m.todoItems.length > 0) {
+        return m.todoItems
+      }
+    }
+    return []
+  }, [messages])
 
   const {
     observerMode,
@@ -774,7 +941,6 @@ export function ChatWindow({ editorOpen, onToggleEditor }: ChatWindowProps) {
     },
     onToolOutput: (line: string) => {
       setTerminalLines((prev) => [...prev, line])
-      setShowTerminal(true)
       setTerminalRunning(true)
     },
     onToolResult: (event: Record<string, unknown>) => {
@@ -2562,6 +2728,9 @@ export function ChatWindow({ editorOpen, onToggleEditor }: ChatWindowProps) {
         background: 'var(--bg-1)',
         flexShrink: 0,
       }}>
+        {/* Floating todo panel — above composer */}
+        <FloatingTodoPanel items={activeTodoItems} />
+
         <div ref={composerRef} style={{ position: 'relative' }}>
           {showCommandSuggestions && (
             <div style={{

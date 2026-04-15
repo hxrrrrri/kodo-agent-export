@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useState } from 'react'
 import { ToolCall } from '../store/chatStore'
 
 function escapeRegExp(value: string): string {
@@ -143,7 +143,6 @@ function SpinnerDot({ color }: { color: string }) {
 
 export function ToolCallCard({ tc, isLast, searchQuery }: { tc: ToolCall; isLast: boolean; searchQuery?: string }) {
   const [expanded, setExpanded] = useState(false)
-  const liveOutputRef = useRef<HTMLDivElement>(null)
   const color = TOOL_COLORS[tc.tool] || 'var(--text-2)'
   const preview = getInputPreview(tc.tool, tc.input)
   const diffText = getDiffText(tc)
@@ -156,7 +155,6 @@ export function ToolCallCard({ tc, isLast, searchQuery }: { tc: ToolCall; isLast
   )
   const hasResult = tc.output !== undefined
   const isRunning = !hasResult && isLast
-  const showLiveOutput = isRunning && Boolean(tc.streamLines && tc.streamLines.length > 0)
   const generatedImageUrl = (() => {
     if (tc.tool === 'image_gen' && typeof tc.metadata?.url === 'string') {
       return String(tc.metadata.url)
@@ -166,11 +164,6 @@ export function ToolCallCard({ tc, isLast, searchQuery }: { tc: ToolCall; isLast
     }
     return ''
   })()
-
-  useEffect(() => {
-    if (!showLiveOutput || !liveOutputRef.current) return
-    liveOutputRef.current.scrollTop = liveOutputRef.current.scrollHeight
-  }, [showLiveOutput, tc.streamLines?.length])
 
   return (
     <div
@@ -190,11 +183,11 @@ export function ToolCallCard({ tc, isLast, searchQuery }: { tc: ToolCall; isLast
           alignItems: 'center',
           gap: 6,
           padding: '2px 0',
-          cursor: hasResult || isRunning ? 'pointer' : 'default',
+          cursor: hasResult ? 'pointer' : 'default',
           userSelect: 'none',
           minWidth: 0,
         }}
-        onClick={() => (hasResult || showLiveOutput) && setExpanded(!expanded)}
+        onClick={() => hasResult && setExpanded(!expanded)}
         title={hasResult ? (expanded ? 'Collapse' : 'Expand output') : undefined}
       >
         {/* Status indicator */}
@@ -241,29 +234,6 @@ export function ToolCallCard({ tc, isLast, searchQuery }: { tc: ToolCall; isLast
           </span>
         )}
       </div>
-
-      {/* Live stream output (while running) */}
-      {showLiveOutput && (
-        <div
-          ref={liveOutputRef}
-          style={{
-            fontFamily: 'var(--font-mono)',
-            fontSize: 10,
-            color: 'var(--text-2)',
-            paddingLeft: 13,
-            maxHeight: 100,
-            overflowY: 'auto',
-            whiteSpace: 'pre-wrap',
-            wordBreak: 'break-word',
-            lineHeight: 1.4,
-            marginBottom: 2,
-          }}
-        >
-          {tc.streamLines?.slice(-10).map((line, idx) => (
-            <div key={`${line}-${idx}`} style={{ opacity: 0.8 }}>{line}</div>
-          ))}
-        </div>
-      )}
 
       {/* Expanded details panel */}
       {expanded && hasResult && (

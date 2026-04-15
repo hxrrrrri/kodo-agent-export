@@ -94,9 +94,16 @@ export default function App() {
       height: '100vh',
       width: '100vw',
       overflow: 'hidden',
-      background: 'var(--bg-0)',
+      background: theme === 'fusion' ? 'transparent' : 'var(--bg-0)',
       position: 'relative',
     }} ref={rootRef}>
+      {theme === 'fusion' && (
+        <div className="fusion-orb-layer" aria-hidden="true">
+          <div className="fusion-orb fusion-orb-1" />
+          <div className="fusion-orb fusion-orb-2" />
+          <div className="fusion-orb fusion-orb-3" />
+        </div>
+      )}
       <Sidebar collapsed={sidebarCollapsed} onToggleCollapse={toggleSidebar} />
 
       <div style={{ flex: 1, minWidth: 0, display: 'flex', height: '100%' }}>

@@ -11,6 +11,7 @@ export const THEME_KEYS = [
   'nord',
   'mono',
   'glass',
+  'fusion',
 ] as const
 
 export type ThemeKey = (typeof THEME_KEYS)[number]
@@ -26,6 +27,7 @@ export const THEME_TONES: Record<ThemeKey, 'dark' | 'light'> = {
   nord: 'light',
   mono: 'dark',
   glass: 'dark',
+  fusion: 'dark',
 }
 
 export const THEME_OPTIONS: Array<{
@@ -43,6 +45,7 @@ export const THEME_OPTIONS: Array<{
   { key: 'nord', label: 'Arctic Nord', description: 'Blue-gray minimal theme with high clarity.' },
   { key: 'mono', label: 'Monochrome Slate', description: 'Neutral grayscale with restrained accents.' },
   { key: 'glass', label: 'Glassy Aurora', description: 'Premium glassmorphism with layered depth.' },
+  { key: 'fusion', label: 'Fusion', description: 'DVSY editorial dark × Nothing OS × Apple Glassmorphism.' },
 ]
 
 export type MessageRole = 'user' | 'assistant' | 'system'
