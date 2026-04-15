@@ -4,19 +4,13 @@ import argparse
 import asyncio
 import json
 import os
-import sys
 import statistics
 import time
 from dataclasses import asdict, dataclass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from pathlib import Path
 from threading import Thread
 from typing import Any
 from urllib.parse import urlparse
-
-BACKEND_ROOT = Path(__file__).resolve().parents[1]
-if str(BACKEND_ROOT) not in sys.path:
-    sys.path.insert(0, str(BACKEND_ROOT))
 
 from privacy import build_httpx_async_client
 from tools.krawlx import KrawlXTool
@@ -112,8 +106,12 @@ def _start_synthetic_server(routes: dict[str, str]) -> tuple[ThreadingHTTPServer
     worker = Thread(target=server.serve_forever, daemon=True)
     worker.start()
 
-    host, port = server.server_address
-    base_url = f"http://{host}:{port}/"
+    host_value, port = server.server_address
+    if isinstance(host_value, bytes):
+        host_text = host_value.decode("utf-8", errors="replace")
+    else:
+        host_text = str(host_value)
+    base_url = f"http://{host_text}:{port}/"
     return server, worker, base_url
 
 

@@ -173,7 +173,7 @@ def _help_text() -> str:
         "/stop - Stop current response generation",
         "/cost [days] - Show token and estimated cost usage",
         "/search <query> - Search the web and return top results",
-        "/krawlx <url> [--max-pages N] [--max-depth N] [--timeout S] [--same-origin true|false] [--obey-robots true|false] [--include regex1,regex2] [--exclude regex1,regex2] - Crawl website with KrawlX",
+        "/krawlx <url> [--max-pages N] [--max-depth N] [--timeout S] [--provider auto|native|firecrawl] [--same-origin true|false] [--obey-robots true|false] [--include regex1,regex2] [--exclude regex1,regex2] - Crawl website with KrawlX",
         "/crawlx ... - Alias for /krawlx",
         "/git <subcommand> - Run safe read-only git command",
         "/git log|status|diff - Shortcut git commands",
@@ -379,6 +379,7 @@ def _krawlx_usage() -> str:
     return (
         "Usage: /krawlx <url> "
         "[--max-pages N] [--max-depth N] [--timeout S] "
+        "[--provider auto|native|firecrawl] "
         "[--same-origin true|false] [--obey-robots true|false] "
         "[--include regex1,regex2] [--exclude regex1,regex2]"
     )
@@ -625,7 +626,12 @@ def _resolve_command_path(raw_path: str, project_dir: str | None) -> str:
     return str((base / path).resolve())
 
 
-async def execute_command(message: str, session_id: str, project_dir: str | None = None) -> CommandExecutionResult:
+async def execute_command(
+    message: str,
+    session_id: str,
+    project_dir: str | None = None,
+    api_key_overrides: dict[str, str] | None = None,
+) -> CommandExecutionResult:
     raw = message.strip()
 
     try:
@@ -814,7 +820,12 @@ async def execute_command(message: str, session_id: str, project_dir: str | None
         if not query:
             return CommandExecutionResult(name="search", text="Usage: /search <query>")
 
-        tool_result = await _run_tool_command("web_search", query=query, num_results=5)
+        tool_result = await _run_tool_command(
+            "web_search",
+            query=query,
+            num_results=5,
+            api_key_overrides=api_key_overrides or {},
+        )
         if tool_result.name == "web_search" and tool_result.text.strip().startswith("["):
             try:
                 data = json.loads(tool_result.text)
@@ -871,6 +882,13 @@ async def execute_command(message: str, session_id: str, project_dir: str | None
             if same_origin_raw is not None:
                 same_origin = _parse_bool_option(same_origin_raw, "--same-origin")
 
+            provider = "auto"
+            provider_raw = _pop_option(crawl_args, "--provider")
+            if provider_raw is not None:
+                provider = str(provider_raw).strip().lower()
+                if provider not in {"auto", "native", "firecrawl"}:
+                    raise ValueError("--provider must be one of: auto|native|firecrawl")
+
             obey_robots = True
             obey_robots_raw = _pop_option(crawl_args, "--obey-robots")
             if obey_robots_raw is not None:
@@ -898,9 +916,11 @@ async def execute_command(message: str, session_id: str, project_dir: str | None
             max_depth=max_depth,
             same_origin=same_origin,
             obey_robots=obey_robots,
+            provider=provider,
             include_patterns=include_patterns,
             exclude_patterns=exclude_patterns,
             timeout_seconds=timeout_seconds,
+            api_key_overrides=api_key_overrides or {},
         )
 
         payload_text = tool_result.text.strip()
@@ -919,6 +939,7 @@ async def execute_command(message: str, session_id: str, project_dir: str | None
 
                 lines = [
                     "KrawlX crawl completed.",
+                    f"Provider: {str(stats.get('provider', 'krawlx_native') or 'krawlx_native')}",
                     f"Pages fetched: {fetched}",
                     f"Visited URLs: {visited}",
                     f"Blocked URLs: {blocked}",
@@ -937,7 +958,7 @@ async def execute_command(message: str, session_id: str, project_dir: str | None
                             lines.append(f"- {page_url}")
 
                 lines.append("")
-                lines.append("Tip: increase --max-pages (up to 200 per run) for larger crawls.")
+                lines.append("Tip: increase --max-pages (up to configured hard limit, default 500) for larger crawls.")
                 return CommandExecutionResult(name="krawlx", text="\n".join(lines))
 
         return CommandExecutionResult(name="krawlx", text=tool_result.text)

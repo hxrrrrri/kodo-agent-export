@@ -80,6 +80,7 @@ type StoredApiKeys = {
   GEMINI_API_KEY?: string
   DEEPSEEK_API_KEY?: string
   GROQ_API_KEY?: string
+  FIRECRAWL_API_KEY?: string
 }
 
 const API_KEY_STORAGE = 'kodo_api_keys'
@@ -870,6 +871,7 @@ export function Sidebar({ collapsed, onToggleCollapse }: SidebarProps) {
         GEMINI_API_KEY: 'gemini',
         DEEPSEEK_API_KEY: 'deepseek',
         GROQ_API_KEY: 'groq',
+        FIRECRAWL_API_KEY: 'firecrawl',
       }
       setApiKeyStatus((prev) => ({
         ...prev,
@@ -2407,6 +2409,7 @@ export function Sidebar({ collapsed, onToggleCollapse }: SidebarProps) {
                   ['GEMINI_API_KEY', 'Gemini'],
                   ['DEEPSEEK_API_KEY', 'DeepSeek'],
                   ['GROQ_API_KEY', 'Groq'],
+                  ['FIRECRAWL_API_KEY', 'Firecrawl'],
                 ] as Array<[keyof StoredApiKeys, string]>).map(([key, label]) => (
                   <div key={key} style={{ display: 'grid', gap: 4 }}>
                     <div style={{ fontSize: 11, color: 'var(--text-2)' }}>{label}</div>

@@ -107,16 +107,16 @@ class CavemanTool(BaseTool):
                 return ToolResult(success=False, output="", error="text is required for compress_text")
 
             result = compress_markdown(source, mode=normalized_mode)
-            stats = build_stats(source, result)
+            text_stats = build_stats(source, result)
             return ToolResult(
                 success=True,
                 output=result,
                 metadata={
                     "mode": normalized_mode,
-                    "original_words": stats.original_words,
-                    "compressed_words": stats.compressed_words,
-                    "saved_words": stats.saved_words,
-                    "saved_percent": stats.saved_percent,
+                    "original_words": text_stats.original_words,
+                    "compressed_words": text_stats.compressed_words,
+                    "saved_words": text_stats.saved_words,
+                    "saved_percent": text_stats.saved_percent,
                 },
             )
 
@@ -133,13 +133,14 @@ class CavemanTool(BaseTool):
             except Exception as exc:
                 return ToolResult(success=False, output="", error=str(exc))
 
-            stats = payload.get("stats", {})
+            raw_stats = payload.get("stats")
+            file_stats = raw_stats if isinstance(raw_stats, dict) else {}
             return ToolResult(
                 success=True,
                 output=(
                     f"Compressed file: {payload.get('path')}\n"
                     f"Backup: {payload.get('backup_path') or '(not created)'}\n"
-                    f"Saved words: {stats.get('saved_words')} ({stats.get('saved_percent')}%)"
+                    f"Saved words: {file_stats.get('saved_words')} ({file_stats.get('saved_percent')}%)"
                 ),
                 metadata=payload,
             )
@@ -150,16 +151,16 @@ class CavemanTool(BaseTool):
             if not source_original.strip() or not source_compressed.strip():
                 return ToolResult(success=False, output="", error="original and compressed are required for validate")
 
-            payload = validate_compression(source_original, source_compressed)
+            validation_result = validate_compression(source_original, source_compressed)
             return ToolResult(
-                success=payload.is_valid,
+                success=validation_result.is_valid,
                 output=(
                     "Compression validation passed."
-                    if payload.is_valid
+                    if validation_result.is_valid
                     else "Compression validation failed."
                 ),
-                error=None if payload.is_valid else "; ".join(payload.errors),
-                metadata={"warnings": payload.warnings},
+                error=None if validation_result.is_valid else "; ".join(validation_result.errors),
+                metadata={"warnings": validation_result.warnings},
             )
 
         return ToolResult(

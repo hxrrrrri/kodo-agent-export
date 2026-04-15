@@ -82,7 +82,7 @@ async def test_crawlx_alias_parses_options_and_calls_krawlx_tool(monkeypatch):
     monkeypatch.setattr(commands_router, "_run_tool_command", fake_run_tool_command)
 
     result = await commands_router.execute_command(
-        "/crawlx https://example.com --max-pages 12 --max-depth 3 --timeout 8 --same-origin false --obey-robots false --include docs,blog --exclude logout",
+        "/crawlx https://example.com --max-pages 12 --max-depth 3 --timeout 8 --provider firecrawl --same-origin false --obey-robots false --include docs,blog --exclude logout",
         session_id="s-v8",
         project_dir=None,
     )
@@ -97,6 +97,7 @@ async def test_crawlx_alias_parses_options_and_calls_krawlx_tool(monkeypatch):
     assert kwargs.get("max_pages") == 12
     assert kwargs.get("max_depth") == 3
     assert kwargs.get("timeout_seconds") == 8.0
+    assert kwargs.get("provider") == "firecrawl"
     assert kwargs.get("same_origin") is False
     assert kwargs.get("obey_robots") is False
     assert kwargs.get("include_patterns") == ["docs", "blog"]

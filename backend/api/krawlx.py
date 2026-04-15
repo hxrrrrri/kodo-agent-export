@@ -29,6 +29,18 @@ def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _extract_pages_fetched(payload: dict[str, object]) -> int:
+    stats_payload = payload.get("stats")
+    if not isinstance(stats_payload, dict):
+        return 0
+
+    raw_value = stats_payload.get("pages_fetched", 0)
+    try:
+        return int(raw_value or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
 async def _validate_callback_target(url: str) -> str:
     guard = KrawlXTool()
     normalized = guard._normalize_url(url)
@@ -119,6 +131,8 @@ async def crawl_website(body: KrawlXCrawlRequest, request: Request):
             raise HTTPException(status_code=400, detail=f"Invalid callback_url: {exc}") from exc
 
     tool = KrawlXTool()
+    raw_overrides = getattr(request.state, "api_key_overrides", None)
+    safe_overrides = raw_overrides if isinstance(raw_overrides, dict) else {}
     result = await tool.execute(
         url=body.url,
         max_pages=body.max_pages,
@@ -128,6 +142,7 @@ async def crawl_website(body: KrawlXCrawlRequest, request: Request):
         include_patterns=body.include_patterns,
         exclude_patterns=body.exclude_patterns,
         timeout_seconds=body.timeout_seconds,
+        api_key_overrides=safe_overrides,
     )
 
     if not result.success:
@@ -186,7 +201,7 @@ async def crawl_website(body: KrawlXCrawlRequest, request: Request):
     log_audit_event(
         "krawlx_api_completed",
         seed_url=body.url,
-        pages_fetched=int(((payload.get("stats") or {}).get("pages_fetched", 0)) if isinstance(payload, dict) else 0),
+        pages_fetched=_extract_pages_fetched(payload),
     )
 
     return response_payload

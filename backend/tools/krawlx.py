@@ -82,6 +82,11 @@ def _normalize_space(text: str) -> str:
     return re.sub(r"\s+", " ", text or "").strip()
 
 
+def _strip_html_tags(text: str) -> str:
+    without_tags = re.sub(r"<[^>]+>", " ", text or "")
+    return _normalize_space(without_tags)
+
+
 def _canonical_host(host: str) -> str:
     lowered = (host or "").strip().rstrip(".").lower()
     if not lowered:
@@ -217,6 +222,12 @@ class KrawlXTool(BaseTool):
             min_value=1,
             max_value=200,
         )
+        self._hard_max_pages = _env_int(
+            "KRAWLX_MAX_PAGES_HARD_LIMIT",
+            500,
+            min_value=1,
+            max_value=5000,
+        )
         self._default_max_depth = _env_int(
             "KRAWLX_MAX_DEPTH_DEFAULT",
             2,
@@ -265,6 +276,218 @@ class KrawlXTool(BaseTool):
         }
 
         self._user_agent = os.getenv("KRAWLX_USER_AGENT", "KrawlXBot/1.0 (+security-first)").strip() or "KrawlXBot/1.0"
+        self._provider_mode = os.getenv("KRAWLX_PROVIDER", "auto").strip().lower() or "auto"
+        if self._provider_mode not in {"auto", "native", "firecrawl"}:
+            self._provider_mode = "auto"
+        self._firecrawl_fallback = _env_bool("KRAWLX_FIRECRAWL_FALLBACK", True)
+        self._firecrawl_base_url = os.getenv("FIRECRAWL_BASE_URL", "https://api.firecrawl.dev").strip().rstrip("/") or "https://api.firecrawl.dev"
+        self._firecrawl_poll_timeout_seconds = _env_int(
+            "KRAWLX_FIRECRAWL_POLL_TIMEOUT_SECONDS",
+            120,
+            min_value=15,
+            max_value=600,
+        )
+
+    def _resolve_firecrawl_api_key(
+        self,
+        *,
+        api_key_overrides: dict[str, Any] | None,
+        explicit_api_key: str | None,
+    ) -> str:
+        direct = str(explicit_api_key or "").strip()
+        if direct:
+            return direct
+
+        overrides = api_key_overrides if isinstance(api_key_overrides, dict) else {}
+        from_overrides = str(overrides.get("FIRECRAWL_API_KEY", "")).strip()
+        if from_overrides:
+            return from_overrides
+
+        return os.getenv("FIRECRAWL_API_KEY", "").strip()
+
+    def _extract_firecrawl_crawl_id(self, payload: Any) -> str:
+        if not isinstance(payload, dict):
+            return ""
+
+        direct = str(payload.get("id", "") or payload.get("jobId", "")).strip()
+        if direct:
+            return direct
+
+        data = payload.get("data")
+        if isinstance(data, dict):
+            nested = str(data.get("id", "") or data.get("jobId", "")).strip()
+            if nested:
+                return nested
+        return ""
+
+    def _extract_firecrawl_rows(self, payload: Any) -> list[dict[str, Any]]:
+        if not isinstance(payload, dict):
+            return []
+
+        data = payload.get("data")
+        candidates: Any = None
+        if isinstance(data, list):
+            candidates = data
+        elif isinstance(data, dict):
+            if isinstance(data.get("data"), list):
+                candidates = data.get("data")
+            elif isinstance(data.get("pages"), list):
+                candidates = data.get("pages")
+        elif isinstance(payload.get("pages"), list):
+            candidates = payload.get("pages")
+
+        rows: list[dict[str, Any]] = []
+        if isinstance(candidates, list):
+            for item in candidates:
+                if isinstance(item, dict):
+                    rows.append(item)
+        return rows
+
+    def _firecrawl_row_to_page(self, row: dict[str, Any]) -> dict[str, Any] | None:
+        metadata = row.get("metadata") if isinstance(row.get("metadata"), dict) else {}
+
+        url = _normalize_space(
+            str(
+                metadata.get("sourceURL", "")
+                or metadata.get("url", "")
+                or row.get("sourceURL", "")
+                or row.get("url", "")
+            )
+        )
+        if not url:
+            return None
+
+        title = _normalize_space(str(metadata.get("title", "") or row.get("title", "")))
+
+        raw_excerpt = str(
+            row.get("markdown", "")
+            or row.get("content", "")
+            or row.get("extract", "")
+            or row.get("text", "")
+            or row.get("html", "")
+        )
+        excerpt = _normalize_space(raw_excerpt)
+        if "<" in excerpt and ">" in excerpt:
+            excerpt = _strip_html_tags(excerpt)
+        if len(excerpt) > self._max_text_chars:
+            excerpt = excerpt[: self._max_text_chars].rstrip() + "..."
+
+        raw_depth = metadata.get("depth", row.get("depth", 0))
+        try:
+            depth = int(raw_depth)
+        except (TypeError, ValueError):
+            depth = 0
+
+        raw_status = row.get("statusCode", metadata.get("statusCode", 200))
+        try:
+            status_code = int(raw_status)
+        except (TypeError, ValueError):
+            status_code = 200
+
+        return {
+            "url": url,
+            "title": title,
+            "status_code": status_code,
+            "depth": max(0, depth),
+            "text_excerpt": excerpt,
+        }
+
+    async def _crawl_with_firecrawl(
+        self,
+        *,
+        seed_url: str,
+        api_key: str,
+        max_pages: int,
+        max_depth: int,
+        timeout_seconds: float,
+    ) -> dict[str, Any]:
+        headers = {
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        }
+        start_payload = {
+            "url": seed_url,
+            "crawlerOptions": {
+                "limit": max_pages,
+                "maxDiscoveryDepth": max_depth,
+            },
+        }
+
+        base_timeout = max(20.0, min(120.0, timeout_seconds * 3))
+        async with build_httpx_async_client(timeout=base_timeout, headers=headers) as client:
+            start_response = await client.post(f"{self._firecrawl_base_url}/v1/crawl", json=start_payload)
+            if start_response.status_code >= 400:
+                raise ValueError(
+                    f"Firecrawl crawl start failed: HTTP {start_response.status_code}"
+                )
+
+            start_data = start_response.json() if start_response.content else {}
+            crawl_id = self._extract_firecrawl_crawl_id(start_data)
+
+            if not crawl_id:
+                rows = self._extract_firecrawl_rows(start_data)
+                pages: list[dict[str, Any]] = []
+                for row in rows:
+                    page = self._firecrawl_row_to_page(row)
+                    if page is not None:
+                        pages.append(page)
+
+                pages = pages[:max_pages]
+                return {
+                    "seed_url": seed_url,
+                    "pages": pages,
+                    "blocked": [],
+                    "errors": [],
+                    "stats": {
+                        "provider": "firecrawl",
+                        "pages_fetched": len(pages),
+                        "visited_urls": len(pages),
+                        "blocked_urls": 0,
+                        "errors": 0,
+                    },
+                }
+
+            deadline = time.monotonic() + self._firecrawl_poll_timeout_seconds
+            while time.monotonic() < deadline:
+                status_response = await client.get(f"{self._firecrawl_base_url}/v1/crawl/{crawl_id}")
+                if status_response.status_code >= 400:
+                    raise ValueError(
+                        f"Firecrawl status check failed: HTTP {status_response.status_code}"
+                    )
+
+                payload = status_response.json() if status_response.content else {}
+                status = _normalize_space(str(payload.get("status", ""))).lower()
+                rows = self._extract_firecrawl_rows(payload)
+
+                if status in {"failed", "error", "cancelled"}:
+                    raise ValueError(f"Firecrawl crawl ended with status: {status}")
+
+                if status in {"completed", "done", "success"} or (rows and not status):
+                    pages: list[dict[str, Any]] = []
+                    for row in rows:
+                        page = self._firecrawl_row_to_page(row)
+                        if page is not None:
+                            pages.append(page)
+
+                    pages = pages[:max_pages]
+                    return {
+                        "seed_url": seed_url,
+                        "pages": pages,
+                        "blocked": [],
+                        "errors": [],
+                        "stats": {
+                            "provider": "firecrawl",
+                            "crawl_id": crawl_id,
+                            "pages_fetched": len(pages),
+                            "visited_urls": len(pages),
+                            "blocked_urls": 0,
+                            "errors": 0,
+                        },
+                    }
+
+                await asyncio.sleep(1.0)
+
+        raise ValueError("Firecrawl crawl polling timed out")
 
     def _normalize_url(self, raw_url: str) -> str:
         candidate = (raw_url or "").strip()
@@ -552,7 +775,21 @@ class KrawlXTool(BaseTool):
         try:
             seed_url = self._normalize_url(url)
 
-            effective_max_pages = max(1, min(200, int(max_pages or self._default_max_pages)))
+            provider = _normalize_space(str(kwargs.get("provider", self._provider_mode))).lower() or "auto"
+            if provider not in {"auto", "native", "firecrawl"}:
+                return ToolResult(
+                    success=False,
+                    output="",
+                    error="provider must be one of: auto|native|firecrawl",
+                )
+
+            api_key_overrides = kwargs.get("api_key_overrides")
+            firecrawl_api_key = self._resolve_firecrawl_api_key(
+                api_key_overrides=api_key_overrides if isinstance(api_key_overrides, dict) else None,
+                explicit_api_key=str(kwargs.get("firecrawl_api_key", "")),
+            )
+
+            effective_max_pages = max(1, min(self._hard_max_pages, int(max_pages or self._default_max_pages)))
             effective_max_depth = max(0, min(10, int(max_depth if max_depth is not None else self._default_max_depth)))
             effective_timeout = float(timeout_seconds or 10.0)
             if effective_timeout <= 0:
@@ -568,11 +805,53 @@ class KrawlXTool(BaseTool):
             log_audit_event(
                 "krawlx_started",
                 seed_url=seed_url,
+                provider=provider,
                 max_pages=effective_max_pages,
                 max_depth=effective_max_depth,
                 same_origin=bool(same_origin),
                 obey_robots=bool(obey_robots),
             )
+
+            if provider == "firecrawl":
+                if not firecrawl_api_key:
+                    return ToolResult(
+                        success=False,
+                        output="",
+                        error="FIRECRAWL_API_KEY is required when provider=firecrawl",
+                    )
+
+                payload = await self._crawl_with_firecrawl(
+                    seed_url=seed_url,
+                    api_key=firecrawl_api_key,
+                    max_pages=effective_max_pages,
+                    max_depth=effective_max_depth,
+                    timeout_seconds=effective_timeout,
+                )
+
+                stats = payload.get("stats") if isinstance(payload.get("stats"), dict) else {}
+                pages_fetched = int(stats.get("pages_fetched", 0) or 0)
+
+                log_audit_event(
+                    "krawlx_completed",
+                    seed_url=seed_url,
+                    provider="firecrawl",
+                    pages_fetched=pages_fetched,
+                    blocked_urls=0,
+                    error_count=0,
+                    success=pages_fetched > 0,
+                )
+
+                return ToolResult(
+                    success=pages_fetched > 0,
+                    output=json.dumps(payload, indent=2),
+                    error=None if pages_fetched > 0 else "Crawl finished with no pages fetched",
+                    metadata={
+                        "seed_url": seed_url,
+                        "provider": "firecrawl",
+                        "same_origin": bool(same_origin),
+                        "obey_robots": bool(obey_robots),
+                    },
+                )
 
             pages: list[dict[str, Any]] = []
             blocked: list[dict[str, str]] = []
@@ -664,6 +943,7 @@ class KrawlXTool(BaseTool):
                 "blocked": blocked,
                 "errors": errors,
                 "stats": {
+                    "provider": "krawlx_native",
                     "pages_fetched": len(pages),
                     "visited_urls": len(visited),
                     "blocked_urls": len(blocked),
@@ -671,12 +951,80 @@ class KrawlXTool(BaseTool):
                 },
             }
 
+            if provider == "auto" and len(pages) == 0 and self._firecrawl_fallback and firecrawl_api_key:
+                try:
+                    fallback_payload = await self._crawl_with_firecrawl(
+                        seed_url=seed_url,
+                        api_key=firecrawl_api_key,
+                        max_pages=effective_max_pages,
+                        max_depth=effective_max_depth,
+                        timeout_seconds=effective_timeout,
+                    )
+                    fallback_stats = fallback_payload.get("stats")
+                    if isinstance(fallback_stats, dict):
+                        fallback_stats["fallback_used"] = True
+                        fallback_stats["provider"] = "firecrawl"
+
+                    fallback_payload["native_attempt"] = {
+                        "errors": errors,
+                        "blocked": blocked,
+                    }
+                    payload = fallback_payload
+                    fallback_pages = fallback_payload.get("pages")
+                    if isinstance(fallback_pages, list):
+                        pages = [row for row in fallback_pages if isinstance(row, dict)]
+                    else:
+                        pages = []
+
+                    fallback_blocked = fallback_payload.get("blocked")
+                    if isinstance(fallback_blocked, list):
+                        blocked = [
+                            {"url": str(row.get("url", "")), "reason": str(row.get("reason", ""))}
+                            for row in fallback_blocked
+                            if isinstance(row, dict)
+                        ]
+                    else:
+                        blocked = []
+
+                    fallback_errors = fallback_payload.get("errors")
+                    if isinstance(fallback_errors, list):
+                        errors = [
+                            {"url": str(row.get("url", "")), "error": str(row.get("error", ""))}
+                            for row in fallback_errors
+                            if isinstance(row, dict)
+                        ]
+                    else:
+                        errors = []
+                except Exception as exc:
+                    payload["firecrawl_fallback_error"] = _normalize_space(str(exc))[:300]
+
             success = len(pages) > 0
-            error = None if success else "Crawl finished with no pages fetched"
+            error: str | None = None
+            if not success:
+                first_error = ""
+                if errors and isinstance(errors[0], dict):
+                    first_error = _normalize_space(str(errors[0].get("error", "")))
+
+                error_parts = ["Crawl finished with no pages fetched."]
+                if first_error:
+                    error_parts.append(f"First error: {first_error}.")
+
+                lowered_first = first_error.lower()
+                blocked_by_site = "403" in first_error or "forbidden" in lowered_first or "cloudflare" in lowered_first
+                if provider != "firecrawl" and blocked_by_site and not firecrawl_api_key:
+                    error_parts.append(
+                        "Tip: configure FIRECRAWL_API_KEY and retry with --provider firecrawl for blocked/JS-heavy sites."
+                    )
+
+                error = " ".join(error_parts)
+
+            stats = payload.get("stats") if isinstance(payload.get("stats"), dict) else {}
+            provider_used = str(stats.get("provider", "krawlx_native") or "krawlx_native")
 
             log_audit_event(
                 "krawlx_completed",
                 seed_url=seed_url,
+                provider=provider_used,
                 pages_fetched=len(pages),
                 blocked_urls=len(blocked),
                 error_count=len(errors),
@@ -689,6 +1037,7 @@ class KrawlXTool(BaseTool):
                 error=error,
                 metadata={
                     "seed_url": seed_url,
+                    "provider": provider_used,
                     "same_origin": bool(same_origin),
                     "obey_robots": bool(obey_robots),
                 },

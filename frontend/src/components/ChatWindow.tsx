@@ -70,6 +70,7 @@ const EXAMPLE_PROMPTS = [
   '/help',
   '/stop',
   '/cost 7',
+  '/krawlx https://example.com',
   '/session',
   '/memory show',
   '/mode',
@@ -86,6 +87,8 @@ const EXAMPLE_PROMPTS = [
 const KNOWN_ROOT_COMMANDS: CommandDefinition[] = [
   { name: '/help', description: 'Show available commands' },
   { name: '/cost', description: 'Show token and estimated cost usage' },
+  { name: '/krawlx', description: 'Crawl a website via KrawlX secure crawler' },
+  { name: '/crawlx', description: 'Alias for /krawlx' },
   { name: '/session', description: 'Inspect or manage sessions' },
   { name: '/memory', description: 'Read or write memory notes' },
   { name: '/mode', description: 'Inspect or set session mode' },
@@ -112,6 +115,8 @@ const KNOWN_ROOT_COMMANDS: CommandDefinition[] = [
 
 const FALLBACK_COMMANDS: CommandDefinition[] = [
   ...KNOWN_ROOT_COMMANDS,
+  { name: '/krawlx <url>', description: 'Crawl a website via KrawlX secure crawler' },
+  { name: '/crawlx <url>', description: 'Alias for /krawlx' },
   { name: '/session', description: 'List recent sessions' },
   { name: '/session current', description: 'Show current session id' },
   { name: '/memory <text>', description: 'Append note to global memory' },

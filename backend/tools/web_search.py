@@ -35,8 +35,8 @@ class WebSearchTool(BaseTool):
         "required": ["query"],
     }
 
-    async def _search_firecrawl(self, query: str, num_results: int) -> list[dict[str, str]]:
-        key = os.getenv("FIRECRAWL_API_KEY", "").strip()
+    async def _search_firecrawl(self, query: str, num_results: int, api_key: str = "") -> list[dict[str, str]]:
+        key = str(api_key or "").strip() or os.getenv("FIRECRAWL_API_KEY", "").strip()
         if not key:
             raise ValueError("firecrawl key missing")
 
@@ -61,8 +61,8 @@ class WebSearchTool(BaseTool):
                 rows.append({"title": title or url, "url": url, "snippet": snippet})
         return rows[:num_results]
 
-    async def _search_tavily(self, query: str, num_results: int) -> list[dict[str, str]]:
-        key = os.getenv("TAVILY_API_KEY", "").strip()
+    async def _search_tavily(self, query: str, num_results: int, api_key: str = "") -> list[dict[str, str]]:
+        key = str(api_key or "").strip() or os.getenv("TAVILY_API_KEY", "").strip()
         if not key:
             raise ValueError("tavily key missing")
 
@@ -89,8 +89,8 @@ class WebSearchTool(BaseTool):
                 rows.append({"title": title or url, "url": url, "snippet": snippet})
         return rows[:num_results]
 
-    async def _search_serpapi(self, query: str, num_results: int) -> list[dict[str, str]]:
-        key = os.getenv("SERPAPI_KEY", "").strip()
+    async def _search_serpapi(self, query: str, num_results: int, api_key: str = "") -> list[dict[str, str]]:
+        key = str(api_key or "").strip() or os.getenv("SERPAPI_KEY", "").strip()
         if not key:
             raise ValueError("serpapi key missing")
 
@@ -170,10 +170,17 @@ class WebSearchTool(BaseTool):
             limit = 5
         limit = max(1, min(10, limit))
 
+        raw_overrides = kwargs.get("api_key_overrides")
+        overrides = raw_overrides if isinstance(raw_overrides, dict) else {}
+
+        firecrawl_key = str(overrides.get("FIRECRAWL_API_KEY", "")).strip()
+        tavily_key = str(overrides.get("TAVILY_API_KEY", "")).strip()
+        serpapi_key = str(overrides.get("SERPAPI_KEY", "")).strip()
+
         providers: list[tuple[str, Any]] = [
-            ("firecrawl", self._search_firecrawl),
-            ("tavily", self._search_tavily),
-            ("serpapi", self._search_serpapi),
+            ("firecrawl", lambda q, n: self._search_firecrawl(q, n, firecrawl_key)),
+            ("tavily", lambda q, n: self._search_tavily(q, n, tavily_key)),
+            ("serpapi", lambda q, n: self._search_serpapi(q, n, serpapi_key)),
             ("duckduckgo", self._search_duckduckgo),
         ]
 

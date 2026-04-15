@@ -27,6 +27,7 @@ from api.marketplace import router as marketplace_router
 from api.prompts import router as prompts_router
 from api.krawlx import router as krawlx_router
 from api.settings import router as settings_router
+from api.security import extract_api_keys_from_header
 from api.webhooks import router as webhooks_router
 from api.profiles import router as profiles_router
 from api.providers import router as providers_router
@@ -78,7 +79,7 @@ app.add_middleware(
     allow_origins=_parse_allowed_origins(),
     allow_credentials=True,
     allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
-    allow_headers=["Authorization", "Content-Type", "Accept"],
+    allow_headers=["Authorization", "Content-Type", "Accept", "X-Kodo-Keys", "X-Request-ID"],
 )
 
 app.include_router(chat_router)
@@ -101,6 +102,7 @@ app.include_router(cron_router, prefix="/api")
 async def request_context_middleware(request: Request, call_next):
     request_id = request.headers.get("x-request-id", "").strip() or str(uuid.uuid4())
     request.state.request_id = request_id
+    request.state.api_key_overrides = extract_api_keys_from_header(request)
     set_request_id(request_id)
 
     try:

@@ -134,6 +134,22 @@ def _extract_text_content(content: Any) -> str:
     return str(content or "").strip()
 
 
+def _has_non_text_content(content: Any) -> bool:
+    if content is None:
+        return False
+    if isinstance(content, str):
+        return False
+    if isinstance(content, list):
+        for block in content:
+            if not isinstance(block, dict):
+                return True
+            block_type = str(block.get("type", "")).strip().lower()
+            if block_type and block_type != "text":
+                return True
+        return False
+    return True
+
+
 def _validate_zip_member_path(name: str) -> Path | None:
     normalized = str(name or "").replace("\\", "/")
     if not normalized or normalized.endswith("/"):
@@ -671,14 +687,21 @@ async def send_message(req: ChatRequest, request: Request):
         )
         return approved
 
-    if req.content is None and is_command_message(user_text):
+    if is_command_message(user_text) and not req.image_attachment and not _has_non_text_content(req.content):
         async def command_stream():
             meta_event = {'type': 'meta', 'request_id': request_id, 'session_id': session_id, 'mode': effective_mode}
             await publish_session_event(session_id, meta_event)
             yield f"data: {json.dumps(meta_event)}\n\n"
 
             try:
-                result = await execute_command(user_text, session_id=session_id, project_dir=project_dir)
+                raw_overrides = getattr(request.state, "api_key_overrides", None)
+                safe_overrides = raw_overrides if isinstance(raw_overrides, dict) else {}
+                result = await execute_command(
+                    user_text,
+                    session_id=session_id,
+                    project_dir=project_dir,
+                    api_key_overrides=safe_overrides,
+                )
             except Exception as e:
                 log_audit_event(
                     "chat_command_error",
@@ -1414,6 +1437,8 @@ async def list_commands_endpoint(request: Request):
             {"name": "/help", "description": "Show available commands"},
             {"name": "/cost [days]", "description": "Show token and cost usage summary"},
             {"name": "/search <query>", "description": "Search the web and return top results"},
+            {"name": "/krawlx <url>", "description": "Crawl a website via KrawlX secure crawler"},
+            {"name": "/crawlx <url>", "description": "Alias for /krawlx"},
             {"name": "/git <subcommand>", "description": "Run safe, read-only git command"},
             {"name": "/session", "description": "List recent sessions"},
             {"name": "/session current", "description": "Show current session id"},

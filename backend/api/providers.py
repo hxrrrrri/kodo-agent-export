@@ -206,6 +206,7 @@ async def discover_providers_endpoint(request: Request):
             "gemini": bool(_env_or_override(request, "GEMINI_API_KEY") or _env_or_override(request, "GOOGLE_API_KEY")),
             "deepseek": bool(_env_or_override(request, "DEEPSEEK_API_KEY")),
             "groq": bool(_env_or_override(request, "GROQ_API_KEY")),
+            "firecrawl": bool(_env_or_override(request, "FIRECRAWL_API_KEY")),
         },
     }
 

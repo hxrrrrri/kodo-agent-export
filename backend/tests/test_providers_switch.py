@@ -105,3 +105,22 @@ def test_switch_ollama_uses_discovered_model_when_unspecified(monkeypatch, tmp_p
     assert os.getenv("MODEL") == "gemma4:e2b"
     assert os.getenv("BIG_MODEL") == "gemma4:e2b"
     assert os.getenv("SMALL_MODEL") == "gemma4:e2b"
+
+
+def test_discover_reads_firecrawl_key_from_override_header(monkeypatch):
+    monkeypatch.delenv("API_AUTH_TOKEN", raising=False)
+    monkeypatch.delenv("FIRECRAWL_API_KEY", raising=False)
+
+    async def fake_discover_local_providers():
+        return {"ollama": False, "atomic_chat": False}
+
+    monkeypatch.setattr(providers_api, "discover_local_providers", fake_discover_local_providers)
+
+    response = client.get(
+        "/api/providers/discover",
+        headers={"X-Kodo-Keys": '{"FIRECRAWL_API_KEY":"fc-user-key"}'},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["key_status"]["firecrawl"] is True
