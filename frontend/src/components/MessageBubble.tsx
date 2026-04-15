@@ -7,6 +7,177 @@ import { vscDarkPlus } from 'react-syntax-highlighter/dist/esm/styles/prism'
 import { AdvisorReview, ArtifactItem, Message, PreviewItem, TodoItem } from '../store/chatStore'
 import { buildApiHeaders, parseApiError } from '../lib/api'
 import { ToolCallCard } from './ToolCallCard'
+import { KodoLogoMark } from './KodoLogoMark'
+
+// ─── Thinking animation ───────────────────────────────────────────────────────
+
+const THINKING_LABELS = [
+  'Thinking',
+  'Analyzing',
+  'Planning',
+  'Reasoning',
+  'Processing',
+  'Searching',
+  'Evaluating',
+  'Composing',
+  'Working',
+  'Reflecting',
+]
+
+function ThinkingAnimation() {
+  const [labelIdx, setLabelIdx] = useState(0)
+  const [phase, setPhase] = useState<'in' | 'out'>('in')
+
+  useEffect(() => {
+    // Each label shows for ~1.8s total: 0.3s in, ~1.2s hold, 0.3s out
+    let timer: ReturnType<typeof setTimeout>
+
+    if (phase === 'in') {
+      // after fade-in hold for 1.1s then start fade-out
+      timer = setTimeout(() => setPhase('out'), 1400)
+    } else {
+      // after fade-out advance to next label
+      timer = setTimeout(() => {
+        setLabelIdx((i) => (i + 1) % THINKING_LABELS.length)
+        setPhase('in')
+      }, 300)
+    }
+    return () => clearTimeout(timer)
+  }, [phase, labelIdx])
+
+  const label = THINKING_LABELS[labelIdx]
+
+  return (
+    <div style={{
+      display: 'flex',
+      alignItems: 'center',
+      gap: 14,
+      padding: '10px 0 6px',
+    }}>
+      {/* Logo with orbiting dots */}
+      <div style={{ position: 'relative', width: 44, height: 44, flexShrink: 0 }}>
+        {/* Pulsing logo */}
+        <div style={{
+          position: 'absolute',
+          inset: 0,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          animation: 'kodo-logo-pulse 2s ease-in-out infinite',
+        }}>
+          <KodoLogoMark size={26} color="var(--accent)" />
+        </div>
+
+        {/* Orbit ring (faint) */}
+        <div style={{
+          position: 'absolute',
+          inset: 2,
+          borderRadius: '50%',
+          border: '1px solid var(--border)',
+          opacity: 0.5,
+        }} />
+
+        {/* Orbiting dot 1 */}
+        <div style={{
+          position: 'absolute',
+          inset: 0,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          animation: 'kodo-orbit 1.8s linear infinite',
+        }}>
+          <span style={{
+            width: 5, height: 5,
+            borderRadius: '50%',
+            background: 'var(--accent)',
+            opacity: 0.9,
+            boxShadow: '0 0 4px var(--accent)',
+          }} />
+        </div>
+
+        {/* Orbiting dot 2 */}
+        <div style={{
+          position: 'absolute',
+          inset: 0,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          animation: 'kodo-orbit2 1.8s linear infinite',
+        }}>
+          <span style={{
+            width: 4, height: 4,
+            borderRadius: '50%',
+            background: 'var(--accent)',
+            opacity: 0.6,
+          }} />
+        </div>
+
+        {/* Orbiting dot 3 */}
+        <div style={{
+          position: 'absolute',
+          inset: 0,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          animation: 'kodo-orbit3 1.8s linear infinite',
+        }}>
+          <span style={{
+            width: 3, height: 3,
+            borderRadius: '50%',
+            background: 'var(--accent)',
+            opacity: 0.4,
+          }} />
+        </div>
+      </div>
+
+      {/* Label */}
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+        <div
+          key={`${labelIdx}-${phase}`}
+          style={{
+            fontSize: 13,
+            fontWeight: 600,
+            color: 'var(--text-0)',
+            letterSpacing: '0.02em',
+            animation: phase === 'in'
+              ? 'kodo-label-in 0.3s ease forwards'
+              : 'kodo-label-out 0.3s ease forwards',
+          }}
+        >
+          {label}
+          <span style={{
+            display: 'inline-block',
+            color: 'var(--accent)',
+            fontWeight: 700,
+            marginLeft: 1,
+            animation: 'blink 1s step-end infinite',
+          }}>...</span>
+        </div>
+        <div style={{
+          display: 'flex',
+          gap: 3,
+          alignItems: 'center',
+        }}>
+          {THINKING_LABELS.map((_, i) => (
+            <span
+              key={i}
+              style={{
+                display: 'inline-block',
+                width: i === labelIdx ? 14 : 4,
+                height: 2,
+                borderRadius: 2,
+                background: i === labelIdx ? 'var(--accent)' : 'var(--border)',
+                transition: 'width 0.3s ease, background 0.3s ease',
+              }}
+            />
+          ))}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 
 function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
@@ -769,9 +940,6 @@ export function MessageBubble({
           animation: message.isStreaming ? 'pulse-accent 1.5s ease-in-out infinite' : 'none',
         }} />
         KODO
-        {message.isStreaming && !message.content && !message.toolCalls?.length && (
-          <span style={{ color: 'var(--text-2)', fontWeight: 400 }}>thinking...</span>
-        )}
         {!message.isStreaming && message.content.trim() && (
           <button
             type="button"
@@ -796,6 +964,14 @@ export function MessageBubble({
           </button>
         )}
       </div>
+
+      {/* Thinking animation — shown only when streaming with no content/tools yet */}
+      {message.isStreaming
+        && !message.content
+        && !message.toolCalls?.length
+        && !message.todoItems?.length
+        && <ThinkingAnimation />
+      }
 
       {/* Todo list */}
       {message.todoItems && message.todoItems.length > 0 && (

@@ -10,6 +10,7 @@ import { CollabBar } from './CollabBar'
 import { useCollabSession } from '../hooks/useCollabSession'
 import { buildApiHeaders, parseApiError } from '../lib/api'
 import { BuddyWidget } from './BuddyWidget'
+import { KodoThinkingIndicator } from './kodothinkingindicator'
 
 type ChatWindowProps = {
   editorOpen: boolean
@@ -2530,21 +2531,7 @@ export function ChatWindow({ editorOpen, onToggleEditor }: ChatWindowProps) {
         )}
 
         {isLoading && (
-          <div style={{
-            padding: '6px 16px',
-            display: 'flex',
-            alignItems: 'center',
-            gap: 8,
-            fontSize: 11,
-            color: 'var(--text-2)',
-            fontFamily: 'var(--font-mono)',
-            animation: 'fadeIn 0.2s ease',
-          }}>
-            <span className="typing-dots">
-              <span /><span /><span />
-            </span>
-            {activeTool ? `running ${activeTool}...` : 'thinking...'}
-          </div>
+          <KodoThinkingIndicator activeTool={activeTool} />
         )}
 
         <div ref={bottomRef} />

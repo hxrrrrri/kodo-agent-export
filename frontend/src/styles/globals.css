@@ -446,6 +446,32 @@ aside {
   to { transform: rotate(360deg); }
 }
 
+/* Kodo thinking animation */
+@keyframes kodo-orbit {
+  0%   { transform: rotate(0deg)   translateX(18px) rotate(0deg); }
+  100% { transform: rotate(360deg) translateX(18px) rotate(-360deg); }
+}
+@keyframes kodo-orbit2 {
+  0%   { transform: rotate(120deg) translateX(18px) rotate(-120deg); }
+  100% { transform: rotate(480deg) translateX(18px) rotate(-480deg); }
+}
+@keyframes kodo-orbit3 {
+  0%   { transform: rotate(240deg) translateX(18px) rotate(-240deg); }
+  100% { transform: rotate(600deg) translateX(18px) rotate(-600deg); }
+}
+@keyframes kodo-logo-pulse {
+  0%, 100% { opacity: 1; filter: drop-shadow(0 0 4px var(--accent-glow)); }
+  50%       { opacity: 0.7; filter: drop-shadow(0 0 10px var(--accent)); }
+}
+@keyframes kodo-label-in {
+  from { opacity: 0; transform: translateY(4px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+@keyframes kodo-label-out {
+  from { opacity: 1; transform: translateY(0); }
+  to   { opacity: 0; transform: translateY(-4px); }
+}
+
 @keyframes messageSlideIn {
   from { opacity: 0; transform: translateY(5px); }
   to { opacity: 1; transform: translateY(0); }
@@ -548,3 +574,59 @@ aside {
     pointer-events: auto;
   }
 }
+
+/* ── KodoThinkingIndicator ── */
+@keyframes kodo-spin {
+  to { transform: rotate(360deg); }
+}
+@keyframes kodo-spin-reverse {
+  to { transform: rotate(-360deg); }
+}
+@keyframes kodo-orbit-dot-spin {
+  0%   { transform: rotate(0deg)   translateX(20px); }
+  100% { transform: rotate(360deg) translateX(20px); }
+}
+@keyframes kodo-center-pulse {
+  0%, 100% { opacity: 1;   filter: drop-shadow(0 0 4px rgba(255,122,47,0.35)); }
+  50%       { opacity: 0.75; filter: drop-shadow(0 0 9px rgba(255,122,47,0.7)); }
+}
+@keyframes thinkingLabelFade {
+  from { opacity: 0; transform: translateY(4px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+.kodo-spin-arc {
+  animation: kodo-spin 1.1s linear infinite;
+  will-change: transform;
+}
+.kodo-spin-arc-reverse {
+  animation: kodo-spin-reverse 1.8s linear infinite;
+  will-change: transform;
+}
+.kodo-orbit-dot {
+  animation: kodo-orbit-dot-spin 1.1s linear infinite;
+  will-change: transform;
+}
+.kodo-orbit-ring {
+  animation: pulse-accent 2.4s ease-in-out infinite;
+}
+.kodo-logo-pulse {
+  animation: kodo-center-pulse 2s ease-in-out infinite;
+}
+
+/* thinking dots — used inside KodoThinkingIndicator */
+.thinking-dots {
+  display: inline-flex;
+  gap: 3px;
+  align-items: center;
+}
+.thinking-dots span {
+  width: 3px;
+  height: 3px;
+  border-radius: 50%;
+  background: var(--text-2);
+  display: inline-block;
+}
+.thinking-dots span:nth-child(1) { animation: terminal-dot-pulse 1.3s 0s infinite; }
+.thinking-dots span:nth-child(2) { animation: terminal-dot-pulse 1.3s 0.22s infinite; }
+.thinking-dots span:nth-child(3) { animation: terminal-dot-pulse 1.3s 0.44s infinite; }

@@ -18,6 +18,14 @@ export function SkillBuilderPanel() {
   const [error, setError] = useState('')
   const uploadInputRef = useRef<HTMLInputElement>(null)
   const importPackInputRef = useRef<HTMLInputElement>(null)
+  // Ref so loadSkills doesn't need selectedName in its dep array,
+  // preventing the cascade: setSelectedName('') → new loadSkills ref →
+  // useEffect fires → auto-selects first skill → overwrites uploaded content.
+  const selectedNameRef = useRef(selectedName)
+  selectedNameRef.current = selectedName
+  // Set to true in handleUpload so the selectedSkill effect won't overwrite
+  // the just-uploaded content when selectedName resets to ''.
+  const skipSkillEffectRef = useRef(false)
 
   const selectedSkill = useMemo(
     () => skills.find((row) => row.name === selectedName) || null,
@@ -37,7 +45,8 @@ export function SkillBuilderPanel() {
       const data = await response.json()
       const rows = Array.isArray(data.skills) ? (data.skills as CustomSkill[]) : []
       setSkills(rows)
-      if (rows.length > 0 && !selectedName) {
+      // Use ref so this callback never needs selectedName as a dep.
+      if (rows.length > 0 && !selectedNameRef.current) {
         setSelectedName(rows[0].name)
       }
     } catch (err) {
@@ -45,13 +54,18 @@ export function SkillBuilderPanel() {
     } finally {
       setLoading(false)
     }
-  }, [selectedName])
+  }, []) // stable — uses ref for selectedName check
 
   useEffect(() => {
     void loadSkills()
   }, [loadSkills])
 
   useEffect(() => {
+    // Skip when handleUpload just populated name/content — don't overwrite it.
+    if (skipSkillEffectRef.current) {
+      skipSkillEffectRef.current = false
+      return
+    }
     if (!selectedSkill) return
     setName(selectedSkill.name)
     setContent(selectedSkill.content)
@@ -111,21 +125,25 @@ export function SkillBuilderPanel() {
     }
   }
 
-  const handleUpload = async (event: ChangeEvent<HTMLInputElement>) => {
+  const handleUpload = (event: ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0]
+    // Reset immediately (before any await) so the same file can be re-selected.
+    event.target.value = ''
     if (!file) return
 
-    try {
-      const text = await file.text()
+    file.text().then((text) => {
       const baseName = file.name.replace(/\.md$/i, '').trim().toLowerCase().replace(/\s+/g, '-')
+      // Flag the selectedSkill effect to skip its next run — otherwise the
+      // cascade (setSelectedName('') → loadSkills → auto-select → effect)
+      // would overwrite the content we're about to set.
+      skipSkillEffectRef.current = true
+      setSelectedName('')
       setName(baseName || 'imported-skill')
       setContent(text)
-      setSelectedName('')
-    } catch {
-      setError('Failed to read uploaded markdown file.')
-    }
-
-    event.target.value = ''
+      setError('')
+    }).catch(() => {
+      setError('Failed to read uploaded file.')
+    })
   }
 
   const exportMarketplacePack = async () => {

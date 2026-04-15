@@ -17,6 +17,11 @@ const THINKING_LABELS = [
   'Almost there...',
   'Synthesizing...',
   'On it...',
+  'Contemplating...',
+  'Assembling thoughts...',
+  'Diving in...',
+  'Mapping it out...',
+  'Brewing ideas...',
 ]
 
 const TOOL_LABELS: Record<string, string[]> = {
@@ -50,35 +55,30 @@ type Props = {
 
 export function KodoThinkingIndicator({ activeTool }: Props) {
   const [labelIndex, setLabelIndex] = useState(0)
-  const [logoPhase, setLogoPhase] = useState(0) // 0..2 for subtle morph
+  const [visible, setVisible] = useState(true)
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
-  const logoIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const seedRef = useRef(0)
 
-  // Cycle thinking label every 2.2s
+  // Cycle label every 2.2s with a quick fade between
   useEffect(() => {
     setLabelIndex(0)
     seedRef.current = 0
+    setVisible(true)
 
     intervalRef.current = setInterval(() => {
-      seedRef.current += 1
-      setLabelIndex(seedRef.current)
-    }, 2200)
+      // fade out, swap, fade in
+      setVisible(false)
+      setTimeout(() => {
+        seedRef.current += 1
+        setLabelIndex(seedRef.current)
+        setVisible(true)
+      }, 280)
+    }, 2400)
 
     return () => {
       if (intervalRef.current) clearInterval(intervalRef.current)
     }
   }, [activeTool])
-
-  // Logo morph phase cycle (3 phases) every 600ms for gentle animation
-  useEffect(() => {
-    logoIntervalRef.current = setInterval(() => {
-      setLogoPhase((prev) => (prev + 1) % 3)
-    }, 600)
-    return () => {
-      if (logoIntervalRef.current) clearInterval(logoIntervalRef.current)
-    }
-  }, [])
 
   // Determine displayed label
   const label = (() => {
@@ -86,74 +86,143 @@ export function KodoThinkingIndicator({ activeTool }: Props) {
       const key = activeTool.toLowerCase()
       const toolLabels = TOOL_LABELS[key]
       if (toolLabels) return pickLabel(toolLabels, labelIndex)
-      // Generic tool label
       const name = activeTool.replace(/_/g, ' ')
       return `Running ${name}...`
     }
     return THINKING_LABELS[labelIndex % THINKING_LABELS.length]
   })()
 
-  // Logo opacity pulses gently across 3 phases
-  const opacities = [0.65, 1, 0.8]
-  const scales = [0.96, 1.04, 0.99]
-  const logoOpacity = opacities[logoPhase]
-  const logoScale = scales[logoPhase]
-
-  // Accent color for logo — use CSS var so it adapts to theme
-  const logoColor = activeTool ? 'var(--yellow)' : 'var(--logo-primary)'
+  const isToolActive = Boolean(activeTool)
+  const orbitColor = isToolActive ? 'var(--yellow)' : 'var(--accent)'
+  const logoColor = isToolActive ? 'var(--yellow)' : 'var(--logo-primary)'
+  const glowColor = isToolActive
+    ? 'rgba(255,215,0,0.55)'
+    : 'rgba(255,122,47,0.5)'
+  const glowColor2 = isToolActive
+    ? 'rgba(255,215,0,0.18)'
+    : 'rgba(255,77,33,0.2)'
 
   return (
     <div
       style={{
         display: 'flex',
         alignItems: 'center',
-        gap: 10,
-        padding: '8px 14px',
-        margin: '4px 0 10px',
-        borderRadius: 10,
+        gap: 14,
+        padding: '10px 18px 10px 14px',
+        margin: '6px 0 12px',
+        borderRadius: 12,
         background: 'var(--bg-1)',
-        border: '1px solid var(--border)',
+        border: `1px solid ${isToolActive ? 'var(--yellow-dim)' : 'var(--border)'}`,
         width: 'fit-content',
         animation: 'fadeIn 0.22s ease',
-        boxShadow: activeTool
-          ? '0 0 0 1px var(--yellow-dim), 0 2px 12px rgba(0,0,0,0.18)'
-          : '0 2px 12px rgba(0,0,0,0.14)',
+        boxShadow: isToolActive
+          ? `0 0 0 1px rgba(255,215,0,0.2), 0 4px 18px rgba(0,0,0,0.22)`
+          : `0 4px 18px rgba(0,0,0,0.16)`,
+        transition: 'border-color 0.4s ease, box-shadow 0.4s ease',
       }}
     >
-      {/* Animated Kodo logo */}
+      {/* ── Orbit ring + logo ── */}
       <div
         style={{
-          opacity: logoOpacity,
-          transform: `scale(${logoScale})`,
-          transition: 'opacity 0.55s ease, transform 0.55s ease',
+          position: 'relative',
+          width: 36,
+          height: 36,
+          flexShrink: 0,
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'center',
-          flexShrink: 0,
-          filter: activeTool
-            ? 'drop-shadow(0 0 6px rgba(255,215,0,0.45))'
-            : 'drop-shadow(0 0 5px rgba(255,122,47,0.4))',
         }}
       >
-        <KodoLogoMark size={20} color={logoColor} decorative />
+        {/* Outer glow ring (CSS animation via className) */}
+        <div
+          className="kodo-orbit-ring"
+          style={{
+            position: 'absolute',
+            inset: 0,
+            borderRadius: '50%',
+            border: `1.5px solid ${orbitColor}`,
+            opacity: 0.3,
+          }}
+        />
+
+        {/* Spinning arc */}
+        <div
+          className="kodo-spin-arc"
+          style={{
+            position: 'absolute',
+            inset: -3,
+            borderRadius: '50%',
+            border: '2px solid transparent',
+            borderTopColor: orbitColor,
+            borderRightColor: orbitColor,
+          }}
+        />
+
+        {/* Slow counter-spin arc (secondary) */}
+        <div
+          className="kodo-spin-arc-reverse"
+          style={{
+            position: 'absolute',
+            inset: 3,
+            borderRadius: '50%',
+            border: '1.5px solid transparent',
+            borderBottomColor: isToolActive ? 'var(--yellow)' : 'var(--accent)',
+            opacity: 0.55,
+          }}
+        />
+
+        {/* Orbit dot */}
+        <div
+          className="kodo-orbit-dot"
+          style={{
+            position: 'absolute',
+            width: 5,
+            height: 5,
+            borderRadius: '50%',
+            background: orbitColor,
+            boxShadow: `0 0 6px 2px ${glowColor}`,
+            top: '50%',
+            left: '50%',
+            marginTop: -2.5,
+            marginLeft: -2.5,
+            transformOrigin: '2.5px 2.5px',
+          }}
+        />
+
+        {/* Center logo */}
+        <div
+          className="kodo-logo-pulse"
+          style={{
+            position: 'relative',
+            zIndex: 2,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            filter: `drop-shadow(0 0 5px ${glowColor2})`,
+          }}
+        >
+          <KodoLogoMark size={18} color={logoColor} decorative />
+        </div>
       </div>
 
-      {/* Cycling label */}
+      {/* ── Cycling label ── */}
       <span
-        key={label}
         style={{
           fontSize: 11,
           fontFamily: 'var(--font-mono)',
-          color: activeTool ? 'var(--yellow)' : 'var(--text-1)',
-          letterSpacing: '0.04em',
-          animation: 'thinkingLabelFade 0.3s ease',
+          color: isToolActive ? 'var(--yellow)' : 'var(--text-1)',
+          letterSpacing: '0.05em',
           whiteSpace: 'nowrap',
+          opacity: visible ? 1 : 0,
+          transform: visible ? 'translateY(0)' : 'translateY(-3px)',
+          transition: 'opacity 0.28s ease, transform 0.28s ease',
+          minWidth: 170,
         }}
       >
         {label}
       </span>
 
-      {/* Animated dots */}
+      {/* ── Trailing dots ── */}
       <span className="thinking-dots">
         <span /><span /><span />
       </span>
