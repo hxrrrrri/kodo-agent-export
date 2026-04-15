@@ -88,6 +88,7 @@ const KNOWN_ROOT_COMMANDS: CommandDefinition[] = [
   { name: '/help', description: 'Show available commands' },
   { name: '/cost', description: 'Show token and estimated cost usage' },
   { name: '/krawlx', description: 'Crawl a website via KrawlX secure crawler' },
+  { name: '/firecrawl', description: 'Crawl a website with Firecrawl provider' },
   { name: '/crawlx', description: 'Alias for /krawlx' },
   { name: '/session', description: 'Inspect or manage sessions' },
   { name: '/memory', description: 'Read or write memory notes' },
@@ -116,6 +117,7 @@ const KNOWN_ROOT_COMMANDS: CommandDefinition[] = [
 const FALLBACK_COMMANDS: CommandDefinition[] = [
   ...KNOWN_ROOT_COMMANDS,
   { name: '/krawlx <url>', description: 'Crawl a website via KrawlX secure crawler' },
+  { name: '/firecrawl <url>', description: 'Crawl a website with Firecrawl provider' },
   { name: '/crawlx <url>', description: 'Alias for /krawlx' },
   { name: '/session', description: 'List recent sessions' },
   { name: '/session current', description: 'Show current session id' },

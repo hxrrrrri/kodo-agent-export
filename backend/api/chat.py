@@ -240,6 +240,7 @@ class ChatRequest(BaseModel):
     message: str | None = Field(default=None, max_length=12000)
     content: str | list[dict[str, Any]] | None = Field(default=None)
     image_attachment: dict[str, str] | None = Field(default=None)
+    artifact_mode: bool = Field(default=False)
     session_id: str | None = Field(default=None, max_length=128)
     project_dir: str | None = Field(default=None, max_length=1024)
     mode: str | None = Field(default=None, max_length=64)
@@ -443,6 +444,146 @@ def _format_away_label(seconds: int) -> str:
         return f"{hours}h {minutes % 60}m"
     days = hours // 24
     return f"{days}d {hours % 24}h"
+
+
+def _todo_item(step_id: int, title: str) -> dict[str, str]:
+    return {
+        "id": f"step-{step_id}",
+        "title": title.strip(),
+        "status": "pending",
+    }
+
+
+def _build_todo_plan(user_text: str, *, is_command: bool) -> list[dict[str, str]]:
+    text = (user_text or "").strip()
+    if not text:
+        return []
+
+    if is_command:
+        lowered = text.lower()
+        if lowered.startswith("/krawlx") or lowered.startswith("/crawlx") or lowered.startswith("/firecrawl"):
+            titles = [
+                "Validate crawl arguments and provider mode",
+                "Run crawl and collect discovered pages",
+                "Summarize crawl stats and next actions",
+            ]
+        elif lowered.startswith("/search"):
+            titles = [
+                "Run web search with current provider",
+                "Review top results for relevance",
+                "Present concise findings",
+            ]
+        elif lowered.startswith("/git"):
+            titles = [
+                "Execute read-only git command",
+                "Collect command output",
+                "Summarize key repository signals",
+            ]
+        else:
+            titles = [
+                "Parse command and options",
+                "Execute command workflow",
+                "Return final command result",
+            ]
+        return [_todo_item(idx + 1, title) for idx, title in enumerate(titles)]
+
+    raw_candidates = re.split(r"[\n\r]+|[.!?]+", text)
+    candidates: list[str] = []
+    for part in raw_candidates:
+        cleaned = re.sub(r"\s+", " ", str(part or "")).strip(" -:;\t")
+        if len(cleaned) < 8:
+            continue
+        if cleaned.lower().startswith("/"):
+            continue
+        candidates.append(cleaned)
+
+    titles: list[str] = []
+    for candidate in candidates:
+        title = candidate[:100].strip()
+        if title:
+            titles.append(title[0].upper() + title[1:])
+        if len(titles) >= 5:
+            break
+
+    if not titles:
+        titles = [
+            "Understand the requested outcome",
+            "Implement required code and configuration changes",
+            "Validate behavior and summarize results",
+        ]
+
+    return [_todo_item(idx + 1, title) for idx, title in enumerate(titles)]
+
+
+def _clone_todos(todos: list[dict[str, str]]) -> list[dict[str, str]]:
+    return [
+        {
+            "id": str(item.get("id", "")),
+            "title": str(item.get("title", "")),
+            "status": str(item.get("status", "pending")),
+        }
+        for item in todos
+    ]
+
+
+def _todo_index_by_status(todos: list[dict[str, str]], status: str) -> int:
+    for idx, item in enumerate(todos):
+        if str(item.get("status", "")).lower() == status:
+            return idx
+    return -1
+
+
+def _todo_set_in_progress_if_needed(todos: list[dict[str, str]]) -> bool:
+    if not todos:
+        return False
+
+    if _todo_index_by_status(todos, "in_progress") >= 0:
+        return False
+
+    pending_idx = _todo_index_by_status(todos, "pending")
+    if pending_idx < 0:
+        return False
+
+    todos[pending_idx]["status"] = "in_progress"
+    return True
+
+
+def _todo_advance_after_success(todos: list[dict[str, str]]) -> bool:
+    if not todos:
+        return False
+
+    changed = False
+    current_idx = _todo_index_by_status(todos, "in_progress")
+    if current_idx < 0:
+        current_idx = _todo_index_by_status(todos, "pending")
+
+    if current_idx >= 0:
+        todos[current_idx]["status"] = "completed"
+        changed = True
+
+    next_idx = _todo_index_by_status(todos, "pending")
+    if next_idx >= 0:
+        todos[next_idx]["status"] = "in_progress"
+        changed = True
+
+    return changed
+
+
+def _todo_mark_all_completed(todos: list[dict[str, str]]) -> bool:
+    changed = False
+    for item in todos:
+        if str(item.get("status", "")).lower() != "completed":
+            item["status"] = "completed"
+            changed = True
+    return changed
+
+
+def _todo_revert_in_progress_to_pending(todos: list[dict[str, str]]) -> bool:
+    idx = _todo_index_by_status(todos, "in_progress")
+    if idx < 0:
+        return False
+    todos[idx]["status"] = "pending"
+    return True
 
 
 def _build_advisor_review(user_text: str, assistant_text: str, mode: str) -> dict[str, Any]:
@@ -1438,6 +1579,7 @@ async def list_commands_endpoint(request: Request):
             {"name": "/cost [days]", "description": "Show token and cost usage summary"},
             {"name": "/search <query>", "description": "Search the web and return top results"},
             {"name": "/krawlx <url>", "description": "Crawl a website via KrawlX secure crawler"},
+            {"name": "/firecrawl <url>", "description": "Crawl a website with Firecrawl provider"},
             {"name": "/crawlx <url>", "description": "Alias for /krawlx"},
             {"name": "/git <subcommand>", "description": "Run safe, read-only git command"},
             {"name": "/session", "description": "List recent sessions"},

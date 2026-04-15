@@ -34,6 +34,7 @@ KNOWN_ROOT_COMMANDS = [
     "/cost",
     "/search",
     "/krawlx",
+    "/firecrawl",
     "/crawlx",
     "/git",
     "/session",
@@ -68,6 +69,7 @@ COMMAND_REGISTRY: dict[str, str] = {
     "/cost": "Show token and estimated cost usage",
     "/search": "Search the web via configured providers",
     "/krawlx": "Crawl a website via KrawlX secure crawler",
+    "/firecrawl": "Crawl a website with Firecrawl provider",
     "/crawlx": "Alias for /krawlx",
     "/git": "Run safe, read-only git commands",
     "/session": "List and inspect sessions",
@@ -174,6 +176,7 @@ def _help_text() -> str:
         "/cost [days] - Show token and estimated cost usage",
         "/search <query> - Search the web and return top results",
         "/krawlx <url> [--max-pages N] [--max-depth N] [--timeout S] [--provider auto|native|firecrawl] [--same-origin true|false] [--obey-robots true|false] [--include regex1,regex2] [--exclude regex1,regex2] - Crawl website with KrawlX",
+        "/firecrawl <url> [--max-pages N] [--max-depth N] [--timeout S] [--same-origin true|false] [--obey-robots true|false] [--include regex1,regex2] [--exclude regex1,regex2] - Crawl website using Firecrawl provider",
         "/crawlx ... - Alias for /krawlx",
         "/git <subcommand> - Run safe read-only git command",
         "/git log|status|diff - Shortcut git commands",
@@ -644,6 +647,11 @@ async def execute_command(
 
     command = parts[0].lower()
     args = parts[1:]
+
+    if command == "/firecrawl":
+        command = "/krawlx"
+        if "--provider" not in args:
+            args = [*args, "--provider", "firecrawl"]
 
     if command in {"/help", "/?"}:
         return CommandExecutionResult(name="help", text=_help_text())

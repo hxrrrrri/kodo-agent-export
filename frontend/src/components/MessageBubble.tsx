@@ -1,10 +1,10 @@
 import { useEffect, useRef, useState } from 'react'
-import { Copy, Pencil, RotateCcw, Volume2, Square } from 'lucide-react'
+import { Copy, Pencil, RotateCcw, Volume2, Square, ExternalLink, X } from 'lucide-react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter'
 import { vscDarkPlus } from 'react-syntax-highlighter/dist/esm/styles/prism'
-import { AdvisorReview, Message } from '../store/chatStore'
+import { AdvisorReview, ArtifactItem, Message, PreviewItem, TodoItem } from '../store/chatStore'
 import { buildApiHeaders, parseApiError } from '../lib/api'
 import { ToolCallCard } from './ToolCallCard'
 
@@ -168,6 +168,341 @@ function AdvisorReviewCard({ review }: { review: AdvisorReview }) {
           next: {nextSteps.join(' | ')}
         </div>
       )}
+    </div>
+  )
+}
+
+function TodoList({ items }: { items: TodoItem[] }) {
+  const pending = items.filter((i) => i.status === 'pending').length
+  const done = items.filter((i) => i.status === 'completed').length
+  const total = items.length
+
+  return (
+    <div style={{
+      marginBottom: 12,
+      background: 'var(--bg-2)',
+      border: '1px solid var(--border)',
+      borderRadius: 'var(--radius)',
+      padding: '8px 10px',
+    }}>
+      <div style={{
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        marginBottom: 6,
+      }}>
+        <span style={{ fontSize: 10, letterSpacing: '0.1em', color: 'var(--text-2)', fontWeight: 600 }}>
+          TASKS
+        </span>
+        <span style={{ fontSize: 10, color: 'var(--text-2)' }}>
+          {done}/{total}
+        </span>
+      </div>
+
+      {/* Progress bar */}
+      {total > 0 && (
+        <div style={{
+          height: 2,
+          background: 'var(--border)',
+          borderRadius: 2,
+          marginBottom: 7,
+          overflow: 'hidden',
+        }}>
+          <div style={{
+            height: '100%',
+            width: `${(done / total) * 100}%`,
+            background: done === total ? 'var(--green)' : 'var(--accent)',
+            borderRadius: 2,
+            transition: 'width 0.3s ease',
+          }} />
+        </div>
+      )}
+
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+        {items.map((item) => (
+          <div key={item.id} style={{
+            display: 'flex',
+            alignItems: 'flex-start',
+            gap: 7,
+            opacity: item.status === 'completed' ? 0.6 : 1,
+          }}>
+            {/* Status icon */}
+            <span style={{
+              flexShrink: 0,
+              marginTop: 1,
+              width: 13,
+              display: 'inline-flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+            }}>
+              {item.status === 'completed' ? (
+                <span style={{ color: 'var(--green)', fontSize: 11, fontWeight: 700 }}>✓</span>
+              ) : item.status === 'in_progress' ? (
+                <span style={{
+                  display: 'inline-block',
+                  width: 8,
+                  height: 8,
+                  borderRadius: '50%',
+                  background: 'var(--accent)',
+                  animation: 'pulse-accent 1.5s ease-in-out infinite',
+                }} />
+              ) : (
+                <span style={{
+                  display: 'inline-block',
+                  width: 8,
+                  height: 8,
+                  borderRadius: '50%',
+                  border: '1.5px solid var(--text-2)',
+                }} />
+              )}
+            </span>
+
+            <span style={{
+              fontSize: 12,
+              color: item.status === 'completed' ? 'var(--text-2)' : 'var(--text-0)',
+              textDecoration: item.status === 'completed' ? 'line-through' : 'none',
+              lineHeight: 1.4,
+            }}>
+              {item.title}
+            </span>
+          </div>
+        ))}
+      </div>
+
+      {pending === 0 && total > 0 && (
+        <div style={{ fontSize: 10, color: 'var(--green)', marginTop: 6, letterSpacing: '0.05em' }}>
+          all tasks complete
+        </div>
+      )}
+    </div>
+  )
+}
+
+function ArtifactPanel({ artifacts }: { artifacts: ArtifactItem[] }) {
+  const [activeIdx, setActiveIdx] = useState(0)
+  const [copiedIdx, setCopiedIdx] = useState<number | null>(null)
+  const artifact = artifacts[Math.min(activeIdx, artifacts.length - 1)]
+
+  async function copyArtifact(idx: number) {
+    const text = artifacts[idx]?.content || ''
+    if (!text.trim()) return
+    try {
+      await navigator.clipboard.writeText(text)
+      setCopiedIdx(idx)
+      window.setTimeout(() => setCopiedIdx((p) => (p === idx ? null : p)), 2000)
+    } catch { /* ignore */ }
+  }
+
+  if (!artifact) return null
+
+  return (
+    <div style={{
+      marginTop: 12,
+      border: '1px solid var(--border)',
+      borderRadius: 'var(--radius)',
+      overflow: 'hidden',
+      background: 'var(--bg-0)',
+    }}>
+      {/* Tab bar */}
+      <div style={{
+        display: 'flex',
+        alignItems: 'center',
+        background: 'var(--bg-2)',
+        borderBottom: '1px solid var(--border)',
+        overflowX: 'auto',
+        gap: 0,
+      }}>
+        <div style={{
+          fontSize: 9,
+          color: 'var(--text-2)',
+          letterSpacing: '0.12em',
+          padding: '5px 10px',
+          borderRight: '1px solid var(--border)',
+          flexShrink: 0,
+        }}>
+          ARTIFACT
+        </div>
+        {artifacts.map((a, i) => (
+          <button
+            key={a.id}
+            type="button"
+            onClick={() => setActiveIdx(i)}
+            style={{
+              background: i === activeIdx ? 'var(--bg-3)' : 'transparent',
+              border: 'none',
+              borderRight: '1px solid var(--border)',
+              borderBottom: i === activeIdx ? '2px solid var(--accent)' : '2px solid transparent',
+              color: i === activeIdx ? 'var(--text-0)' : 'var(--text-2)',
+              padding: '5px 12px',
+              fontSize: 11,
+              fontFamily: 'var(--font-mono)',
+              cursor: 'pointer',
+              flexShrink: 0,
+              whiteSpace: 'nowrap',
+            }}
+          >
+            {a.filename || a.title}
+          </button>
+        ))}
+        <div style={{ flex: 1 }} />
+        <button
+          type="button"
+          onClick={() => copyArtifact(activeIdx)}
+          style={{
+            border: 'none',
+            background: 'transparent',
+            color: copiedIdx === activeIdx ? 'var(--green)' : 'var(--text-2)',
+            padding: '5px 10px',
+            fontSize: 10,
+            fontFamily: 'var(--font-mono)',
+            cursor: 'pointer',
+            flexShrink: 0,
+            letterSpacing: '0.08em',
+          }}
+        >
+          {copiedIdx === activeIdx ? 'COPIED' : 'COPY'}
+        </button>
+      </div>
+
+      {/* Code content */}
+      <SyntaxHighlighter
+        style={vscDarkPlus}
+        language={artifact.language || 'text'}
+        PreTag="div"
+        customStyle={{
+          margin: 0,
+          borderRadius: 0,
+          background: '#0f0f13',
+          fontSize: 12,
+          padding: '12px 16px',
+          maxHeight: 400,
+          overflow: 'auto',
+        }}
+      >
+        {artifact.content}
+      </SyntaxHighlighter>
+    </div>
+  )
+}
+
+function PreviewPanel({ previews }: { previews: PreviewItem[] }) {
+  const [activeIdx, setActiveIdx] = useState(0)
+  const [dismissed, setDismissed] = useState<Set<number>>(new Set())
+  const visible = previews.filter((_, i) => !dismissed.has(i))
+
+  if (visible.length === 0) return null
+  const preview = previews[activeIdx]
+  if (!preview || dismissed.has(activeIdx)) {
+    const nextIdx = previews.findIndex((_, i) => !dismissed.has(i))
+    if (nextIdx >= 0) setActiveIdx(nextIdx)
+    return null
+  }
+
+  return (
+    <div style={{
+      marginTop: 12,
+      border: '1px solid var(--border)',
+      borderRadius: 'var(--radius)',
+      overflow: 'hidden',
+      background: 'var(--bg-0)',
+    }}>
+      {/* Header */}
+      <div style={{
+        display: 'flex',
+        alignItems: 'center',
+        gap: 6,
+        background: 'var(--bg-2)',
+        borderBottom: '1px solid var(--border)',
+        padding: '5px 10px',
+      }}>
+        <span style={{
+          display: 'inline-block',
+          width: 7, height: 7,
+          borderRadius: '50%',
+          background: 'var(--green)',
+          flexShrink: 0,
+        }} />
+        <span style={{ fontSize: 9, color: 'var(--text-2)', letterSpacing: '0.12em', flex: 0 }}>
+          PREVIEW
+        </span>
+        {previews.length > 1 && previews.map((p, i) => !dismissed.has(i) && (
+          <button
+            key={p.id}
+            type="button"
+            onClick={() => setActiveIdx(i)}
+            style={{
+              background: i === activeIdx ? 'var(--accent-dim)' : 'transparent',
+              border: '1px solid ' + (i === activeIdx ? 'var(--accent)' : 'var(--border)'),
+              borderRadius: 3,
+              color: i === activeIdx ? 'var(--accent)' : 'var(--text-2)',
+              padding: '2px 7px',
+              fontSize: 10,
+              fontFamily: 'var(--font-mono)',
+              cursor: 'pointer',
+            }}
+          >
+            {i + 1}
+          </button>
+        ))}
+        <div style={{ flex: 1 }}>
+          <span style={{
+            fontSize: 10,
+            color: 'var(--text-2)',
+            fontFamily: 'var(--font-mono)',
+            overflow: 'hidden',
+            textOverflow: 'ellipsis',
+            whiteSpace: 'nowrap',
+            display: 'block',
+            maxWidth: 300,
+          }}>
+            {preview.url}
+          </span>
+        </div>
+        <a
+          href={preview.url}
+          target="_blank"
+          rel="noopener noreferrer"
+          style={{
+            color: 'var(--text-2)',
+            display: 'inline-flex',
+            alignItems: 'center',
+            padding: '2px 4px',
+          }}
+          title="Open in new tab"
+        >
+          <ExternalLink size={12} />
+        </a>
+        <button
+          type="button"
+          onClick={() => setDismissed((d) => new Set([...d, activeIdx]))}
+          style={{
+            background: 'transparent',
+            border: 'none',
+            color: 'var(--text-2)',
+            cursor: 'pointer',
+            display: 'inline-flex',
+            alignItems: 'center',
+            padding: '2px 4px',
+          }}
+          title="Dismiss preview"
+        >
+          <X size={12} />
+        </button>
+      </div>
+
+      {/* iframe */}
+      <iframe
+        src={preview.url}
+        style={{
+          width: '100%',
+          height: 480,
+          border: 'none',
+          display: 'block',
+          background: '#fff',
+        }}
+        sandbox="allow-scripts allow-same-origin allow-forms allow-popups"
+        title={`Preview: ${preview.url}`}
+      />
     </div>
   )
 }
@@ -462,11 +797,17 @@ export function MessageBubble({
         )}
       </div>
 
-      {/* Tool calls */}
+      {/* Todo list */}
+      {message.todoItems && message.todoItems.length > 0 && (
+        <TodoList items={message.todoItems} />
+      )}
+
+      {/* Advisor review */}
       {message.advisorReview && <AdvisorReviewCard review={message.advisorReview} />}
 
+      {/* Tool calls - compact inline labels */}
       {message.toolCalls && message.toolCalls.length > 0 && (
-        <div style={{ marginBottom: message.content ? 12 : 0 }}>
+        <div style={{ marginBottom: message.content ? 10 : 0 }}>
           {message.toolCalls.map((tc, i) => (
             <ToolCallCard
               key={i}
@@ -665,7 +1006,7 @@ export function MessageBubble({
           style={{
             marginTop: 10,
             display: 'flex',
-            justifyContent: 'flex-end',
+            justifyContent: 'flex-start',
           }}
         >
           <button
@@ -679,19 +1020,24 @@ export function MessageBubble({
               color: assistantResponseCopied ? 'var(--green)' : 'var(--text-1)',
               borderRadius: 6,
               cursor: 'pointer',
-              fontSize: 11,
-              fontFamily: 'var(--font-mono)',
-              padding: '5px 8px',
-              letterSpacing: '0.04em',
+              padding: '5px 7px',
               display: 'inline-flex',
               alignItems: 'center',
-              gap: 6,
             }}
           >
             <Copy size={12} />
-            <span>{assistantResponseCopied ? 'Copied' : 'Copy response'}</span>
           </button>
         </div>
+      )}
+
+      {/* Artifacts */}
+      {message.artifacts && message.artifacts.length > 0 && (
+        <ArtifactPanel artifacts={message.artifacts} />
+      )}
+
+      {/* Previews */}
+      {message.previews && message.previews.length > 0 && (
+        <PreviewPanel previews={message.previews} />
       )}
 
       {/* Usage */}

@@ -73,6 +73,27 @@ export interface AdvisorReview {
   mode?: string
 }
 
+export type TodoStatus = 'pending' | 'in_progress' | 'completed'
+
+export interface TodoItem {
+  id: string
+  title: string
+  status: TodoStatus
+}
+
+export interface ArtifactItem {
+  id: string
+  title: string
+  language: string
+  content: string
+  filename?: string
+}
+
+export interface PreviewItem {
+  id: string
+  url: string
+}
+
 export interface Message {
   id: string
   role: MessageRole
@@ -80,6 +101,9 @@ export interface Message {
   imageAttachment?: ImageAttachment
   advisorReview?: AdvisorReview
   toolCalls?: ToolCall[]
+  todoItems?: TodoItem[]
+  artifacts?: ArtifactItem[]
+  previews?: PreviewItem[]
   isStreaming?: boolean
   usage?: {
     input_tokens: number
@@ -168,6 +192,7 @@ interface ChatState {
   availableModes: ModeOption[]
   commands: CommandDefinition[]
   theme: ThemeKey
+  artifactModeEnabled: boolean
   searchQuery: string
   messageSearchQuery: string
 
@@ -188,6 +213,7 @@ interface ChatState {
   setAvailableModes: (modes: ModeOption[]) => void
   setCommands: (commands: CommandDefinition[]) => void
   setTheme: (theme: ThemeKey) => void
+  setArtifactModeEnabled: (enabled: boolean) => void
   setSearchQuery: (query: string) => void
   setMessageSearchQuery: (query: string) => void
   clearMessages: () => void
@@ -208,6 +234,7 @@ export const useChatStore = create<ChatState>((set) => ({
   availableModes: [],
   commands: [],
   theme: 'dark',
+  artifactModeEnabled: false,
   searchQuery: '',
   messageSearchQuery: '',
 
@@ -247,6 +274,7 @@ export const useChatStore = create<ChatState>((set) => ({
   setAvailableModes: (availableModes) => set({ availableModes }),
   setCommands: (commands) => set({ commands }),
   setTheme: (theme) => set({ theme }),
+  setArtifactModeEnabled: (artifactModeEnabled) => set({ artifactModeEnabled }),
   setSearchQuery: (searchQuery) => set({ searchQuery }),
   setMessageSearchQuery: (messageSearchQuery) => set({ messageSearchQuery }),
   clearMessages: () => set({ messages: [] }),

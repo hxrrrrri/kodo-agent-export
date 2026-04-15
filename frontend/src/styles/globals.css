@@ -442,6 +442,10 @@ aside {
   to { transform: rotate(360deg); }
 }
 
+@keyframes tool-spin {
+  to { transform: rotate(360deg); }
+}
+
 @keyframes messageSlideIn {
   from { opacity: 0; transform: translateY(5px); }
   to { opacity: 1; transform: translateY(0); }

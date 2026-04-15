@@ -407,18 +407,21 @@ class KrawlXTool(BaseTool):
         }
         start_payload = {
             "url": seed_url,
-            "crawlerOptions": {
-                "limit": max_pages,
-                "maxDiscoveryDepth": max_depth,
-            },
+            "limit": max_pages,
+            "maxDiscoveryDepth": max_depth,
         }
 
         base_timeout = max(20.0, min(120.0, timeout_seconds * 3))
         async with build_httpx_async_client(timeout=base_timeout, headers=headers) as client:
             start_response = await client.post(f"{self._firecrawl_base_url}/v1/crawl", json=start_payload)
             if start_response.status_code >= 400:
+                detail = _normalize_space(str(getattr(start_response, "text", "")))[:500]
                 raise ValueError(
-                    f"Firecrawl crawl start failed: HTTP {start_response.status_code}"
+                    (
+                        f"Firecrawl crawl start failed: HTTP {start_response.status_code}. {detail}"
+                        if detail
+                        else f"Firecrawl crawl start failed: HTTP {start_response.status_code}"
+                    )
                 )
 
             start_data = start_response.json() if start_response.content else {}
@@ -451,8 +454,13 @@ class KrawlXTool(BaseTool):
             while time.monotonic() < deadline:
                 status_response = await client.get(f"{self._firecrawl_base_url}/v1/crawl/{crawl_id}")
                 if status_response.status_code >= 400:
+                    detail = _normalize_space(str(getattr(status_response, "text", "")))[:500]
                     raise ValueError(
-                        f"Firecrawl status check failed: HTTP {status_response.status_code}"
+                        (
+                            f"Firecrawl status check failed: HTTP {status_response.status_code}. {detail}"
+                            if detail
+                            else f"Firecrawl status check failed: HTTP {status_response.status_code}"
+                        )
                     )
 
                 payload = status_response.json() if status_response.content else {}

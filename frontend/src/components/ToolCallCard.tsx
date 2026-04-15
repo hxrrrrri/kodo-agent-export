@@ -1,5 +1,4 @@
 import { useEffect, useRef, useState } from 'react'
-import { Terminal, FileText, Search, Globe, ChevronDown, ChevronRight, CheckCircle, XCircle, Loader } from 'lucide-react'
 import { ToolCall } from '../store/chatStore'
 
 function escapeRegExp(value: string): string {
@@ -51,17 +50,6 @@ function renderHighlightedText(text: string, query: string): JSX.Element {
   )
 }
 
-const TOOL_ICONS: Record<string, React.ReactNode> = {
-  bash: <Terminal size={13} />,
-  file_read: <FileText size={13} />,
-  file_write: <FileText size={13} />,
-  file_edit: <FileText size={13} />,
-  grep: <Search size={13} />,
-  glob: <Search size={13} />,
-  web_fetch: <Globe size={13} />,
-  mcp_tool_call: <Terminal size={13} />,
-}
-
 const TOOL_COLORS: Record<string, string> = {
   bash: 'var(--yellow)',
   file_read: 'var(--blue)',
@@ -70,20 +58,22 @@ const TOOL_COLORS: Record<string, string> = {
   grep: 'var(--green)',
   glob: 'var(--green)',
   web_fetch: 'var(--blue)',
-  mcp_tool_call: 'var(--blue)',
+  krawlx: 'var(--blue)',
+  mcp_tool_call: 'var(--text-2)',
 }
 
 function getInputPreview(tool: string, input: Record<string, unknown>): string {
   switch (tool) {
-    case 'bash': return String(input.command || '')
+    case 'bash': return String(input.command || '').slice(0, 80)
     case 'file_read': return String(input.path || '')
     case 'file_write': return String(input.path || '')
     case 'file_edit': return String(input.path || '')
     case 'grep': return `"${input.pattern}" in ${input.path || '.'}`
     case 'glob': return String(input.pattern || '')
     case 'web_fetch': return String(input.url || '')
+    case 'krawlx': return String(input.url || '')
     case 'mcp_tool_call': return `${String(input.server_name || '')}:${String(input.tool_name || '')}`
-    default: return JSON.stringify(input).slice(0, 60)
+    default: return JSON.stringify(input).slice(0, 80)
   }
 }
 
@@ -98,10 +88,9 @@ function renderDiff(diffText: string): JSX.Element | null {
 
   return (
     <div style={{
-      border: '1px solid var(--border)',
-      borderRadius: 'var(--radius)',
+      borderRadius: 4,
       background: 'var(--bg-0)',
-      maxHeight: 260,
+      maxHeight: 220,
       overflow: 'auto',
       fontFamily: 'var(--font-mono)',
       fontSize: 11,
@@ -124,12 +113,7 @@ function renderDiff(diffText: string): JSX.Element | null {
         return (
           <div
             key={`${line}-${index}`}
-            style={{
-              background,
-              color,
-              padding: '2px 8px',
-              whiteSpace: 'pre',
-            }}
+            style={{ background, color, padding: '1px 8px', whiteSpace: 'pre' }}
           >
             {line || ' '}
           </div>
@@ -139,11 +123,28 @@ function renderDiff(diffText: string): JSX.Element | null {
   )
 }
 
+// Spinner dot animation via inline keyframe trick
+function SpinnerDot({ color }: { color: string }) {
+  return (
+    <span
+      style={{
+        display: 'inline-block',
+        width: 7,
+        height: 7,
+        borderRadius: '50%',
+        border: `1.5px solid ${color}`,
+        borderTopColor: 'transparent',
+        flexShrink: 0,
+        animation: 'tool-spin 0.7s linear infinite',
+      }}
+    />
+  )
+}
+
 export function ToolCallCard({ tc, isLast, searchQuery }: { tc: ToolCall; isLast: boolean; searchQuery?: string }) {
   const [expanded, setExpanded] = useState(false)
   const liveOutputRef = useRef<HTMLDivElement>(null)
-  const color = TOOL_COLORS[tc.tool] || 'var(--text-1)'
-  const icon = TOOL_ICONS[tc.tool] || <Terminal size={13} />
+  const color = TOOL_COLORS[tc.tool] || 'var(--text-2)'
   const preview = getInputPreview(tc.tool, tc.input)
   const diffText = getDiffText(tc)
   const normalizedSearch = (searchQuery || '').trim().toLowerCase()
@@ -175,166 +176,185 @@ export function ToolCallCard({ tc, isLast, searchQuery }: { tc: ToolCall; isLast
     <div
       className="fade-in"
       style={{
-        margin: '6px 0',
-        borderRadius: 'var(--radius)',
-        border: `1px solid ${searchMatch ? 'var(--yellow)' : 'var(--border)'}`,
-        background: 'var(--bg-2)',
-        overflow: 'hidden',
-        fontSize: 12,
+        margin: '1px 0',
+        background: searchMatch ? 'rgba(255,200,0,0.05)' : 'transparent',
+        borderRadius: 4,
+        borderLeft: searchMatch ? '2px solid var(--yellow)' : '2px solid transparent',
+        paddingLeft: searchMatch ? 4 : 0,
       }}
     >
-      {/* Header */}
+      {/* Compact single-line label */}
       <div
         style={{
           display: 'flex',
           alignItems: 'center',
-          gap: 8,
-          padding: '7px 10px',
-          cursor: 'pointer',
-          borderBottom: expanded ? '1px solid var(--border)' : 'none',
+          gap: 6,
+          padding: '2px 0',
+          cursor: hasResult || isRunning ? 'pointer' : 'default',
+          userSelect: 'none',
+          minWidth: 0,
         }}
-        onClick={() => setExpanded(!expanded)}
+        onClick={() => (hasResult || showLiveOutput) && setExpanded(!expanded)}
+        title={hasResult ? (expanded ? 'Collapse' : 'Expand output') : undefined}
       >
-        {/* Status icon */}
+        {/* Status indicator */}
         {isRunning ? (
-          <Loader size={13} color="var(--yellow)" style={{ animation: 'spin 1s linear infinite', flexShrink: 0 }} />
+          <SpinnerDot color={color} />
         ) : tc.success === false ? (
-          <XCircle size={13} color="var(--red)" style={{ flexShrink: 0 }} />
+          <span style={{ color: 'var(--red)', fontSize: 9, fontWeight: 900, lineHeight: 1 }}>✗</span>
         ) : hasResult ? (
-          <CheckCircle size={13} color="var(--green)" style={{ flexShrink: 0 }} />
+          <span style={{ color: 'var(--green)', fontSize: 9, fontWeight: 900, lineHeight: 1 }}>✓</span>
         ) : (
-          <div style={{ width: 13, height: 13, flexShrink: 0 }} />
+          <span style={{ display: 'inline-block', width: 7, height: 7 }} />
         )}
 
-        {/* Tool name badge */}
-        <div style={{
-          color,
-          display: 'flex',
-          alignItems: 'center',
-          gap: 4,
+        {/* Tool name */}
+        <span style={{
+          fontFamily: 'var(--font-mono)',
+          fontSize: 11,
           fontWeight: 600,
-          letterSpacing: '0.05em',
+          color,
+          letterSpacing: '0.06em',
           flexShrink: 0,
         }}>
-          {icon}
           {tc.tool.toUpperCase()}
-        </div>
+        </span>
 
-        {/* Preview */}
-        <div className="truncate" style={{ flex: 1, color: 'var(--text-1)', opacity: 0.8 }}>
+        {/* Preview text */}
+        <span style={{
+          fontFamily: 'var(--font-mono)',
+          fontSize: 11,
+          color: 'var(--text-2)',
+          overflow: 'hidden',
+          textOverflow: 'ellipsis',
+          whiteSpace: 'nowrap',
+          flex: 1,
+          minWidth: 0,
+        }}>
           {normalizedSearch ? renderHighlightedText(preview, normalizedSearch) : preview}
-        </div>
+        </span>
 
-        {/* Expand toggle */}
+        {/* Expand hint when there's output */}
         {hasResult && (
-          expanded
-            ? <ChevronDown size={13} color="var(--text-2)" style={{ flexShrink: 0 }} />
-            : <ChevronRight size={13} color="var(--text-2)" style={{ flexShrink: 0 }} />
+          <span style={{ fontSize: 9, color: 'var(--text-2)', opacity: 0.5, flexShrink: 0 }}>
+            {expanded ? '▲' : '▼'}
+          </span>
         )}
       </div>
 
-      {/* Expanded content */}
-      {expanded && (
-        <div>
+      {/* Live stream output (while running) */}
+      {showLiveOutput && (
+        <div
+          ref={liveOutputRef}
+          style={{
+            fontFamily: 'var(--font-mono)',
+            fontSize: 10,
+            color: 'var(--text-2)',
+            paddingLeft: 13,
+            maxHeight: 100,
+            overflowY: 'auto',
+            whiteSpace: 'pre-wrap',
+            wordBreak: 'break-word',
+            lineHeight: 1.4,
+            marginBottom: 2,
+          }}
+        >
+          {tc.streamLines?.slice(-10).map((line, idx) => (
+            <div key={`${line}-${idx}`} style={{ opacity: 0.8 }}>{line}</div>
+          ))}
+        </div>
+      )}
+
+      {/* Expanded details panel */}
+      {expanded && hasResult && (
+        <div style={{
+          marginLeft: 13,
+          marginBottom: 4,
+          borderLeft: '1px solid var(--border)',
+          paddingLeft: 8,
+        }}>
           {/* Input */}
-          <div style={{ padding: '8px 10px', borderBottom: '1px solid var(--border)' }}>
-            <div style={{ fontSize: 10, color: 'var(--text-2)', letterSpacing: '0.1em', marginBottom: 4 }}>INPUT</div>
-            <pre style={{
-              fontFamily: 'var(--font-mono)',
-              fontSize: 11,
-              color: 'var(--text-1)',
-              overflowX: 'auto',
-              whiteSpace: 'pre-wrap',
-              wordBreak: 'break-all',
-              maxHeight: 120,
-              overflow: 'auto',
-            }}>
-              {JSON.stringify(tc.input, null, 2)}
-            </pre>
+          <div style={{
+            fontSize: 10,
+            color: 'var(--text-2)',
+            letterSpacing: '0.08em',
+            marginBottom: 2,
+            marginTop: 3,
+          }}>
+            INPUT
           </div>
+          <pre style={{
+            fontFamily: 'var(--font-mono)',
+            fontSize: 10,
+            color: 'var(--text-1)',
+            overflowX: 'auto',
+            whiteSpace: 'pre-wrap',
+            wordBreak: 'break-all',
+            maxHeight: 80,
+            overflow: 'auto',
+            margin: 0,
+          }}>
+            {JSON.stringify(tc.input, null, 2)}
+          </pre>
 
           {/* Output */}
           {tc.output && (
-            <div style={{ padding: '8px 10px' }}>
+            <>
               <div style={{
                 fontSize: 10,
                 color: tc.success === false ? 'var(--red)' : 'var(--text-2)',
-                letterSpacing: '0.1em',
-                marginBottom: 4,
+                letterSpacing: '0.08em',
+                marginBottom: 2,
+                marginTop: 5,
               }}>
                 {tc.success === false ? 'ERROR' : 'OUTPUT'}
               </div>
               <pre style={{
                 fontFamily: 'var(--font-mono)',
-                fontSize: 11,
+                fontSize: 10,
                 color: tc.success === false ? 'var(--red)' : 'var(--text-0)',
                 whiteSpace: 'pre-wrap',
                 wordBreak: 'break-all',
-                maxHeight: 200,
+                maxHeight: 160,
                 overflow: 'auto',
+                margin: 0,
               }}>
                 {normalizedSearch
                   ? renderHighlightedText(tc.output, normalizedSearch)
                   : tc.output}
               </pre>
-            </div>
+            </>
           )}
 
+          {/* Diff */}
           {diffText && (
-            <div style={{ padding: '8px 10px', borderTop: '1px solid var(--border)' }}>
+            <>
               <div style={{
                 fontSize: 10,
                 color: 'var(--text-2)',
-                letterSpacing: '0.1em',
-                marginBottom: 6,
+                letterSpacing: '0.08em',
+                marginBottom: 4,
+                marginTop: 5,
               }}>
                 DIFF
               </div>
               {renderDiff(diffText)}
-            </div>
+            </>
           )}
-        </div>
-      )}
 
-      {showLiveOutput && (
-        <div style={{ padding: '0 10px 10px' }}>
-          <div
-            ref={liveOutputRef}
-            style={{
-              fontFamily: 'var(--font-mono)',
-              fontSize: 11,
-              background: 'var(--bg-0)',
-              color: 'var(--text-1)',
-              padding: 8,
-              borderRadius: 'var(--radius)',
-              maxHeight: 200,
-              overflowY: 'auto',
-              whiteSpace: 'pre-wrap',
-              wordBreak: 'break-word',
-            }}
-          >
-            <div>&gt; {preview}</div>
-            {tc.streamLines?.map((line, idx) => (
-              <div key={`${line}-${idx}`}>
-                {normalizedSearch ? renderHighlightedText(line, normalizedSearch) : line}
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
-
-      {generatedImageUrl && (
-        <div style={{ padding: '0 10px 10px' }}>
-          <img
-            src={generatedImageUrl}
-            alt="Generated image"
-            style={{
-              maxWidth: '100%',
-              borderRadius: 'var(--radius)',
-              border: '1px solid var(--border)',
-              marginTop: 8,
-            }}
-          />
+          {/* Generated image */}
+          {generatedImageUrl && (
+            <img
+              src={generatedImageUrl}
+              alt="Generated"
+              style={{
+                maxWidth: '100%',
+                borderRadius: 4,
+                border: '1px solid var(--border)',
+                marginTop: 6,
+              }}
+            />
+          )}
         </div>
       )}
     </div>

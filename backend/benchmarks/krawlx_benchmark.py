@@ -163,10 +163,8 @@ async def _run_firecrawl_once(
 
     start_payload = {
         "url": seed_url,
-        "crawlerOptions": {
-            "limit": max_pages,
-            "maxDiscoveryDepth": max_depth,
-        },
+        "limit": max_pages,
+        "maxDiscoveryDepth": max_depth,
     }
 
     started = time.perf_counter()

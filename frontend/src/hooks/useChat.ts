@@ -1,6 +1,9 @@
 import { useCallback, useMemo, useRef } from 'react'
 import {
+  ArtifactItem,
   AdvisorReview,
+  PreviewItem,
+  TodoItem,
   useChatStore,
   Checkpoint,
   CommandDefinition,
@@ -139,6 +142,218 @@ function normalizeUsage(value: unknown): Message['usage'] | undefined {
     usage.input_cache_write_tokens = cacheWrite
   }
   return usage
+}
+
+function normalizeTodoItems(value: unknown): TodoItem[] | undefined {
+  if (!Array.isArray(value)) return undefined
+
+  const rows: TodoItem[] = []
+  for (const item of value) {
+    if (!item || typeof item !== 'object') continue
+    const raw = item as Record<string, unknown>
+    const title = String(raw.title || '').trim()
+    if (!title) continue
+    const id = String(raw.id || rows.length + 1)
+    const statusRaw = String(raw.status || 'pending').toLowerCase()
+    const status: TodoItem['status'] = statusRaw === 'completed'
+      ? 'completed'
+      : statusRaw === 'in_progress'
+        ? 'in_progress'
+        : 'pending'
+    rows.push({ id, title, status })
+  }
+
+  return rows.length > 0 ? rows : undefined
+}
+
+function normalizeArtifactItems(value: unknown): ArtifactItem[] | undefined {
+  if (!Array.isArray(value)) return undefined
+
+  const rows: ArtifactItem[] = []
+  for (const item of value) {
+    if (!item || typeof item !== 'object') continue
+    const raw = item as Record<string, unknown>
+    const title = String(raw.title || '').trim()
+    const content = String(raw.content || '')
+    if (!title || !content.trim()) continue
+    rows.push({
+      id: String(raw.id || `artifact-${rows.length + 1}`),
+      title,
+      language: String(raw.language || 'text').trim() || 'text',
+      content,
+      filename: String(raw.filename || '').trim() || undefined,
+    })
+  }
+
+  return rows.length > 0 ? rows : undefined
+}
+
+function normalizePreviewItems(value: unknown): PreviewItem[] | undefined {
+  if (!Array.isArray(value)) return undefined
+
+  const rows: PreviewItem[] = []
+  for (const item of value) {
+    if (!item || typeof item !== 'object') continue
+    const raw = item as Record<string, unknown>
+    const url = String(raw.url || '').trim()
+    if (!url) continue
+    rows.push({
+      id: String(raw.id || `preview-${rows.length + 1}`),
+      url,
+    })
+  }
+
+  return rows.length > 0 ? rows : undefined
+}
+
+const PREVIEW_URL_RE = /\bhttps?:\/\/[^\s<>"')\]]+/gi
+const EXCLUDED_PREVIEW_HOSTS = new Set([
+  'oaidalleapiprodscus.blob.core.windows.net',
+])
+
+function trimDetectedUrl(value: string): string {
+  return value.replace(/[),.;!?]+$/, '').trim()
+}
+
+function likelyPreviewUrl(url: string): boolean {
+  try {
+    const parsed = new URL(url)
+    const host = parsed.hostname.toLowerCase()
+
+    if (EXCLUDED_PREVIEW_HOSTS.has(host)) return false
+    if (host === 'localhost' || host === '127.0.0.1' || host === '0.0.0.0') return true
+    if (/\.vercel\.app$/.test(host)) return true
+    if (/\.netlify\.app$/.test(host)) return true
+    if (/\.pages\.dev$/.test(host)) return true
+    if (/\.onrender\.com$/.test(host)) return true
+    if (/\.fly\.dev$/.test(host)) return true
+
+    const port = parsed.port.trim()
+    if (port === '3000' || port === '4173' || port === '5173' || port === '8080') return true
+
+    return /preview|demo|app|site/i.test(parsed.pathname)
+  } catch {
+    return false
+  }
+}
+
+function extractPreviews(content: string): PreviewItem[] | undefined {
+  const text = String(content || '')
+  if (!text.trim()) return undefined
+
+  const matches = text.match(PREVIEW_URL_RE) || []
+  const urls = Array.from(new Set(matches.map(trimDetectedUrl).filter((url) => likelyPreviewUrl(url))))
+  if (urls.length === 0) return undefined
+
+  return urls.slice(0, 3).map((url, index) => ({
+    id: `preview-${index + 1}`,
+    url,
+  }))
+}
+
+const ARTIFACT_FENCE_RE = /```([^`\n]*)\n([\s\S]*?)```/g
+
+const LANGUAGE_EXTENSION_MAP: Record<string, string> = {
+  typescript: 'ts',
+  ts: 'ts',
+  tsx: 'tsx',
+  javascript: 'js',
+  js: 'js',
+  jsx: 'jsx',
+  python: 'py',
+  py: 'py',
+  html: 'html',
+  css: 'css',
+  json: 'json',
+  markdown: 'md',
+  md: 'md',
+  bash: 'sh',
+  sh: 'sh',
+  powershell: 'ps1',
+  yaml: 'yml',
+  yml: 'yml',
+  toml: 'toml',
+  sql: 'sql',
+}
+
+function inferLanguage(info: string): string {
+  const parts = info.trim().split(/\s+/).filter(Boolean)
+  if (parts.length === 0) return 'text'
+
+  if (parts[0].toLowerCase() === 'artifact' && parts[1]) {
+    return parts[1].toLowerCase()
+  }
+
+  if (parts[0].toLowerCase().startsWith('artifact:')) {
+    return parts[1]?.toLowerCase() || 'text'
+  }
+
+  return parts[0].toLowerCase()
+}
+
+function inferFilename(info: string, language: string, index: number): string | undefined {
+  const raw = info.trim()
+  const fileMatch = raw.match(/(?:file|filename)=([^\s]+)/i)
+  if (fileMatch?.[1]) {
+    return fileMatch[1].trim()
+  }
+
+  const artifactMatch = raw.match(/^artifact(?::([^\s]+))?/i)
+  if (artifactMatch?.[1]) {
+    return artifactMatch[1].trim()
+  }
+
+  const parts = raw.split(/\s+/).filter(Boolean)
+  if (parts.length >= 2 && /[\\/]|\./.test(parts[1])) {
+    return parts[1]
+  }
+  if (parts.length >= 3 && /[\\/]|\./.test(parts[2])) {
+    return parts[2]
+  }
+
+  const ext = LANGUAGE_EXTENSION_MAP[language] || 'txt'
+  return `artifact-${index}.${ext}`
+}
+
+function extractArtifacts(content: string, artifactModeEnabled: boolean): ArtifactItem[] | undefined {
+  const text = String(content || '')
+  if (!text.trim()) return undefined
+
+  ARTIFACT_FENCE_RE.lastIndex = 0
+  const rows: ArtifactItem[] = []
+  const dedupe = new Set<string>()
+
+  let match: RegExpExecArray | null = null
+  let index = 0
+  while ((match = ARTIFACT_FENCE_RE.exec(text)) !== null) {
+    index += 1
+    const info = String(match[1] || '').trim()
+    const code = String(match[2] || '')
+    const isExplicitArtifact = /^artifact(?::|\b)/i.test(info)
+
+    if (!artifactModeEnabled && !isExplicitArtifact) {
+      continue
+    }
+
+    if (!code.trim()) continue
+
+    const language = inferLanguage(info)
+    const filename = inferFilename(info, language, index)
+    const title = filename || `artifact-${index}`
+    const key = `${title}\n${code}`
+    if (dedupe.has(key)) continue
+    dedupe.add(key)
+
+    rows.push({
+      id: `artifact-${rows.length + 1}`,
+      title,
+      language,
+      content: code,
+      filename,
+    })
+  }
+
+  return rows.length > 0 ? rows : undefined
 }
 
 function normalizeToolCalls(value: unknown): ToolCall[] | undefined {
@@ -415,6 +630,7 @@ export function useChat() {
         .map((item) => {
           const role = String(item.role || '').toLowerCase() === 'user' ? 'user' : 'assistant'
           const content = extractTextContent(item.content)
+          const artifactModeEnabled = useChatStore.getState().artifactModeEnabled
           const imageFromContent = extractImageAttachment(item.content)
           const directImage = item.image_attachment
           const imageFromDirectAttachment = (() => {
@@ -437,6 +653,15 @@ export function useChat() {
               ? (item.advisor_review as AdvisorReview)
               : undefined,
             toolCalls: role === 'assistant' ? normalizeToolCalls(item.tool_calls) : undefined,
+            todoItems: role === 'assistant'
+              ? normalizeTodoItems(item.todo_items)
+              : undefined,
+            artifacts: role === 'assistant'
+              ? (normalizeArtifactItems(item.artifacts) || extractArtifacts(content, artifactModeEnabled))
+              : undefined,
+            previews: role === 'assistant'
+              ? (normalizePreviewItems(item.previews) || extractPreviews(content))
+              : undefined,
             usage: role === 'assistant' ? normalizeUsage(item.usage) : undefined,
             timestamp: normalizeTimestamp(item.timestamp),
           }
@@ -799,6 +1024,7 @@ export function useChat() {
             session_id: sessionId,
             project_dir: store.projectDir || null,
             mode: normalizeClientMode(store.sessionMode || 'execute', store.availableModes),
+            artifact_mode: Boolean(store.artifactModeEnabled),
           }
           if (Array.isArray(structured)) {
             basePayload.content = structured
@@ -895,7 +1121,18 @@ export function useChat() {
         if (!silent && assistantId) {
           store.updateMessageById(assistantId, (msg) => ({
             ...msg,
-            content: msg.content + (event.content as string),
+            content: (() => {
+              const next = msg.content + String(event.content || '')
+              return next
+            })(),
+            artifacts: (() => {
+              const next = msg.content + String(event.content || '')
+              return extractArtifacts(next, useChatStore.getState().artifactModeEnabled)
+            })(),
+            previews: (() => {
+              const next = msg.content + String(event.content || '')
+              return extractPreviews(next)
+            })(),
           }))
         }
         eventHandlers?.onText?.(String(event.content || ''), event)
@@ -966,6 +1203,10 @@ export function useChat() {
             ...msg,
             isStreaming: false,
             usage: event.usage as Message['usage'],
+            todoItems: (msg.todoItems || []).map((item) => ({
+              ...item,
+              status: item.status === 'pending' ? 'completed' : item.status,
+            })),
           }))
         }
         eventHandlers?.onDone?.(event.usage as Message['usage'] | undefined, event)
@@ -1038,6 +1279,32 @@ export function useChat() {
           }
         }
         break
+
+      case 'todo_plan': {
+        if (!silent && assistantId) {
+          const todos = normalizeTodoItems(event.todos)
+          if (todos && todos.length > 0) {
+            store.updateMessageById(assistantId, (msg) => ({
+              ...msg,
+              todoItems: todos,
+            }))
+          }
+        }
+        break
+      }
+
+      case 'todo_update': {
+        if (!silent && assistantId) {
+          const todos = normalizeTodoItems(event.todos)
+          if (todos && todos.length > 0) {
+            store.updateMessageById(assistantId, (msg) => ({
+              ...msg,
+              todoItems: todos,
+            }))
+          }
+        }
+        break
+      }
 
       case 'permission_request':
         // Reserved for future server-pushed permission events.

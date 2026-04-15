@@ -4,6 +4,7 @@ import json
 
 import pytest
 
+import tools.krawlx as krawlx_module
 from tools.krawlx import KrawlXTool
 
 
@@ -133,3 +134,71 @@ async def test_krawlx_provider_firecrawl_requires_key(monkeypatch):
 
     assert result.success is False
     assert "FIRECRAWL_API_KEY" in (result.error or "")
+
+
+@pytest.mark.asyncio
+async def test_krawlx_firecrawl_uses_v2_payload_keys(monkeypatch):
+    class _FakeResponse:
+        def __init__(self, status_code: int, payload: dict):
+            self.status_code = status_code
+            self._payload = payload
+            self.content = b"{}"
+            self.text = json.dumps(payload)
+
+        def json(self):
+            return self._payload
+
+    class _FakeClient:
+        def __init__(self):
+            self.start_payload: dict[str, object] | None = None
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def post(self, url: str, json: dict | None = None):
+            self.start_payload = dict(json or {})
+            return _FakeResponse(200, {"id": "crawl-1"})
+
+        async def get(self, url: str):
+            return _FakeResponse(
+                200,
+                {
+                    "status": "completed",
+                    "data": [
+                        {
+                            "url": "https://example.com/",
+                            "markdown": "Example content",
+                            "metadata": {"title": "Example"},
+                        }
+                    ],
+                },
+            )
+
+    async def fake_validate(self, url: str):
+        return None
+
+    fake_client = _FakeClient()
+
+    def fake_client_builder(*args, **kwargs):
+        return fake_client
+
+    monkeypatch.setattr(KrawlXTool, "_validate_target_url", fake_validate)
+    monkeypatch.setattr(krawlx_module, "build_httpx_async_client", fake_client_builder)
+
+    tool = KrawlXTool()
+    result = await tool.execute(
+        url="https://example.com",
+        provider="firecrawl",
+        max_pages=7,
+        max_depth=3,
+        firecrawl_api_key="fc-test-key",
+    )
+
+    assert result.success is True
+    assert isinstance(fake_client.start_payload, dict)
+    assert fake_client.start_payload.get("limit") == 7
+    assert fake_client.start_payload.get("maxDiscoveryDepth") == 3
+    assert "crawlerOptions" not in fake_client.start_payload
