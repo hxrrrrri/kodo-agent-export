@@ -28,6 +28,7 @@ from .image_gen import ImageGenTool
 from .screenshot import ScreenshotTool
 from .database_query import DatabaseQueryTool
 from .send_email import SendEmailTool
+from .caveman import CavemanTool
 from .crg_build_graph import CRGBuildGraphTool
 from .crg_detect_changes import CRGDetectChangesTool
 from .crg_get_impact_radius import CRGGetImpactRadiusTool
@@ -70,6 +71,7 @@ ALL_TOOLS: list[BaseTool] = [
     ScreenshotTool(),
     DatabaseQueryTool(),
     SendEmailTool(),
+    CavemanTool(),
     CRGBuildGraphTool(),
     CRGDetectChangesTool(),
     CRGGetImpactRadiusTool(),

@@ -138,7 +138,7 @@ Everything runs locally. No cloud dependency beyond your chosen AI provider API 
 │  │                  Tool Orchestration                │  │
 │  │  bash · file_read/write/edit · git · glob · grep  │  │
 │  │  web_fetch · web_search · repl · screenshot       │  │
-│  │  database_query · send_email · image_gen          │  │
+│  │  database_query · send_email · image_gen · caveman│  │
 │  │  mcp_* · task_* · agent_* · memory_write          │  │
 │  └────┬──────────────────────────────────────────────┘  │
 │       │                                                  │
@@ -263,7 +263,12 @@ kodo-agent-export/
 │   │   ├── extension-development.md
 │   │   ├── production-hardening.md
 │   │   ├── ui-polish.md
-│   │   └── web-research.md
+│   │   ├── web-research.md
+│   │   ├── caveman.md
+│   │   ├── caveman-help.md
+│   │   ├── caveman-commit.md
+│   │   ├── caveman-review.md
+│   │   └── caveman-compress.md
 │   │
 │   ├── commands/router.py          # Slash command routing
 │   ├── mcp/                        # MCP server registry + stdio client
@@ -460,6 +465,7 @@ ALLOWED_ORIGINS=http://localhost:5173
 | `KODO_ENABLE_DATABASE` | `1` | Read-only SQL queries (needs `DB_URL`) |
 | `KODO_ENABLE_EMAIL` | `0` | SMTP email dispatch |
 | `KODO_ENABLE_IMAGE_GEN` | `0` | DALL-E 3 image generation |
+| `KODO_ENABLE_CAVEMAN` | `0` | Caveman mode, caveman commands, and caveman compression tool |
 | `KODO_NO_TELEMETRY` | `0` | Disable local audit/usage event writes |
 
 ### Rate Limits
@@ -590,6 +596,15 @@ Type any command directly in the chat input:
 | `/doctor` | Run environment diagnostics |
 | `/doctor report` | Export full diagnostic report |
 
+### Caveman
+| Command | Description |
+|---|---|
+| `/caveman [lite|full|ultra|wenyan-lite|wenyan|wenyan-ultra|off]` | Enable/disable caveman response mode for this session |
+| `/caveman-help` | Show caveman quick reference |
+| `/caveman-commit` | Generate terse conventional commit output |
+| `/caveman-review` | Generate one-line review findings |
+| `/caveman:compress <path> [mode]` | Compress markdown/text files with caveman rules |
+
 ---
 
 ## Built-in Tools
@@ -618,6 +633,7 @@ The agent has access to 30+ tools it can call autonomously:
 |---|---|
 | `web_fetch` | Fetch and parse a URL |
 | `web_search` | Search the web (Firecrawl/Tavily/SerpAPI/DDG) |
+| `caveman` | Caveman help/status and markdown compression/validation |
 | `screenshot` | Capture a URL as base64 PNG |
 | `database_query` | Execute read-only SQL (SELECT only) |
 
@@ -641,7 +657,7 @@ The agent has access to 30+ tools it can call autonomously:
 
 ## Skills System
 
-Skills are markdown instructions the agent can load and execute. KODO ships with 10 built-in skills:
+Skills are markdown instructions the agent can load and execute. KODO ships with 15 built-in skills:
 
 | Skill | Purpose |
 |---|---|
@@ -655,6 +671,11 @@ Skills are markdown instructions the agent can load and execute. KODO ships with
 | `production-hardening` | Security and reliability hardening |
 | `ui-polish` | UI/UX review and improvement |
 | `web-research` | Structured web research workflows |
+| `caveman` | Terse caveman response style guidance |
+| `caveman-help` | Caveman quick reference |
+| `caveman-commit` | Terse Conventional Commit guidance |
+| `caveman-review` | One-line review guidance |
+| `caveman-compress` | Markdown/text compression workflow |
 
 ### Custom Skills
 

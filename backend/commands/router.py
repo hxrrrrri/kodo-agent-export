@@ -3,16 +3,24 @@ import os
 import shlex
 from dataclasses import dataclass
 from datetime import datetime
+from pathlib import Path
 from typing import Any
 
 from agent.coordinator import agent_coordinator
 from agent.modes import DEFAULT_MODE, get_mode, list_modes, normalize_mode
+from caveman import (
+    build_commit_run_prompt,
+    build_help_card as build_caveman_help_card,
+    build_review_run_prompt,
+    get_default_mode as get_default_caveman_mode,
+    normalize_mode as normalize_caveman_mode,
+)
 from code_review_graph_integration import manager as crg_manager
 from doctor import run_report, run_runtime_checks
 from mcp.registry import mcp_registry
 from memory.manager import memory_manager
 from observability.usage import summarize_usage
-from privacy import telemetry_disabled
+from privacy import feature_enabled, telemetry_disabled
 from profiles.manager import profile_manager
 from providers.smart_router import ROUTER_STRATEGIES, get_smart_router, smart_router_enabled
 from skills.registry import skill_registry
@@ -45,6 +53,11 @@ KNOWN_ROOT_COMMANDS = [
     "/dream",
     "/advisor",
     "/bughunter",
+    "/caveman",
+    "/caveman-help",
+    "/caveman-commit",
+    "/caveman-review",
+    "/caveman:compress",
 ]
 
 COMMAND_REGISTRY: dict[str, str] = {
@@ -72,6 +85,11 @@ COMMAND_REGISTRY: dict[str, str] = {
     "/dream": "Generate a bold next-iteration concept",
     "/advisor": "Run strategic advisor-style review guidance",
     "/bughunter": "Run targeted bug-hunting and validation flow",
+    "/caveman": "Enable or disable caveman response style in current session",
+    "/caveman-help": "Show caveman quick reference",
+    "/caveman-commit": "Generate terse conventional commit output",
+    "/caveman-review": "Generate terse one-line code review output",
+    "/caveman:compress": "Compress markdown/text files using caveman rules",
 }
 
 
@@ -206,6 +224,11 @@ def _help_text() -> str:
         "/dream [focus] - Brainstorm a high-impact next iteration",
         "/advisor [topic] - Ask for strategic advisor review",
         "/bughunter <issue> - Trigger bug-hunting workflow",
+        "/caveman [lite|full|ultra|wenyan-lite|wenyan|wenyan-ultra|off] - Set caveman mode",
+        "/caveman-help - Show caveman quick-reference card",
+        "/caveman-commit [context] - Generate terse conventional commit output",
+        "/caveman-review [context] - Generate one-line review findings",
+        "/caveman:compress <path> [mode] - Compress markdown/text file",
     ])
 
 
@@ -561,6 +584,23 @@ def _bughunter_prompt(issue: str) -> str:
     )
 
 
+def _caveman_enabled() -> bool:
+    return feature_enabled("CAVEMAN", default="0")
+
+
+def _resolve_command_path(raw_path: str, project_dir: str | None) -> str:
+    candidate = raw_path.strip()
+    if not candidate:
+        return candidate
+
+    path = Path(candidate).expanduser()
+    if path.is_absolute():
+        return str(path)
+
+    base = Path(project_dir).expanduser() if project_dir else Path.cwd()
+    return str((base / path).resolve())
+
+
 async def execute_command(message: str, session_id: str, project_dir: str | None = None) -> CommandExecutionResult:
     raw = message.strip()
 
@@ -639,6 +679,102 @@ async def execute_command(message: str, session_id: str, project_dir: str | None
             text="BugHunter engaged.",
             run_prompt=_bughunter_prompt(issue),
         )
+
+    if command == "/caveman":
+        if not _caveman_enabled():
+            return CommandExecutionResult(
+                name="caveman",
+                text="Caveman is disabled. Enable KODO_ENABLE_CAVEMAN=1 in settings.",
+            )
+
+        target_mode = ""
+        if args:
+            requested = str(args[0]).strip().lower()
+            if requested in {"off", "stop", "normal", "normal-mode"}:
+                target_mode = "off"
+            else:
+                normalized = normalize_caveman_mode(requested)
+                if normalized is None:
+                    return CommandExecutionResult(
+                        name="caveman",
+                        text="Usage: /caveman [lite|full|ultra|wenyan-lite|wenyan|wenyan-ultra|off]",
+                    )
+                target_mode = normalized
+        else:
+            default_mode = get_default_caveman_mode()
+            target_mode = "full" if default_mode == "off" else default_mode
+
+        await memory_manager.update_session_metadata(
+            session_id,
+            {"caveman_mode": target_mode},
+            create_if_missing=True,
+        )
+        if target_mode == "off":
+            return CommandExecutionResult(name="caveman", text="Caveman mode disabled for this session.")
+        return CommandExecutionResult(name="caveman", text=f"Caveman mode set to {target_mode}.")
+
+    if command == "/caveman-help":
+        if not _caveman_enabled():
+            return CommandExecutionResult(
+                name="caveman-help",
+                text="Caveman is disabled. Enable KODO_ENABLE_CAVEMAN=1 in settings.",
+            )
+        return CommandExecutionResult(name="caveman-help", text=build_caveman_help_card())
+
+    if command == "/caveman-commit":
+        if not _caveman_enabled():
+            return CommandExecutionResult(
+                name="caveman-commit",
+                text="Caveman is disabled. Enable KODO_ENABLE_CAVEMAN=1 in settings.",
+            )
+        context = " ".join(args).strip()
+        return CommandExecutionResult(
+            name="caveman-commit",
+            text="Caveman commit style engaged.",
+            run_prompt=build_commit_run_prompt(context),
+        )
+
+    if command == "/caveman-review":
+        if not _caveman_enabled():
+            return CommandExecutionResult(
+                name="caveman-review",
+                text="Caveman is disabled. Enable KODO_ENABLE_CAVEMAN=1 in settings.",
+            )
+        context = " ".join(args).strip()
+        return CommandExecutionResult(
+            name="caveman-review",
+            text="Caveman review style engaged.",
+            run_prompt=build_review_run_prompt(context),
+        )
+
+    if command == "/caveman:compress":
+        if not _caveman_enabled():
+            return CommandExecutionResult(
+                name="caveman:compress",
+                text="Caveman is disabled. Enable KODO_ENABLE_CAVEMAN=1 in settings.",
+            )
+        if not args:
+            return CommandExecutionResult(name="caveman:compress", text="Usage: /caveman:compress <path> [mode]")
+
+        source_path = _resolve_command_path(args[0], project_dir)
+        mode = "full"
+        if len(args) >= 2:
+            normalized = normalize_caveman_mode(args[1])
+            if normalized is None or normalized == "off":
+                return CommandExecutionResult(
+                    name="caveman:compress",
+                    text="Usage: /caveman:compress <path> [lite|full|ultra|wenyan-lite|wenyan|wenyan-ultra]",
+                )
+            mode = "wenyan-full" if normalized == "wenyan" else normalized
+
+        tool_result = await _run_tool_command(
+            "caveman",
+            action="compress_file",
+            path=source_path,
+            mode=mode,
+            create_backup=True,
+        )
+        return CommandExecutionResult(name="caveman:compress", text=tool_result.text)
 
     if command in {"/cost", "/usage"}:
         days = 7

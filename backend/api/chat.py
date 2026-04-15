@@ -1468,6 +1468,11 @@ async def list_commands_endpoint(request: Request):
             {"name": "/dream [focus]", "description": "Generate a bold next-iteration concept"},
             {"name": "/advisor [topic]", "description": "Run strategic advisor-style review"},
             {"name": "/bughunter <issue>", "description": "Trigger bug-hunting workflow"},
+            {"name": "/caveman [mode]", "description": "Enable caveman response mode for this session"},
+            {"name": "/caveman-help", "description": "Show caveman quick reference"},
+            {"name": "/caveman-commit", "description": "Generate terse conventional commit output"},
+            {"name": "/caveman-review", "description": "Generate one-line review findings"},
+            {"name": "/caveman:compress <path> [mode]", "description": "Compress markdown/text with caveman rules"},
         ]
     }
 

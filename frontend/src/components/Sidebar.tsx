@@ -839,6 +839,7 @@ export function Sidebar({ collapsed, onToggleCollapse }: SidebarProps) {
           kodo_enable_streaming_tools: toBool(settingsData.kodo_enable_streaming_tools),
           kodo_enable_prompt_cache: toBool(settingsData.kodo_enable_prompt_cache),
           kodo_enable_auto_title: toBool(settingsData.kodo_enable_auto_title),
+          kodo_enable_caveman: toBool(settingsData.kodo_enable_caveman),
         }),
       })
       if (!response.ok) {
@@ -2252,6 +2253,7 @@ export function Sidebar({ collapsed, onToggleCollapse }: SidebarProps) {
                   ['kodo_enable_streaming_tools', 'Streaming tools'],
                   ['kodo_enable_prompt_cache', 'Prompt cache'],
                   ['kodo_enable_auto_title', 'Auto title'],
+                  ['kodo_enable_caveman', 'Caveman toolkit'],
                   ['kodo_no_telemetry', 'Disable telemetry'],
                 ].map(([key, label]) => {
                   const value = String(settingsData[key] || '').toLowerCase()

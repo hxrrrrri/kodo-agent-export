@@ -1,5 +1,8 @@
 from agent.modes import get_mode
+from caveman import build_mode_prompt as build_caveman_mode_prompt
+from caveman import normalize_mode as normalize_caveman_mode
 from memory.manager import memory_manager
+from privacy import feature_enabled
 
 BASE_SYSTEM_PROMPT = """You are KODO, an autonomous software engineering agent.
 
@@ -44,7 +47,12 @@ def build_tool_prompt_context() -> str:
     return "Tool-specific guidance:\n" + "\n".join(lines)
 
 
-async def build_system_prompt(*, project_dir: str | None, mode: str | None) -> str:
+async def build_system_prompt(
+    *,
+    project_dir: str | None,
+    mode: str | None,
+    caveman_mode: str | None = None,
+) -> str:
     sections = [BASE_SYSTEM_PROMPT, get_mode(mode).prompt]
 
     tool_context = build_tool_prompt_context()
@@ -54,5 +62,12 @@ async def build_system_prompt(*, project_dir: str | None, mode: str | None) -> s
     memory_context = await memory_manager.load_memory(project_dir)
     if memory_context:
         sections.append(memory_context)
+
+    if feature_enabled("CAVEMAN", default="0"):
+        normalized_caveman_mode = normalize_caveman_mode(caveman_mode)
+        if normalized_caveman_mode and normalized_caveman_mode != "off":
+            caveman_prompt = build_caveman_mode_prompt(normalized_caveman_mode)
+            if caveman_prompt.strip():
+                sections.append(caveman_prompt)
 
     return "\n\n".join([section for section in sections if section.strip()])

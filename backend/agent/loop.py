@@ -13,6 +13,9 @@ from openai import AsyncOpenAI
 from agent.modes import normalize_mode
 from agent.permissions import get_permission_checker
 from agent.prompt_builder import build_system_prompt
+from caveman import get_default_mode as get_default_caveman_mode
+from caveman import normalize_mode as normalize_caveman_mode
+from memory.manager import memory_manager
 from privacy import feature_enabled
 from profiles.manager import ProviderProfile, profile_manager
 from providers.gemini_provider import gemini_chat
@@ -709,7 +712,20 @@ class AgentLoop:
         self._apply_runtime_config(_resolve_provider_config(self.model_override))
 
     async def _build_system_prompt(self) -> str:
-        return await build_system_prompt(project_dir=self.project_dir, mode=self.mode)
+        caveman_mode: str | None = None
+        if feature_enabled("CAVEMAN", default="0"):
+            metadata = await memory_manager.get_session_metadata(self.session_id)
+            if isinstance(metadata, dict):
+                caveman_mode = normalize_caveman_mode(str(metadata.get("caveman_mode", "")).strip())
+            if caveman_mode is None:
+                configured_default = get_default_caveman_mode()
+                if configured_default != "off":
+                    caveman_mode = configured_default
+        return await build_system_prompt(
+            project_dir=self.project_dir,
+            mode=self.mode,
+            caveman_mode=caveman_mode,
+        )
 
     async def run(
         self,
