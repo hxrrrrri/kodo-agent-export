@@ -3,6 +3,8 @@ import { Sidebar } from './components/Sidebar'
 import ChatWindow from './components/ChatWindow'
 import { NotificationCenter } from './components/NotificationCenter'
 import { EditorPanel } from './components/EditorPanel'
+import { ArtifactSidePanel } from './components/ArtifactSidePanel'
+import { DesignStudio } from './components/DesignStudio'
 import { useChatStore } from './store/chatStore'
 import { THEME_KEYS, THEME_TONES, ThemeKey } from './store/chatStore'
 import { requestUiNotificationPermission } from './lib/notifications'
@@ -14,9 +16,18 @@ export default function App() {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
   const [editorOpen, setEditorOpen] = useState(false)
   const [editorWidthPercent, setEditorWidthPercent] = useState(40)
+  const [artifactWidthPercent, setArtifactWidthPercent] = useState(42)
   const rootRef = useRef<HTMLDivElement>(null)
   const theme = useChatStore((state) => state.theme)
   const setTheme = useChatStore((state) => state.setTheme)
+  const selectedArtifact = useChatStore((state) => state.selectedArtifact)
+  const setSelectedArtifact = useChatStore((state) => state.setSelectedArtifact)
+  const designStudioOpen = useChatStore((state) => state.designStudioOpen)
+  const setDesignStudioOpen = useChatStore((state) => state.setDesignStudioOpen)
+
+  // artifact panel takes precedence over editor when both could be open
+  const artifactOpen = selectedArtifact !== null
+  const showEditor = editorOpen && !artifactOpen
 
   useEffect(() => {
     const saved = window.localStorage.getItem(SIDEBAR_COLLAPSE_STORAGE_KEY)
@@ -58,6 +69,12 @@ export default function App() {
     }
   }, [])
 
+  useEffect(() => {
+    const handler = () => setDesignStudioOpen(true)
+    window.addEventListener('kodo:open-design-studio', handler)
+    return () => window.removeEventListener('kodo:open-design-studio', handler)
+  }, [setDesignStudioOpen])
+
   const toggleSidebar = () => {
     setSidebarCollapsed((prev) => !prev)
   }
@@ -88,6 +105,30 @@ export default function App() {
     window.addEventListener('mouseup', onUp)
   }
 
+  const startResizeArtifact = (event: ReactMouseEvent<HTMLDivElement>) => {
+    event.preventDefault()
+    const root = rootRef.current
+    if (!root) return
+
+    const onMove = (moveEvent: MouseEvent) => {
+      const rect = root.getBoundingClientRect()
+      const rightPanePx = rect.right - moveEvent.clientX
+      const next = (rightPanePx / rect.width) * 100
+      const clamped = Math.max(28, Math.min(65, next))
+      setArtifactWidthPercent(clamped)
+    }
+
+    const onUp = () => {
+      window.removeEventListener('mousemove', onMove)
+      window.removeEventListener('mouseup', onUp)
+    }
+
+    window.addEventListener('mousemove', onMove)
+    window.addEventListener('mouseup', onUp)
+  }
+
+  const rightPanelWidth = artifactOpen ? artifactWidthPercent : (showEditor ? editorWidthPercent : 0)
+
   return (
     <div style={{
       display: 'flex',
@@ -107,11 +148,39 @@ export default function App() {
       <Sidebar collapsed={sidebarCollapsed} onToggleCollapse={toggleSidebar} />
 
       <div style={{ flex: 1, minWidth: 0, display: 'flex', height: '100%' }}>
-        <div style={{ width: editorOpen ? `${100 - editorWidthPercent}%` : '100%', minWidth: 0 }}>
-          <ChatWindow editorOpen={editorOpen} onToggleEditor={toggleEditor} />
+        <div style={{
+          width: (artifactOpen || showEditor) ? `${100 - rightPanelWidth}%` : '100%',
+          minWidth: 0,
+          transition: 'width 0.2s ease',
+        }}>
+          <ChatWindow editorOpen={showEditor} onToggleEditor={toggleEditor} />
         </div>
 
-        {editorOpen && (
+        {artifactOpen && selectedArtifact && (
+          <>
+            <div
+              role="separator"
+              aria-orientation="vertical"
+              onMouseDown={startResizeArtifact}
+              style={{
+                width: 6,
+                cursor: 'col-resize',
+                background: 'var(--bg-2)',
+                borderLeft: '1px solid var(--border)',
+                borderRight: '1px solid var(--border)',
+                flexShrink: 0,
+              }}
+            />
+            <div style={{ width: `${artifactWidthPercent}%`, flexShrink: 0, height: '100%' }}>
+              <ArtifactSidePanel
+                artifacts={[selectedArtifact]}
+                onClose={() => setSelectedArtifact(null)}
+              />
+            </div>
+          </>
+        )}
+
+        {showEditor && (
           <>
             <div
               role="separator"
@@ -123,6 +192,7 @@ export default function App() {
                 background: 'var(--bg-2)',
                 borderLeft: '1px solid var(--border)',
                 borderRight: '1px solid var(--border)',
+                flexShrink: 0,
               }}
             />
             <EditorPanel widthPercent={editorWidthPercent} />
@@ -131,6 +201,10 @@ export default function App() {
       </div>
 
       <NotificationCenter />
+
+      {designStudioOpen && (
+        <DesignStudio onClose={() => setDesignStudioOpen(false)} />
+      )}
     </div>
   )
 }

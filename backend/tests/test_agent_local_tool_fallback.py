@@ -67,3 +67,22 @@ def test_local_forced_tool_detects_bug_scan_intent():
         assert "Get-ChildItem -Recurse -File" in command
     else:
         assert "grep -RInE" in command
+
+
+def test_local_forced_tool_ignores_design_prompts_with_filename_instructions():
+    prompt = (
+        "Output complete, self-contained HTML/CSS/JS files for a single-page website. "
+        "Put HTML in ```html filename.html blocks. "
+        "You may also use separate ```css and ```js blocks with filenames. "
+        "Never reference external files not in the response.\n\n"
+        "Create an animated pricing table with 3 tiers, feature comparison, "
+        "monthly/yearly toggle, and one highlighted plan."
+    )
+
+    forced = loop_mod._infer_local_forced_tool_call(
+        user_message=prompt,
+        provider="ollama",
+        project_dir="C:/workspace",
+    )
+
+    assert forced is None

@@ -17,6 +17,7 @@ import {
   Trash2,
   X,
   Zap,
+  Wand2,
 } from 'lucide-react'
 import { useChat } from '../hooks/useChat'
 import { Session, THEME_TONES, useChatStore } from '../store/chatStore'
@@ -35,7 +36,7 @@ type SidebarProps = {
   onToggleCollapse: () => void
 }
 
-type SidebarView = 'sessions' | 'providers' | 'agents' | 'usage' | 'prompts' | 'compressor' | 'skills' | 'crg' | 'review' | 'settings'
+type SidebarView = 'sessions' | 'providers' | 'agents' | 'usage' | 'prompts' | 'compressor' | 'skills' | 'crg' | 'review' | 'settings' | 'design'
 
 type RuntimeTask = {
   task_id: string
@@ -1152,6 +1153,15 @@ export function Sidebar({ collapsed, onToggleCollapse }: SidebarProps) {
           active={activeView === 'crg'}
         />
 
+        <RailButton
+          icon={<Wand2 size={15} />}
+          label="Design Studio"
+          onClick={() => {
+            window.dispatchEvent(new CustomEvent('kodo:open-design-studio'))
+          }}
+          active={false}
+        />
+
         <div style={{ flex: 1 }} />
 
         <RailButton
@@ -1340,6 +1350,12 @@ export function Sidebar({ collapsed, onToggleCollapse }: SidebarProps) {
             label="Settings"
             active={activeView === 'settings'}
             onClick={() => setActiveView('settings')}
+          />
+          <PanelNav
+            icon={<Wand2 size={15} />}
+            label="Design Studio"
+            active={false}
+            onClick={() => window.dispatchEvent(new CustomEvent('kodo:open-design-studio'))}
           />
         </div>
 

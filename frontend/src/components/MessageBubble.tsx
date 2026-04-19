@@ -1,10 +1,10 @@
 import { useEffect, useRef, useState } from 'react'
-import { Copy, Pencil, RotateCcw, Volume2, Square, ExternalLink, X } from 'lucide-react'
+import { Copy, Pencil, RotateCcw, Volume2, Square, ExternalLink, X, Maximize2 } from 'lucide-react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter'
 import { vscDarkPlus } from 'react-syntax-highlighter/dist/esm/styles/prism'
-import { AdvisorReview, ArtifactItem, Message, PreviewItem } from '../store/chatStore'
+import { AdvisorReview, ArtifactItem, Message, PreviewItem, useChatStore } from '../store/chatStore'
 import { buildApiHeaders, parseApiError } from '../lib/api'
 import { ToolCallCard } from './ToolCallCard'
 
@@ -180,6 +180,7 @@ function ArtifactPanel({ artifacts }: { artifacts: ArtifactItem[] }) {
   const [activeIdx, setActiveIdx] = useState(0)
   const [copiedIdx, setCopiedIdx] = useState<number | null>(null)
   const artifact = artifacts[Math.min(activeIdx, artifacts.length - 1)]
+  const setSelectedArtifact = useChatStore((s) => s.setSelectedArtifact)
 
   async function copyArtifact(idx: number) {
     const text = artifacts[idx]?.content || ''
@@ -259,6 +260,27 @@ function ArtifactPanel({ artifacts }: { artifacts: ArtifactItem[] }) {
           }}
         >
           {copiedIdx === activeIdx ? 'COPIED' : 'COPY'}
+        </button>
+        <button
+          type="button"
+          onClick={() => setSelectedArtifact(artifact)}
+          title="Open in artifact panel"
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 4,
+            border: 'none',
+            background: 'transparent',
+            color: 'var(--accent)',
+            padding: '5px 10px',
+            fontSize: 10,
+            fontFamily: 'var(--font-mono)',
+            cursor: 'pointer',
+            flexShrink: 0,
+            letterSpacing: '0.08em',
+          }}
+        >
+          <Maximize2 size={11} /> EXPAND
         </button>
       </div>
 

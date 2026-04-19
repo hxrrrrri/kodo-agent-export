@@ -3,54 +3,77 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Pinterest Clone</title>
+    <title>Pinterest Clone - Hyper-Dynamic</title>
     <style>
         :root {
             --pinterest-red: #e60023;
             --pinterest-gray: #efefef;
             --pinterest-dark-gray: #767676;
             --pinterest-black: #111111;
+            --accent-glow: rgba(230, 0, 35, 0.4);
         }
 
         body {
             margin: 0;
             font-family: 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
-            background-color: white;
+            background-color: #fafafa;
             color: var(--pinterest-black);
+            overflow-x: hidden;
         }
 
-        /* Header */
+        /* Header with Glassmorphism & Scroll Effect */
         header {
             position: fixed;
             top: 0;
             width: 100%;
             height: 60px;
-            background: white;
+            background: rgba(255, 255, 255, 0.8);
+            backdrop-filter: blur(15px);
             display: flex;
             align-items: center;
             padding: 0 20px;
             box-sizing: border-box;
             z-index: 1000;
+            transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+            border-bottom: 1px solid transparent;
+        }
+
+        header.scrolled {
+            height: 50px;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.08);
+            border-bottom: 1px solid rgba(0,0,0,0.05);
         }
 
         .logo {
             color: var(--pinterest-red);
-            font-weight: bold;
+            font-weight: 800;
             font-size: 24px;
             margin-right: 20px;
             cursor: pointer;
+            transition: transform 0.3s ease;
+        }
+
+        .logo:hover {
+            transform: scale(1.1) rotate(-2deg);
         }
 
         .search-bar {
             flex-grow: 1;
             background-color: var(--pinterest-gray);
-            border: none;
+            border: 2px solid transparent;
             padding: 12px 20px;
             border-radius: 24px;
             font-size: 16px;
             outline: none;
             max-width: 800px;
             margin: 0 15px;
+            transition: all 0.3s ease;
+        }
+
+        .search-bar:focus {
+            background-color: white;
+            border-color: var(--pinterest-dark-gray);
+            box-shadow: 0 0 0 4px rgba(0,0,0,0.05);
         }
 
         .nav-links {
@@ -67,12 +90,17 @@
             border-radius: 50%;
             margin-left: 20px;
             cursor: pointer;
+            transition: transform 0.3s ease;
+        }
+
+        .profile-icon:hover {
+            transform: scale(1.2);
         }
 
         /* Main Grid */
         .container {
             margin-top: 80px;
-            padding: 0 20px;
+            padding: 0 20px 100px 20px;
         }
 
         .pin-grid {
@@ -85,25 +113,47 @@
         @media (max-width: 900px) { .pin-grid { column-count: 3; } }
         @media (max-width: 600px) { .pin-grid { column-count: 2; } }
 
+        /* Crazy Animations for Pins */
         .pin {
             display: inline-block;
             width: 100%;
             margin-bottom: 16px;
             position: relative;
-            cursor: zoom-in;
+            cursor: pointer;
             border-radius: 16px;
             overflow: hidden;
+            opacity: 0; 
+            transform: translateY(50px) scale(0.9);
+            transition: opacity 0.6s ease-out, transform 0.6s cubic-bezier(0.34, 1.56, 0.64, 1);
+            will-change: transform, opacity;
+        }
+
+        .pin.revealed {
+            opacity: 1;
+            transform: translateY(0) scale(1);
         }
 
         .pin img, .pin video {
             width: 100%;
             display: block;
             border-radius: 16px;
-            transition: filter 0.3s ease;
+            transition: transform 0.5s cubic-bezier(0.25, 0.46, 0.45, 0.94), filter 0.3s ease;
         }
 
-        .pin:hover img {
-            filter: brightness(0.8);
+        .pin:hover img, .pin:hover video {
+            transform: scale(1.05);
+            filter: brightness(0.9);
+        }
+
+        /* Float Effect on Scroll */
+        .floating-element {
+            position: fixed;
+            pointer-events: none;
+            border-radius: 50%;
+            background: var(--accent-glow);
+            filter: blur(40px);
+            z-index: -1;
+            transition: all 0.1s linear;
         }
 
         .pin-overlay {
@@ -120,6 +170,7 @@
             padding: 15px;
             box-sizing: border-box;
             color: white;
+            background: linear-gradient(to bottom, rgba(0,0,0,0.1) 0%, rgba(0,0,0,0.5) 100%);
         }
 
         .pin:hover .pin-overlay {
@@ -135,10 +186,14 @@
             font-weight: bold;
             cursor: pointer;
             align-self: flex-end;
+            transition: all 0.2s ease;
+            box-shadow: 0 4px 10px rgba(230, 0, 35, 0.3);
         }
 
         .save-btn:hover {
             background-color: #ad081b;
+            transform: scale(1.05) translateY(-2px);
+            box-shadow: 0 6px 15px rgba(230, 0, 35, 0.4);
         }
 
         .pin-bottom-actions {
@@ -156,19 +211,41 @@
             font-size: 12px;
             cursor: pointer;
             backdrop-filter: blur(5px);
+            transition: background 0.2s ease;
+        }
+
+        .action-btn:hover {
+            background: rgba(0,0,0,0.8);
+        }
+
+        /* Custom Cursor */
+        #custom-cursor {
+            position: fixed;
+            width: 20px;
+            height: 20px;
+            border: 2px solid var(--pinterest-red);
+            border-radius: 50%;
+            pointer-events: none;
+            z-index: 9999;
+            transition: width 0.3s, height 0.3s, background 0.3s;
+            transform: translate(-50%, -50%);
         }
     </style>
 </head>
 <body>
 
-    <header>
+    <div id="custom-cursor"></div>
+    <div class="floating-element" style="width: 300px; height: 300px; top: 10%; left: 10%;"></div>
+    <div class="floating-element" style="width: 200px; height: 200px; top: 60%; right: 5%;"></div>
+
+    <header id="mainHeader">
         <div class="logo">Pinterest</div>
         <input type="text" class="search-bar" placeholder="Search for ideas...">
         <div class="nav-links">
             <span>Home</span>
             <span>Explore</span>
             <span>Create</span>
-        </div>
+        </div >
         <div class="profile-icon"></div>
     </header>
 
@@ -180,13 +257,32 @@
 
     <script>
         const grid = document.getElementById('pinGrid');
-        const colors = ['#FFB6C1', '#ADD8E6', '#90EE90', '#FFD700', '#FFA07A', '#E6E6FA', '#F08080'];
-        
-        // Create dummy pins
-        for (let i = 0; i < 30; i++) {
-            const height = Math.floor(Math.random() * (400 - 200 + 1)) + 200;
-            const color = colors[Math.floor(Math.random() * colors.length)];
-            const isVideo = Math.random() > 0.8;
+        const header = document.getElementById('mainHeader');
+        const cursor = document.getElementById('custom-cursor');
+        const floatingElements = document.querySelectorAll('.floating-element');
+
+        // Cursor Follow
+        document.addEventListener('mousemove', (e) => {
+            cursor.style.left = e.clientX + 'px';
+            cursor.style.top = e.clientY + 'px';
+        });
+
+        document.addEventListener('mousedown', () => {
+            cursor.style.width = '40px';
+            cursor.style.height = '40px';
+            cursor.style.background = 'rgba(230, 0, 35, 0.2)';
+        });
+
+        document.addEventListener('mouseup', () => {
+            cursor.style.width = '20px';
+            cursor.style.height = '20px';
+            cursor.style.background = 'transparent';
+        });
+
+        // Create dynamic pins
+        for (let i = 0; i < 60; i++) {
+            const height = Math.floor(Math.random() * (450 - 200 + 1)) + 200;
+            const isVideo = Math.random() > 0.85;
 
             const pin = document.createElement('div');
             pin.className = 'pin';
@@ -207,6 +303,53 @@
             `;
             grid.appendChild(pin);
         }
+
+        // Intersection Observer for reveal animation
+        const observer = new IntersectionObserver((entries) => {
+            entries.forEach(entry => {
+                if (entry.isIntersecting) {
+                    entry.target.classList.add('revealed');
+                }
+            });
+        }, { threshold: 0.1 });
+
+        document.querySelectorAll('.pin').forEach(pin => observer.observe(pin));
+
+        // Scroll Logic
+        window.addEventListener('scroll', () => {
+            const scrollY = window.scrollY;
+
+            // Header Shrink
+            if (scrollY > 50) {
+                header.classList.add('scrolled');
+            } else {
+                header.classList.remove('scrolled');
+            }
+
+            // Parallax Floating Elements
+            floatingElements.forEach((el, idx) => {
+                const speed = (idx + 1) * 0.2;
+                const offset = scrollY * speed;
+                el.style.transform = `translateY(${offset}px)`;
+            });
+        });
+
+        // Hover scale effect for custom cursor
+        document.querySelectorAll('.save-btn, .logo, .profile-icon').forEach(el => {
+            el.addEventListener('mouseenter', () => {
+                cursor.style.borderColor = 'white';
+                cursor.style.background = 'var(--pinterest-red)';
+                cursor.style.width = '30px';
+                cursor.style.height = '30px';
+            });
+            el.addEventListener('mouseleave', () => {
+                cursor.style.borderColor = 'var(--pinterest-red)';
+                cursor.style.background = 'transparent';
+                cursor.style.width = '20px';
+                cursor.style.height = '20px';
+            });
+        });
+
     </script>
 </body>
 </html>

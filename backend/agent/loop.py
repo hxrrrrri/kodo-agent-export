@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import re
 import time
 from dataclasses import dataclass
 from typing import Any, AsyncGenerator
@@ -376,6 +377,16 @@ def _infer_local_forced_tool_call(
     if not prompt:
         return None
 
+    def _contains_phrase(text: str) -> bool:
+        words = [part for part in text.lower().split() if part]
+        if not words:
+            return False
+        pattern = r"\b" + r"\s+".join(re.escape(word) for word in words) + r"\b"
+        return re.search(pattern, prompt) is not None
+
+    def _contains_any(terms: tuple[str, ...]) -> bool:
+        return any(_contains_phrase(term) for term in terms)
+
     folder_terms = (
         "folder",
         "folders",
@@ -412,18 +423,18 @@ def _infer_local_forced_tool_call(
     )
 
     wants_folders = (
-        any(term in prompt for term in folder_terms) and any(term in prompt for term in listing_terms)
-    ) or any(term in prompt for term in folder_question_terms)
+        _contains_any(folder_terms) and _contains_any(listing_terms)
+    ) or _contains_any(folder_question_terms)
     wants_files = (
-        any(term in prompt for term in file_terms) and any(term in prompt for term in listing_terms)
-    ) or any(term in prompt for term in file_question_terms)
+        _contains_any(file_terms) and _contains_any(listing_terms)
+    ) or _contains_any(file_question_terms)
     wants_contents = (
-        ("list" in prompt or "show" in prompt)
-        and any(term in prompt for term in ("contents", "content", "items", "entries"))
+        _contains_any(("list", "show", "display"))
+        and _contains_any(("contents", "content", "items", "entries"))
     ) or prompt in {"ls", "dir", "list"}
-    wants_pwd = any(token in prompt for token in ("current directory", "present working directory", "pwd", "where am i"))
-    wants_recursive = any(term in prompt for term in recursive_terms)
-    wants_bug_scan = any(term in prompt for term in bug_terms) and any(term in prompt for term in project_scope_terms)
+    wants_pwd = _contains_any(("current directory", "present working directory", "pwd", "where am i"))
+    wants_recursive = _contains_any(recursive_terms)
+    wants_bug_scan = _contains_any(bug_terms) and _contains_any(project_scope_terms)
 
     if not (wants_pwd or wants_folders or wants_files or wants_contents or wants_bug_scan):
         return None

@@ -201,6 +201,8 @@ interface ChatState {
   artifactModeEnabled: boolean
   searchQuery: string
   messageSearchQuery: string
+  selectedArtifact: ArtifactItem | null
+  designStudioOpen: boolean
 
   setSessionId: (id: string | null) => void
   setSessions: (sessions: Session[]) => void
@@ -222,6 +224,8 @@ interface ChatState {
   setArtifactModeEnabled: (enabled: boolean) => void
   setSearchQuery: (query: string) => void
   setMessageSearchQuery: (query: string) => void
+  setSelectedArtifact: (artifact: ArtifactItem | null) => void
+  setDesignStudioOpen: (open: boolean) => void
   clearMessages: () => void
 }
 
@@ -243,6 +247,8 @@ export const useChatStore = create<ChatState>((set) => ({
   artifactModeEnabled: false,
   searchQuery: '',
   messageSearchQuery: '',
+  selectedArtifact: null,
+  designStudioOpen: false,
 
   setSessionId: (id) => set({ sessionId: id }),
   setSessions: (sessions) => set({ sessions }),
@@ -283,5 +289,7 @@ export const useChatStore = create<ChatState>((set) => ({
   setArtifactModeEnabled: (artifactModeEnabled) => set({ artifactModeEnabled }),
   setSearchQuery: (searchQuery) => set({ searchQuery }),
   setMessageSearchQuery: (messageSearchQuery) => set({ messageSearchQuery }),
+  setSelectedArtifact: (selectedArtifact) => set({ selectedArtifact }),
+  setDesignStudioOpen: (designStudioOpen) => set({ designStudioOpen }),
   clearMessages: () => set({ messages: [] }),
 }))
