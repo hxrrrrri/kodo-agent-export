@@ -34,6 +34,7 @@
 
   --font-mono: 'JetBrains Mono', 'Fira Code', monospace;
   --font-display: 'Syne', sans-serif;
+  --font-kodo-brand: 'Syne', sans-serif;
 
   --radius: 4px;
   --sidebar-rail-width: 48px;
@@ -42,35 +43,42 @@
 }
 
 :root[data-theme='light'] {
-  --bg-0: #f7f6f2;
-  --bg-1: #f0eee9;
-  --bg-2: #e9e6df;
-  --bg-3: #ded9cf;
-  --border: #c5bdaf;
-  --border-bright: #a99d8a;
+  --bg-0: #f5f4ed;
+  --bg-1: #faf9f5;
+  --bg-2: #f0eee6;
+  --bg-3: #e8e6dc;
+  --border: #f0eee6;
+  --border-bright: #e8e6dc;
 
-  --text-0: #1f1c17;
-  --text-1: #484238;
-  --text-2: #756e61;
+  --text-0: #141413;
+  --text-1: #5e5d59;
+  --text-2: #87867f;
 
-  --accent: #cf3b00;
-  --accent-dim: rgba(207, 59, 0, 0.14);
-  --accent-glow: rgba(207, 59, 0, 0.22);
+  --accent: #c96442;
+  --accent-dim: rgba(201, 100, 66, 0.14);
+  --accent-glow: rgba(201, 100, 66, 0.24);
 
-  --green: #0f8f4f;
-  --green-dim: rgba(15, 143, 79, 0.14);
-  --yellow: #9f7a00;
-  --yellow-dim: rgba(159, 122, 0, 0.12);
-  --red: #b22727;
-  --red-dim: rgba(178, 39, 39, 0.14);
-  --blue: #0f67b7;
-  --blue-dim: rgba(15, 103, 183, 0.14);
+  --green: #2aa953;
+  --green-dim: rgba(42, 169, 83, 0.16);
+  --yellow: #9a780a;
+  --yellow-dim: rgba(154, 120, 10, 0.14);
+  --red: #b53333;
+  --red-dim: rgba(181, 51, 51, 0.14);
+  --blue: #3898ec;
+  --blue-dim: rgba(56, 152, 236, 0.14);
 
-  --page-gradient: radial-gradient(circle at 14% 10%, rgba(207, 59, 0, 0.1), transparent 48%), #f7f6f2;
-  --terminal-bg: #f8f5ef;
-  --terminal-fg: #3c342c;
-  --terminal-cursor: #cf3b00;
-  --terminal-selection: rgba(207, 59, 0, 0.2);
+  --logo-primary: #c96442;
+  --logo-secondary: #d97757;
+
+  --font-mono: 'Anthropic Sans', 'Avenir Next', 'Segoe UI', Arial, sans-serif;
+  --font-display: 'Anthropic Serif', Georgia, 'Times New Roman', serif;
+  --font-kodo-brand: 'Syne', sans-serif;
+
+  --page-gradient: #f5f4ed;
+  --terminal-bg: #faf9f5;
+  --terminal-fg: #4d4c48;
+  --terminal-cursor: #c96442;
+  --terminal-selection: rgba(201, 100, 66, 0.2);
 }
 
 :root[data-theme='ocean'] {
@@ -370,6 +378,105 @@
   --terminal-fg: #888880;
   --terminal-cursor: #c0553a;
   --terminal-selection: rgba(192, 85, 58, 0.22);
+}
+
+:root[data-theme='claude'] {
+  --bg-0: #141413;
+  --bg-1: #1b1b1a;
+  --bg-2: #252522;
+  --bg-3: #30302e;
+  --border: rgba(48, 48, 46, 0);
+  --border-bright: rgba(74, 73, 69, 0);
+
+  --text-0: #faf9f5;
+  --text-1: #b0aea5;
+  --text-2: #87867f;
+
+  --accent: #c96442;
+  --accent-dim: rgba(201, 100, 66, 0.16);
+  --accent-glow: rgba(201, 100, 66, 0.28);
+
+  --green: #34c759;
+  --green-dim: rgba(52, 199, 89, 0.2);
+  --yellow: #c8a45d;
+  --yellow-dim: rgba(200, 164, 93, 0.15);
+  --red: #b53333;
+  --red-dim: rgba(181, 51, 51, 0.16);
+  --blue: #3898ec;
+  --blue-dim: rgba(56, 152, 236, 0.18);
+
+  --logo-primary: #c96442;
+  --logo-secondary: #d97757;
+
+  --font-mono: 'Anthropic Sans', 'Avenir Next', 'Segoe UI', Arial, sans-serif;
+  --font-display: 'Anthropic Serif', Georgia, 'Times New Roman', serif;
+  --font-kodo-brand: 'Syne', sans-serif;
+
+  --radius: 12px;
+  --page-gradient: radial-gradient(circle at 16% 10%, rgba(201, 100, 66, 0.12), transparent 44%), #141413;
+  --terminal-bg: #141413;
+  --terminal-fg: #b0aea5;
+  --terminal-cursor: #d97757;
+  --terminal-selection: rgba(217, 119, 87, 0.24);
+}
+
+:root[data-theme='claude'] h1,
+:root[data-theme='claude'] h2,
+:root[data-theme='claude'] h3,
+:root[data-theme='claude'] h4,
+:root[data-theme='claude'] h5,
+:root[data-theme='claude'] h6,
+:root[data-theme='claude'] .display {
+  font-family: var(--font-display);
+  font-weight: 500;
+  line-height: 1.2;
+}
+
+:root[data-theme='claude'] .mono,
+:root[data-theme='claude'] code,
+:root[data-theme='claude'] pre,
+:root[data-theme='claude'] kbd,
+:root[data-theme='claude'] samp {
+  font-family: 'Anthropic Mono', 'JetBrains Mono', 'SFMono-Regular', Menlo, Consolas, monospace;
+  letter-spacing: -0.32px;
+}
+
+:root[data-theme='claude'] aside {
+  background: #1b1b1a;
+}
+
+:root[data-theme='claude'] button,
+:root[data-theme='claude'] a,
+:root[data-theme='claude'] input,
+:root[data-theme='claude'] select,
+:root[data-theme='claude'] textarea,
+:root[data-theme='claude'] mark {
+  border-radius: 12px;
+  border-color: transparent !important;
+  box-shadow: none !important;
+  outline: none !important;
+}
+
+:root[data-theme='claude'] [style*='border'] {
+  border-color: transparent !important;
+  box-shadow: none !important;
+}
+
+/* Claude structural separators: sidebar rail | sidebar panel | chat area */
+:root[data-theme='claude'] aside {
+  border-right-color: rgba(94, 93, 89, 0.4) !important;
+}
+
+:root[data-theme='claude'] aside > div:first-child {
+  border-right-color: rgba(94, 93, 89, 0.36) !important;
+}
+
+:root[data-theme='claude'] ::-webkit-scrollbar-thumb {
+  background: #4a4945;
+}
+
+:root[data-theme='claude'] ::-webkit-scrollbar-thumb:hover {
+  background: #5e5d59;
 }
 
 /* Fusion ambient orb layer */

@@ -2,6 +2,7 @@ import { create } from 'zustand'
 
 export const THEME_KEYS = [
   'dark',
+  'claude',
   'light',
   'ocean',
   'forest',
@@ -18,6 +19,7 @@ export type ThemeKey = (typeof THEME_KEYS)[number]
 
 export const THEME_TONES: Record<ThemeKey, 'dark' | 'light'> = {
   dark: 'dark',
+  claude: 'dark',
   light: 'light',
   ocean: 'dark',
   forest: 'dark',
@@ -36,6 +38,7 @@ export const THEME_OPTIONS: Array<{
   description: string
 }> = [
   { key: 'dark', label: 'Ember Night', description: 'Warm contrast for focused coding.' },
+  { key: 'claude', label: 'Claude', description: 'Anthropic-inspired warm dark mode with editorial typography.' },
   { key: 'light', label: 'Warm Paper', description: 'Soft daylight palette with clean readability.' },
   { key: 'ocean', label: 'Ocean Deep', description: 'Teal and cyan with calm dark surfaces.' },
   { key: 'forest', label: 'Forest Signal', description: 'Green-led theme with earthy depth.' },
@@ -236,7 +239,7 @@ export const useChatStore = create<ChatState>((set) => ({
   sessionMode: 'execute',
   availableModes: [],
   commands: [],
-  theme: 'dark',
+  theme: 'claude',
   artifactModeEnabled: false,
   searchQuery: '',
   messageSearchQuery: '',

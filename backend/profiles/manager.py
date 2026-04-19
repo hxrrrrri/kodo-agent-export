@@ -28,10 +28,20 @@ PROVIDERS = {
     "github-models",
     "codex",
 }
+NONE_LIKE_VALUES = {"none", "null", "undefined", ""}
 
 
 def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _normalize_optional_text(value: Any) -> str | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    if text.lower() in NONE_LIKE_VALUES:
+        return None
+    return text
 
 
 @dataclass
@@ -54,20 +64,20 @@ class ProviderProfile:
         if goal not in GOALS:
             goal = "balanced"
 
-        model = str(payload.get("model", "")).strip()
+        model = _normalize_optional_text(payload.get("model")) or ""
         if not model:
             raise ValueError("Profile model is required")
 
         created_at = str(payload.get("created_at", "")).strip() or _utc_now()
-        name = payload.get("name")
+        name = _normalize_optional_text(payload.get("name"))
         return cls(
             provider=provider,
             model=model,
-            base_url=(str(payload.get("base_url", "")).strip() or None),
-            api_key=(str(payload.get("api_key", "")).strip() or None),
+            base_url=_normalize_optional_text(payload.get("base_url")),
+            api_key=_normalize_optional_text(payload.get("api_key")),
             goal=goal,
             created_at=created_at,
-            name=(str(name).strip() or None) if name is not None else None,
+            name=name,
         )
 
 
@@ -133,6 +143,13 @@ class ProfileManager:
 
         await self._atomic_write_json(self.profiles_file, [asdict(row) for row in updated])
 
+        # Keep active profile synchronized if this profile is currently active.
+        active_payload = await self._read_json(self.active_profile_file)
+        if isinstance(active_payload, dict):
+            active_name = str(active_payload.get("name", "")).strip()
+            if active_name and active_name == profile_name:
+                await self._atomic_write_json(self.active_profile_file, asdict(profile))
+
     async def delete_profile(self, name: str) -> None:
         if not feature_enabled("PROFILES"):
             return
@@ -171,9 +188,22 @@ class ProfileManager:
         if not isinstance(payload, dict):
             return None
         try:
-            return ProviderProfile.from_dict(payload)
+            active = ProviderProfile.from_dict(payload)
         except ValueError:
             return None
+
+        # Auto-heal stale active profile data by matching latest saved profile by name.
+        active_name = (active.name or "").strip()
+        if active_name:
+            rows = await self.list_profiles()
+            for row in rows:
+                if (row.name or "").strip() != active_name:
+                    continue
+                if asdict(row) != asdict(active):
+                    await self._atomic_write_json(self.active_profile_file, asdict(row))
+                return row
+
+        return active
 
     async def auto_select_profile(self, goal: str) -> ProviderProfile:
         if not feature_enabled("PROFILES"):

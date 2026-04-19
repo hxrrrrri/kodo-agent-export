@@ -258,7 +258,7 @@ def _runtime_from_profile(profile: ProviderProfile, model_override: str | None =
     if not model:
         raise ValueError("Active profile has no model")
 
-    api_key = (profile.api_key or "").strip()
+    api_key = _normalize_model_name(profile.api_key)
     env_key = _profile_env_key(provider)
     if not api_key and env_key:
         api_key = os.getenv(env_key, "").strip()
@@ -266,11 +266,20 @@ def _runtime_from_profile(profile: ProviderProfile, model_override: str | None =
     if provider not in {"ollama", "atomic-chat"} and not api_key and provider != "gemini":
         raise ValueError(f"Active profile '{profile.name}' requires API key for provider {provider}")
 
+    base_url = _normalize_model_name(profile.base_url)
+    if not base_url:
+        base_url = _profile_default_base_url(provider) or ""
+
+    if provider in {"ollama", "atomic-chat"}:
+        # AsyncOpenAI expects OpenAI-compatible endpoints under /v1.
+        if not base_url.rstrip("/").endswith("/v1"):
+            base_url = base_url.rstrip("/") + "/v1"
+
     return RuntimeConfig(
         provider=provider,
         model=model,
         api_key=api_key,
-        base_url=(profile.base_url or _profile_default_base_url(provider)),
+        base_url=(base_url or None),
     )
 
 

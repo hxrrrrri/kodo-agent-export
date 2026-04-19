@@ -21,6 +21,8 @@ const CONTEXT_TOKEN_BUDGET = Number(import.meta.env.VITE_CONTEXT_TOKEN_BUDGET ||
 const MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024
 const MAX_VISIBLE_ATTACHMENT_CHIPS = 8
 const ATTACHMENT_ACCEPT = 'image/png,image/jpeg,image/gif,image/webp,application/zip,.zip,text/*,.py,.ts,.tsx,.js,.jsx,.md,.json,.yaml,.yml,.toml,.rs,.go,.java,.cpp,.c,.h'
+const VOICE_SILENCE_STOP_MS = 5000
+const VOICE_RESTART_DELAY_MS = 120
 
 type PendingImage = {
   previewUrl: string
@@ -281,6 +283,18 @@ function readFileAsDataUrl(file: File): Promise<string> {
   })
 }
 
+function sniffImageMimeType(base64Data: string): string {
+  try {
+    const bytes = atob(base64Data.slice(0, 16))
+    const b = (i: number) => bytes.charCodeAt(i)
+    if (b(0) === 0xFF && b(1) === 0xD8 && b(2) === 0xFF) return 'image/jpeg'
+    if (b(0) === 0x89 && b(1) === 0x50 && b(2) === 0x4E && b(3) === 0x47) return 'image/png'
+    if (b(0) === 0x47 && b(1) === 0x49 && b(2) === 0x46) return 'image/gif'
+    if (b(0) === 0x52 && b(1) === 0x49 && b(2) === 0x46 && b(3) === 0x46) return 'image/webp'
+  } catch { /* ignore */ }
+  return ''
+}
+
 function decodeBase64ToText(data: string): string {
   try {
     const binary = atob(data)
@@ -487,6 +501,11 @@ export function ChatWindow({ editorOpen, onToggleEditor }: ChatWindowProps) {
   const previousMessageSearchRef = useRef('')
   const commandsRequestedRef = useRef(false)
   const speechRecognitionRef = useRef<any>(null)
+  const voiceSilenceTimeoutRef = useRef<number | null>(null)
+  const voiceSessionRef = useRef(0)
+  const voiceShouldListenRef = useRef(false)
+  const voiceBaseInputRef = useRef('')
+  const voiceCommittedTranscriptRef = useRef('')
   const [voiceListening, setVoiceListening] = useState(false)
   const [showShortcuts, setShowShortcuts] = useState(false)
   const [installPromptEvent, setInstallPromptEvent] = useState<any>(null)
@@ -979,7 +998,6 @@ export function ChatWindow({ editorOpen, onToggleEditor }: ChatWindowProps) {
 
     const imagePayload = pendingImage
       ? {
-          url: pendingImage.previewUrl,
           data: pendingImage.data,
           media_type: pendingImage.media_type,
         }
@@ -1345,8 +1363,43 @@ export function ChatWindow({ editorOpen, onToggleEditor }: ChatWindowProps) {
     shouldAutoScrollRef.current = distanceFromBottom < 80
   }
 
+  const clearVoiceSilenceTimeout = useCallback(() => {
+    if (voiceSilenceTimeoutRef.current !== null) {
+      window.clearTimeout(voiceSilenceTimeoutRef.current)
+      voiceSilenceTimeoutRef.current = null
+    }
+  }, [])
+
+  const stopVoiceInput = useCallback(() => {
+    voiceShouldListenRef.current = false
+    clearVoiceSilenceTimeout()
+
+    const activeRecognition = speechRecognitionRef.current
+    speechRecognitionRef.current = null
+    if (activeRecognition) {
+      try {
+        activeRecognition.stop()
+      } catch {
+        // Ignore stop errors from stale recognition instances.
+      }
+    }
+
+    setVoiceListening(false)
+  }, [clearVoiceSilenceTimeout])
+
+  useEffect(() => {
+    return () => {
+      stopVoiceInput()
+    }
+  }, [stopVoiceInput])
+
   const startVoiceInput = useCallback(() => {
     if (observerMode) return
+
+    if (voiceListening) {
+      stopVoiceInput()
+      return
+    }
 
     const recognitionCtor = (window as unknown as { SpeechRecognition?: any; webkitSpeechRecognition?: any }).SpeechRecognition
       || (window as unknown as { SpeechRecognition?: any; webkitSpeechRecognition?: any }).webkitSpeechRecognition
@@ -1356,28 +1409,22 @@ export function ChatWindow({ editorOpen, onToggleEditor }: ChatWindowProps) {
       return
     }
 
-    if (speechRecognitionRef.current) {
-      try {
-        speechRecognitionRef.current.stop()
-      } catch {
-        // Ignore stop errors from stale recognition instances.
-      }
+    const mergeVoiceText = (base: string, addition: string) => {
+      const left = base.trimEnd()
+      const right = addition.trim()
+      if (!right) return left
+      if (!left) return right
+      return `${left} ${right}`
     }
 
-    const recognition = new recognitionCtor()
-    recognition.continuous = false
-    recognition.interimResults = true
-    recognition.lang = 'en-US'
+    stopVoiceInput()
+    voiceSessionRef.current += 1
+    const sessionId = voiceSessionRef.current
+    voiceShouldListenRef.current = true
+    voiceBaseInputRef.current = input
+    voiceCommittedTranscriptRef.current = ''
 
-    recognition.onstart = () => {
-      setVoiceListening(true)
-    }
-
-    recognition.onresult = (event: any) => {
-      const transcript = Array.from(event.results || [])
-        .map((item: any) => item?.[0]?.transcript || '')
-        .join('')
-      setInput(transcript)
+    const updateComposerHeight = () => {
       requestAnimationFrame(() => {
         if (!textareaRef.current) return
         textareaRef.current.style.height = 'auto'
@@ -1385,17 +1432,81 @@ export function ChatWindow({ editorOpen, onToggleEditor }: ChatWindowProps) {
       })
     }
 
-    recognition.onend = () => {
-      setVoiceListening(false)
+    const updateTranscriptInput = (currentTranscript: string) => {
+      const combinedTranscript = mergeVoiceText(
+        mergeVoiceText(voiceBaseInputRef.current, voiceCommittedTranscriptRef.current),
+        currentTranscript,
+      )
+      setInput(combinedTranscript)
+      updateComposerHeight()
     }
 
-    recognition.onerror = () => {
-      setVoiceListening(false)
+    const scheduleSilenceStop = () => {
+      clearVoiceSilenceTimeout()
+      voiceSilenceTimeoutRef.current = window.setTimeout(() => {
+        if (!voiceShouldListenRef.current || voiceSessionRef.current !== sessionId) return
+        stopVoiceInput()
+      }, VOICE_SILENCE_STOP_MS)
     }
 
-    speechRecognitionRef.current = recognition
-    recognition.start()
-  }, [observerMode])
+    const startRecognitionInstance = () => {
+      if (!voiceShouldListenRef.current || voiceSessionRef.current !== sessionId) return
+
+      const recognition = new recognitionCtor()
+      recognition.continuous = true
+      recognition.interimResults = true
+      recognition.lang = 'en-US'
+
+      let latestInstanceTranscript = ''
+
+      recognition.onstart = () => {
+        if (voiceSessionRef.current !== sessionId) return
+        setVoiceListening(true)
+        scheduleSilenceStop()
+      }
+
+      recognition.onresult = (event: any) => {
+        if (voiceSessionRef.current !== sessionId) return
+        latestInstanceTranscript = Array.from(event.results || [])
+          .map((item: any) => item?.[0]?.transcript || '')
+          .join('')
+        updateTranscriptInput(latestInstanceTranscript)
+        scheduleSilenceStop()
+      }
+
+      recognition.onend = () => {
+        if (voiceSessionRef.current !== sessionId) return
+
+        if (latestInstanceTranscript.trim()) {
+          voiceCommittedTranscriptRef.current = mergeVoiceText(
+            voiceCommittedTranscriptRef.current,
+            latestInstanceTranscript,
+          )
+        }
+
+        if (!voiceShouldListenRef.current) {
+          clearVoiceSilenceTimeout()
+          setVoiceListening(false)
+          return
+        }
+
+        window.setTimeout(() => {
+          if (!voiceShouldListenRef.current || voiceSessionRef.current !== sessionId) return
+          startRecognitionInstance()
+        }, VOICE_RESTART_DELAY_MS)
+      }
+
+      recognition.onerror = () => {
+        if (voiceSessionRef.current !== sessionId) return
+        stopVoiceInput()
+      }
+
+      speechRecognitionRef.current = recognition
+      recognition.start()
+    }
+
+    startRecognitionInstance()
+  }, [clearVoiceSilenceTimeout, input, observerMode, setInput, stopVoiceInput, voiceListening])
 
   const handleKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
     if (showCommandSuggestions && (e.key === 'ArrowDown' || e.key === 'ArrowUp')) {
@@ -1479,7 +1590,9 @@ export function ChatWindow({ editorOpen, onToggleEditor }: ChatWindowProps) {
         const [header, data] = dataUrl.split(',', 2)
         if (!header || !data) continue
 
-        const mediaType = header.replace('data:', '').replace(';base64', '') || file.type || 'application/octet-stream'
+        const browserMediaType = header.replace('data:', '').replace(';base64', '') || file.type || 'application/octet-stream'
+        const sniffed = sniffImageMimeType(data)
+        const mediaType = sniffed || browserMediaType
         const lowerName = file.name.toLowerCase()
         const isImage = mediaType.startsWith('image/')
         const isZip = lowerName.endsWith('.zip')
@@ -2560,7 +2673,7 @@ export function ChatWindow({ editorOpen, onToggleEditor }: ChatWindowProps) {
               <KodoLogoMark size={66} decorative={false} title="KODO" />
             </div>
             <div style={{
-              fontFamily: 'var(--font-display)',
+              fontFamily: 'var(--font-kodo-brand)',
               fontSize: 28,
               fontWeight: 800,
               letterSpacing: '-1px',

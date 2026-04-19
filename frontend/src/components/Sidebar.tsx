@@ -979,7 +979,7 @@ export function Sidebar({ collapsed, onToggleCollapse }: SidebarProps) {
   }
 
   const toggleTheme = () => {
-    setTheme(THEME_TONES[theme] === 'dark' ? 'light' : 'dark')
+    setTheme(THEME_TONES[theme] === 'dark' ? 'light' : 'claude')
   }
 
   const insertCrgCommand = (command: string) => {
@@ -1214,7 +1214,7 @@ export function Sidebar({ collapsed, onToggleCollapse }: SidebarProps) {
             </div>
             <div
               style={{
-                fontFamily: 'var(--font-display)',
+                fontFamily: 'var(--font-kodo-brand)',
                 fontSize: 20,
                 fontWeight: 800,
                 letterSpacing: '-0.06em',
@@ -2499,7 +2499,7 @@ export function Sidebar({ collapsed, onToggleCollapse }: SidebarProps) {
             justifyContent: 'space-between',
           }}
         >
-          <div style={{ fontSize: 10, color: 'var(--text-2)', letterSpacing: '0.06em' }}>
+          <div style={{ fontSize: 10, color: 'var(--text-2)', letterSpacing: '0.06em', fontFamily: 'var(--font-kodo-brand)' }}>
             POWERED BY KODO
           </div>
           <button

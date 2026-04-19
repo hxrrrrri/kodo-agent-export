@@ -33,12 +33,12 @@ export default function App() {
   useEffect(() => {
     const saved = window.localStorage.getItem(THEME_STORAGE_KEY)
     if (saved && (THEME_KEYS as readonly string[]).includes(saved)) {
-      setTheme(saved as ThemeKey)
+      const normalizedTheme: ThemeKey = saved === 'dark' ? 'claude' : (saved as ThemeKey)
+      setTheme(normalizedTheme)
       return
     }
 
-    const prefersLight = window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches
-    setTheme(prefersLight ? 'light' : 'dark')
+    setTheme('claude')
   }, [setTheme])
 
   useEffect(() => {

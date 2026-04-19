@@ -654,6 +654,7 @@ export function MessageBubble({
         color: 'var(--accent)',
         letterSpacing: '0.15em',
         fontWeight: 700,
+        fontFamily: 'var(--font-kodo-brand)',
         marginBottom: 8,
         display: 'flex',
         alignItems: 'center',

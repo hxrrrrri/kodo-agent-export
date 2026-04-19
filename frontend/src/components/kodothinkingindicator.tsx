@@ -107,18 +107,10 @@ export function KodoThinkingIndicator({ activeTool }: Props) {
       style={{
         display: 'flex',
         alignItems: 'center',
-        gap: 14,
-        padding: '10px 18px 10px 14px',
-        margin: '6px 0 12px',
-        borderRadius: 12,
-        background: 'var(--bg-1)',
-        border: `1px solid ${isToolActive ? 'var(--yellow-dim)' : 'var(--border)'}`,
-        width: 'fit-content',
+        gap: 12,
+        padding: '4px 0 10px',
+        margin: '2px 0 8px',
         animation: 'fadeIn 0.22s ease',
-        boxShadow: isToolActive
-          ? `0 0 0 1px rgba(255,215,0,0.2), 0 4px 18px rgba(0,0,0,0.22)`
-          : `0 4px 18px rgba(0,0,0,0.16)`,
-        transition: 'border-color 0.4s ease, box-shadow 0.4s ease',
       }}
     >
       {/* ── Orbit ring + logo ── */}
