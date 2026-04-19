@@ -4,7 +4,10 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import {
   DESIGN_STUDIO_STORAGE_KEY,
   DesignStudio,
+  buildHandoffPrompt,
   buildDesignFileTree,
+  decodeDesignSharePayload,
+  encodeDesignSharePayload,
   extractFiles,
 } from './DesignStudio'
 
@@ -58,6 +61,41 @@ describe('DesignStudio helpers', () => {
     const srcChildren = tree[0].children || []
     expect(srcChildren.some((node) => node.type === 'file' && node.name === 'index.html')).toBe(true)
     expect(srcChildren.some((node) => node.type === 'folder' && node.name === 'styles')).toBe(true)
+  })
+
+  it('encodes and decodes share payloads', () => {
+    const payload = {
+      version: 1,
+      files: [
+        { id: 'a', name: 'src/index.html', language: 'html', content: '<html></html>' },
+      ],
+      selectedFileId: 'a',
+      viewMode: 'preview' as const,
+      device: 'desktop' as const,
+      inlineComments: [
+        { id: 'c1', text: 'Move this card up', xPct: 42, yPct: 33, createdAt: Date.now(), resolved: false },
+      ],
+      shareAccess: 'comment' as const,
+    }
+
+    const encoded = encodeDesignSharePayload(payload)
+    const decoded = decodeDesignSharePayload(encoded)
+
+    expect(decoded).not.toBeNull()
+    expect(decoded?.files[0].name).toBe('src/index.html')
+    expect(decoded?.inlineComments[0].text).toContain('Move this card up')
+    expect(decoded?.shareAccess).toBe('comment')
+  })
+
+  it('builds handoff prompt with fenced files', () => {
+    const prompt = buildHandoffPrompt([
+      { id: '1', name: 'index.html', language: 'html', content: '<main>Hello</main>' },
+      { id: '2', name: 'styles.css', language: 'css', content: 'main { color: red; }' },
+    ])
+
+    expect(prompt).toContain('Implement this generated design')
+    expect(prompt).toContain('```html index.html')
+    expect(prompt).toContain('```css styles.css')
   })
 })
 

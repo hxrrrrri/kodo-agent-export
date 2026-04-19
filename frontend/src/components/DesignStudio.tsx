@@ -7,11 +7,13 @@ import {
   Upload, Send, Trash2, Eye, Code, File as FileIcon,
   ExternalLink, Wand2, SplitSquareHorizontal, Maximize2,
   Minimize2, ChevronRight, ChevronDown, RotateCcw, Copy,
+  MessageSquare, Share2, Package, Printer, Save,
   Folder, FolderOpen, Loader,
 } from 'lucide-react'
 import { buildApiHeaders } from '../lib/api'
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter'
 import { vscDarkPlus } from 'react-syntax-highlighter/dist/esm/styles/prism'
+import JSZip from 'jszip'
 
 const API = '/api/chat'
 export const DESIGN_STUDIO_STORAGE_KEY = 'kodo.design-studio.state.v1'
@@ -22,6 +24,7 @@ const MAX_PERSISTED_HISTORY = 20
 
 type DeviceMode = 'desktop' | 'tablet' | 'mobile'
 type ViewMode = 'preview' | 'code' | 'split'
+type ShareAccess = 'view' | 'comment' | 'edit'
 
 const DEVICE_WIDTHS: Record<DeviceMode, string> = {
   desktop: '100%', tablet: '768px', mobile: '390px',
@@ -52,11 +55,32 @@ interface UploadedAsset {
   size: number
   type: string
   dataUrl: string
+  textContent?: string
 }
 
 interface HistoryEntry {
   files: DesignFile[]
   timestamp: number
+  label?: string
+}
+
+interface InlineComment {
+  id: string
+  text: string
+  xPct: number
+  yPct: number
+  createdAt: number
+  resolved?: boolean
+}
+
+interface DesignSharePayload {
+  version: number
+  files: DesignFile[]
+  selectedFileId: string | null
+  viewMode: ViewMode
+  device: DeviceMode
+  inlineComments: InlineComment[]
+  shareAccess: ShareAccess
 }
 
 interface PersistedDesignStudioState {
@@ -64,6 +88,9 @@ interface PersistedDesignStudioState {
   files: DesignFile[]
   selectedFileId: string | null
   history: HistoryEntry[]
+  inlineComments: InlineComment[]
+  projectContext: string
+  shareAccess: ShareAccess
   device: DeviceMode
   viewMode: ViewMode
   fileTreeW: number
@@ -118,6 +145,103 @@ function toDesignMessage(value: unknown): DesignMessage | null {
   }
 }
 
+function toInlineComment(value: unknown): InlineComment | null {
+  if (!value || typeof value !== 'object') return null
+  const candidate = value as Partial<InlineComment>
+  const text = typeof candidate.text === 'string' ? candidate.text.trim() : ''
+  if (!text) return null
+
+  const rawX = typeof candidate.xPct === 'number' ? candidate.xPct : Number(candidate.xPct)
+  const rawY = typeof candidate.yPct === 'number' ? candidate.yPct : Number(candidate.yPct)
+  if (!Number.isFinite(rawX) || !Number.isFinite(rawY)) return null
+
+  return {
+    id: typeof candidate.id === 'string' && candidate.id.trim() ? candidate.id : genId(),
+    text,
+    xPct: Math.max(0, Math.min(100, rawX)),
+    yPct: Math.max(0, Math.min(100, rawY)),
+    createdAt: typeof candidate.createdAt === 'number' && Number.isFinite(candidate.createdAt)
+      ? candidate.createdAt
+      : Date.now(),
+    resolved: Boolean(candidate.resolved),
+  }
+}
+
+function toBase64Url(value: string): string {
+  const encoded = btoa(unescape(encodeURIComponent(value)))
+  return encoded.replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '')
+}
+
+function fromBase64Url(value: string): string {
+  const padded = value
+    .replace(/-/g, '+')
+    .replace(/_/g, '/')
+    .padEnd(Math.ceil(value.length / 4) * 4, '=')
+  return decodeURIComponent(escape(atob(padded)))
+}
+
+export function buildHandoffPrompt(files: DesignFile[]): string {
+  if (files.length === 0) return ''
+  const sections = files.map((file) => {
+    const language = (file.language || file.name.split('.').pop() || 'txt').toLowerCase()
+    return ['```' + language + ' ' + file.name, file.content, '```'].join('\n')
+  })
+  return [
+    'Implement this generated design in the workspace. Use these files exactly as the baseline and refine where needed:',
+    ...sections,
+  ].join('\n\n')
+}
+
+export function encodeDesignSharePayload(payload: DesignSharePayload): string {
+  return toBase64Url(JSON.stringify(payload))
+}
+
+export function decodeDesignSharePayload(raw: string): DesignSharePayload | null {
+  try {
+    const parsed = JSON.parse(fromBase64Url(raw)) as Partial<DesignSharePayload>
+    const files = Array.isArray(parsed.files)
+      ? parsed.files.map(toDesignFile).filter((row): row is DesignFile => row !== null)
+      : []
+    if (files.length === 0) return null
+
+    const selectedFileId = typeof parsed.selectedFileId === 'string' ? parsed.selectedFileId : null
+    const selectedExists = selectedFileId ? files.some((file) => file.id === selectedFileId) : false
+    const shareAccess: ShareAccess = parsed.shareAccess === 'view' || parsed.shareAccess === 'comment'
+      ? parsed.shareAccess
+      : 'edit'
+    const viewMode: ViewMode = parsed.viewMode === 'code' || parsed.viewMode === 'split'
+      ? parsed.viewMode
+      : 'preview'
+    const device: DeviceMode = parsed.device === 'tablet' || parsed.device === 'mobile'
+      ? parsed.device
+      : 'desktop'
+    const inlineComments = Array.isArray(parsed.inlineComments)
+      ? parsed.inlineComments.map(toInlineComment).filter((row): row is InlineComment => row !== null)
+      : []
+
+    return {
+      version: 1,
+      files,
+      selectedFileId: selectedExists ? selectedFileId : (files[0]?.id ?? null),
+      viewMode,
+      device,
+      inlineComments,
+      shareAccess,
+    }
+  } catch {
+    return null
+  }
+}
+
+function readSharePayloadFromHash(hashValue: string): DesignSharePayload | null {
+  const hash = hashValue.startsWith('#') ? hashValue.slice(1) : hashValue
+  if (!hash) return null
+  const params = new URLSearchParams(hash)
+  const raw = params.get('designShare')
+  if (!raw) return null
+  return decodeDesignSharePayload(raw)
+}
+
 function clampWidth(value: unknown, min: number, max: number, fallback: number): number {
   const n = typeof value === 'number' ? value : Number(value)
   if (!Number.isFinite(n)) return fallback
@@ -140,7 +264,7 @@ function loadPersistedDesignStudioState(): PersistedDesignStudioState | null {
       : []
     const history = Array.isArray(parsed.history)
       ? parsed.history
-        .map((entry) => {
+        .map((entry): HistoryEntry | null => {
           if (!entry || typeof entry !== 'object') return null
           const row = entry as Partial<HistoryEntry>
           const rowFiles = Array.isArray(row.files)
@@ -150,9 +274,17 @@ function loadPersistedDesignStudioState(): PersistedDesignStudioState | null {
           const timestamp = typeof row.timestamp === 'number' && Number.isFinite(row.timestamp)
             ? row.timestamp
             : Date.now()
-          return { files: rowFiles, timestamp }
+          const label = typeof row.label === 'string' && row.label.trim() ? row.label.trim() : undefined
+          return {
+            files: rowFiles,
+            timestamp,
+            ...(label ? { label } : {}),
+          }
         })
         .filter((entry): entry is HistoryEntry => entry !== null)
+      : []
+    const inlineComments = Array.isArray(parsed.inlineComments)
+      ? parsed.inlineComments.map(toInlineComment).filter((entry): entry is InlineComment => entry !== null)
       : []
 
     const selectedFileId = typeof parsed.selectedFileId === 'string' ? parsed.selectedFileId : null
@@ -163,6 +295,10 @@ function loadPersistedDesignStudioState(): PersistedDesignStudioState | null {
     const viewMode: ViewMode = parsed.viewMode === 'preview' || parsed.viewMode === 'code' || parsed.viewMode === 'split'
       ? parsed.viewMode
       : 'preview'
+    const shareAccess: ShareAccess = parsed.shareAccess === 'view' || parsed.shareAccess === 'comment'
+      ? parsed.shareAccess
+      : 'edit'
+    const projectContext = typeof parsed.projectContext === 'string' ? parsed.projectContext : ''
     const expandedFolders = (() => {
       if (!parsed.expandedFolders || typeof parsed.expandedFolders !== 'object') return {}
       const output: Record<string, boolean> = {}
@@ -177,6 +313,9 @@ function loadPersistedDesignStudioState(): PersistedDesignStudioState | null {
       files,
       selectedFileId: normalizedSelected,
       history: history.slice(-MAX_PERSISTED_HISTORY),
+      inlineComments,
+      projectContext,
+      shareAccess,
       device,
       viewMode,
       fileTreeW: clampWidth(parsed.fileTreeW, 140, 420, 200),
@@ -437,8 +576,13 @@ export function DesignStudio({ onClose }: Props) {
   const [sessionId, setSessionId] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [copied, setCopied] = useState(false)
+  const [shareCopied, setShareCopied] = useState(false)
   const [fileTreeOpen, setFileTreeOpen] = useState(true)
   const [expandedFolders, setExpandedFolders] = useState<Record<string, boolean>>({})
+  const [inlineComments, setInlineComments] = useState<InlineComment[]>([])
+  const [commentMode, setCommentMode] = useState(false)
+  const [projectContext, setProjectContext] = useState('')
+  const [shareAccess, setShareAccess] = useState<ShareAccess>('edit')
   const [hydrated, setHydrated] = useState(false)
   const messagesRef = useRef(messages)
   messagesRef.current = messages
@@ -450,6 +594,22 @@ export function DesignStudio({ onClose }: Props) {
   const abortRef = useRef<AbortController | null>(null)
 
   useEffect(() => {
+    const shared = typeof window !== 'undefined'
+      ? readSharePayloadFromHash(window.location.hash)
+      : null
+    if (shared) {
+      setFiles(shared.files)
+      setSelectedFileId(shared.selectedFileId)
+      setViewMode(shared.viewMode)
+      setDevice(shared.device)
+      setInlineComments(shared.inlineComments)
+      setShareAccess(shared.shareAccess)
+      setPreviewHtml(buildPreviewHtml(shared.files))
+      setRefreshKey((k) => k + 1)
+      setHydrated(true)
+      return
+    }
+
     const persisted = loadPersistedDesignStudioState()
     if (!persisted) {
       setHydrated(true)
@@ -467,6 +627,9 @@ export function DesignStudio({ onClose }: Props) {
     setSplitCodeW(persisted.splitCodeW)
     setFileTreeOpen(persisted.fileTreeOpen)
     setExpandedFolders(persisted.expandedFolders)
+    setInlineComments(persisted.inlineComments)
+    setProjectContext(persisted.projectContext)
+    setShareAccess(persisted.shareAccess)
 
     if (persisted.files.length > 0) {
       setPreviewHtml(buildPreviewHtml(persisted.files))
@@ -474,6 +637,12 @@ export function DesignStudio({ onClose }: Props) {
     }
     setHydrated(true)
   }, [])
+
+  useEffect(() => {
+    if (shareAccess === 'view' && commentMode) {
+      setCommentMode(false)
+    }
+  }, [shareAccess, commentMode])
 
   useEffect(() => {
     if (!hydrated || typeof window === 'undefined') return
@@ -491,6 +660,9 @@ export function DesignStudio({ onClose }: Props) {
       files,
       selectedFileId,
       history: history.slice(-MAX_PERSISTED_HISTORY),
+      inlineComments,
+      projectContext,
+      shareAccess,
       device,
       viewMode,
       fileTreeW,
@@ -506,7 +678,23 @@ export function DesignStudio({ onClose }: Props) {
     } catch {
       // Ignore persistence quota errors and continue the current session in memory.
     }
-  }, [hydrated, messages, files, selectedFileId, history, device, viewMode, fileTreeW, chatW, splitCodeW, fileTreeOpen, expandedFolders])
+  }, [
+    hydrated,
+    messages,
+    files,
+    selectedFileId,
+    history,
+    inlineComments,
+    projectContext,
+    shareAccess,
+    device,
+    viewMode,
+    fileTreeW,
+    chatW,
+    splitCodeW,
+    fileTreeOpen,
+    expandedFolders,
+  ])
 
   useEffect(() => { messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' }) }, [messages])
 
@@ -539,6 +727,10 @@ export function DesignStudio({ onClose }: Props) {
   const sendMessage = useCallback(async (text: string) => {
     const trimmed = text.trim()
     if (!trimmed || isLoading) return
+    if (shareAccess === 'view') {
+      setError('This shared design is view-only. Switch access to edit to send changes.')
+      return
+    }
     setError(null)
     setInput('')
 
@@ -546,7 +738,39 @@ export function DesignStudio({ onClose }: Props) {
     const prefix = isFirst
       ? 'You are a UI/UX design assistant. Output complete, self-contained HTML with embedded CSS and JS. Designs must be visually stunning, modern, and responsive. Put HTML in ```html filename.html blocks. You may also use separate ```css and ```js blocks with filenames. Never reference external files not in the response.\n\n'
       : ''
-    const fullMsg = prefix + trimmed
+
+    const contextSections: string[] = []
+    if (projectContext.trim()) {
+      contextSections.push(`Project context:\n${projectContext.trim()}`)
+    }
+
+    const textAssets = assets
+      .filter((asset) => Boolean(asset.textContent && asset.textContent.trim()))
+      .slice(0, 4)
+    if (textAssets.length > 0) {
+      const assetSummary = textAssets
+        .map((asset) => `--- ${asset.name} ---\n${String(asset.textContent || '').slice(0, 5000)}`)
+        .join('\n\n')
+      contextSections.push(`Attached codebase and design context:\n${assetSummary}`)
+    }
+
+    const openComments = inlineComments
+      .filter((comment) => !comment.resolved)
+      .slice(-5)
+    if (openComments.length > 0) {
+      contextSections.push(
+        'Open inline canvas comments:\n'
+        + openComments
+          .map((comment) => `- (${Math.round(comment.xPct)}%, ${Math.round(comment.yPct)}%) ${comment.text}`)
+          .join('\n'),
+      )
+    }
+
+    const fullMsg = [
+      contextSections.length > 0 ? `${contextSections.join('\n\n')}\n\n` : '',
+      prefix,
+      trimmed,
+    ].join('')
 
     const uid = genId()
     const aid = genId()
@@ -615,7 +839,11 @@ export function DesignStudio({ onClose }: Props) {
         const html = buildPreviewHtml(extracted)
         setPreviewHtml(html)
         setRefreshKey(k => k + 1)
-        setHistory(prev => [...prev, { files: extracted, timestamp: Date.now() }])
+        setHistory(prev => [...prev, {
+          files: extracted,
+          timestamp: Date.now(),
+          label: `Generation ${prev.length + 1}`,
+        }])
         setMessages(prev => prev.map(m => m.id === aid ? { ...m, files: extracted } : m))
       } else if (acc.trim()) {
         // No code blocks found — show raw response as a fallback text file so
@@ -634,7 +862,7 @@ export function DesignStudio({ onClose }: Props) {
       setMessages(prev => prev.map(m => m.id === aid ? { ...m, isStreaming: false } : m))
       setIsLoading(false)
     }
-  }, [isLoading, sessionId])
+  }, [assets, inlineComments, isLoading, projectContext, sessionId, shareAccess])
 
   const restoreHistory = (entry: HistoryEntry) => {
     setFiles(entry.files)
@@ -645,14 +873,39 @@ export function DesignStudio({ onClose }: Props) {
 
   const handleAssetUpload = async (list: FileList | null) => {
     if (!list) return
+    const isTextLikeAsset = (file: File): boolean => {
+      const ext = file.name.split('.').pop()?.toLowerCase() || ''
+      const textExt = new Set(['txt', 'md', 'json', 'js', 'jsx', 'ts', 'tsx', 'css', 'html', 'py', 'sh', 'yaml', 'yml'])
+      return textExt.has(ext) || file.type.startsWith('text/') || file.type.includes('json')
+    }
+
     const next: UploadedAsset[] = []
     for (const f of Array.from(list)) {
       const dataUrl = await new Promise<string>(res => {
         const r = new FileReader(); r.onload = () => res(r.result as string); r.readAsDataURL(f)
       })
-      next.push({ id: genId(), name: f.name, size: f.size, type: f.type, dataUrl })
+      let textContent: string | undefined
+      if (isTextLikeAsset(f)) {
+        try {
+          textContent = (await f.text()).slice(0, 120000)
+        } catch {
+          textContent = undefined
+        }
+      }
+      next.push({ id: genId(), name: f.name, size: f.size, type: f.type, dataUrl, textContent })
     }
     setAssets(prev => [...prev, ...next])
+  }
+
+  const saveRevision = () => {
+    if (files.length === 0) return
+    const suggested = `Revision ${history.length + 1}`
+    const label = window.prompt('Revision name', suggested)?.trim() || suggested
+    setHistory((prev) => [...prev, {
+      files: files.map((file) => ({ ...file })),
+      timestamp: Date.now(),
+      label,
+    }])
   }
 
   const downloadFile = (f: DesignFile) => {
@@ -671,10 +924,74 @@ export function DesignStudio({ onClose }: Props) {
     }
   }
 
+  const downloadZip = async () => {
+    if (files.length === 0) return
+    const zip = new JSZip()
+    files.forEach((file) => {
+      zip.file(file.name, file.content)
+    })
+    const blob = await zip.generateAsync({ type: 'blob' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = 'design-bundle.zip'
+    a.click()
+    URL.revokeObjectURL(url)
+  }
+
+  const exportPdf = () => {
+    const html = previewHtml || (files.length > 0 ? buildPreviewHtml(files) : '')
+    if (!html.trim()) return
+
+    const win = window.open('', '_blank')
+    if (!win) return
+
+    win.document.open()
+    win.document.write(html)
+    win.document.close()
+    win.focus()
+    window.setTimeout(() => {
+      win.print()
+    }, 350)
+  }
+
   const openInTab = () => {
     if (!previewHtml) return
     const blob = new Blob([previewHtml], { type: 'text/html' })
     window.open(URL.createObjectURL(blob), '_blank')
+  }
+
+  const copyShareLink = async () => {
+    if (files.length === 0 || typeof window === 'undefined') return
+    const payload: DesignSharePayload = {
+      version: 1,
+      files,
+      selectedFileId,
+      viewMode,
+      device,
+      inlineComments,
+      shareAccess,
+    }
+
+    const url = new URL(window.location.href)
+    const params = new URLSearchParams(url.hash.startsWith('#') ? url.hash.slice(1) : '')
+    params.set('designShare', encodeDesignSharePayload(payload))
+    url.hash = params.toString()
+
+    try {
+      await navigator.clipboard.writeText(url.toString())
+      setShareCopied(true)
+      window.setTimeout(() => setShareCopied(false), 2000)
+    } catch {
+      setError('Could not copy share link. Check clipboard permissions and try again.')
+    }
+  }
+
+  const handoffToLocalAgent = () => {
+    const prompt = buildHandoffPrompt(files)
+    if (!prompt || typeof window === 'undefined') return
+    window.dispatchEvent(new CustomEvent('kodo:insert-prompt', { detail: { text: prompt } }))
+    onClose()
   }
 
   const copyCode = async () => {
@@ -685,7 +1002,106 @@ export function DesignStudio({ onClose }: Props) {
   }
 
   const selectedFile = files.find(f => f.id === selectedFileId) ?? files[0] ?? null
+  const canEdit = shareAccess === 'edit'
+  const canComment = shareAccess !== 'view'
   const fileTree = useMemo(() => buildDesignFileTree(files), [files])
+
+  const addInlineCommentAtPoint = (xPct: number, yPct: number) => {
+    if (!canComment) return
+    const text = window.prompt('Inline comment for this canvas area:')?.trim()
+    if (!text) return
+    setInlineComments((prev) => [...prev, {
+      id: genId(),
+      text,
+      xPct: Math.max(0, Math.min(100, xPct)),
+      yPct: Math.max(0, Math.min(100, yPct)),
+      createdAt: Date.now(),
+      resolved: false,
+    }])
+  }
+
+  const handlePreviewCommentClick = (event: ReactMouseEvent<HTMLDivElement>) => {
+    if (!commentMode || !canComment) return
+    event.preventDefault()
+    event.stopPropagation()
+    const rect = event.currentTarget.getBoundingClientRect()
+    if (rect.width <= 0 || rect.height <= 0) return
+    const xPct = ((event.clientX - rect.left) / rect.width) * 100
+    const yPct = ((event.clientY - rect.top) / rect.height) * 100
+    addInlineCommentAtPoint(xPct, yPct)
+  }
+
+  const toggleInlineComment = (id: string) => {
+    setInlineComments((prev) => prev.map((comment) => (
+      comment.id === id ? { ...comment, resolved: !comment.resolved } : comment
+    )))
+  }
+
+  const removeInlineComment = (id: string) => {
+    setInlineComments((prev) => prev.filter((comment) => comment.id !== id))
+  }
+
+  const applyInlineComment = (comment: InlineComment) => {
+    const prompt = `Apply this inline canvas comment at (${Math.round(comment.xPct)}%, ${Math.round(comment.yPct)}%): ${comment.text}`
+    void sendMessage(prompt)
+  }
+
+  const requestVariations = () => {
+    void sendMessage('Show 3 significantly different layout alternatives for the current design. Keep content goals intact and explain the tradeoffs briefly.')
+  }
+
+  const requestAccessibilityReview = () => {
+    void sendMessage('Review the current design for accessibility issues (contrast, hierarchy, focus order, interactive targets, semantics) and then apply fixes directly in the generated files.')
+  }
+
+  const renderInlineCommentLayer = () => (
+    <>
+      <div
+        onClick={handlePreviewCommentClick}
+        style={{
+          position: 'absolute',
+          inset: 0,
+          zIndex: 2,
+          cursor: commentMode && canComment ? 'crosshair' : 'default',
+          pointerEvents: commentMode && canComment ? 'auto' : 'none',
+          background: commentMode && canComment ? 'rgba(0,0,0,0.02)' : 'transparent',
+        }}
+      />
+      <div style={{ position: 'absolute', inset: 0, zIndex: 3, pointerEvents: 'none' }}>
+        {inlineComments.map((comment, idx) => (
+          <button
+            key={comment.id}
+            type="button"
+            title={comment.text}
+            onClick={(event) => {
+              event.stopPropagation()
+              toggleInlineComment(comment.id)
+            }}
+            style={{
+              position: 'absolute',
+              left: `${comment.xPct}%`,
+              top: `${comment.yPct}%`,
+              transform: 'translate(-50%, -50%)',
+              width: 18,
+              height: 18,
+              borderRadius: 999,
+              border: '1px solid rgba(255,255,255,0.95)',
+              background: comment.resolved ? '#2f9a51' : '#ff9f1a',
+              color: '#fff',
+              fontSize: 10,
+              fontWeight: 700,
+              fontFamily: 'var(--font-mono)',
+              cursor: 'pointer',
+              pointerEvents: 'auto',
+              boxShadow: '0 2px 8px rgba(0,0,0,0.3)',
+            }}
+          >
+            {idx + 1}
+          </button>
+        ))}
+      </div>
+    </>
+  )
 
   useEffect(() => {
     if (!selectedFile) return
@@ -827,6 +1243,36 @@ export function DesignStudio({ onClose }: Props) {
         <button type="button" style={btn(device === 'tablet')} onClick={() => setDevice('tablet')} title="Tablet"><Tablet size={12} /></button>
         <button type="button" style={btn(device === 'mobile')} onClick={() => setDevice('mobile')} title="Mobile"><Smartphone size={12} /></button>
 
+        <div style={{ width: 1, height: 16, background: 'var(--border)' }} />
+        <select
+          value={shareAccess}
+          onChange={(event) => setShareAccess(event.target.value as ShareAccess)}
+          title="Share access"
+          style={{
+            background: 'var(--bg-2)',
+            border: '1px solid var(--border)',
+            borderRadius: 6,
+            color: 'var(--text-1)',
+            fontSize: 11,
+            padding: '2px 8px',
+            fontFamily: 'var(--font-mono)',
+          }}
+        >
+          <option value="view">View-only</option>
+          <option value="comment">Comment</option>
+          <option value="edit">Edit</option>
+        </select>
+        <button
+          type="button"
+          style={btn(commentMode, true)}
+          onClick={() => setCommentMode((prev) => !prev)}
+          title="Inline comment mode"
+          disabled={!canComment}
+        >
+          <MessageSquare size={11} />
+          Comment
+        </button>
+
         {/* History */}
         {history.length > 1 && (
           <>
@@ -837,15 +1283,31 @@ export function DesignStudio({ onClose }: Props) {
             </button>
           </>
         )}
+        <button type="button" style={btn(false)} onClick={saveRevision} title="Save revision" disabled={!canEdit || files.length === 0}>
+          <Save size={11} />
+          Save revision
+        </button>
 
         <div style={{ flex: 1 }} />
 
         {/* Actions */}
-        {previewHtml && (
+        {(previewHtml || files.length > 0) && (
           <>
-            <button type="button" style={btn(false)} onClick={() => setRefreshKey(k => k + 1)} title="Refresh"><RefreshCw size={12} /></button>
-            <button type="button" style={btn(false)} onClick={openInTab} title="Open in new tab"><ExternalLink size={12} /></button>
-            <button type="button" style={btn(false)} onClick={downloadAll} title="Download HTML"><Download size={12} /></button>
+            {previewHtml && (
+              <>
+                <button type="button" style={btn(false)} onClick={() => setRefreshKey(k => k + 1)} title="Refresh"><RefreshCw size={12} /></button>
+                <button type="button" style={btn(false)} onClick={openInTab} title="Open in new tab"><ExternalLink size={12} /></button>
+                <button type="button" style={btn(false)} onClick={downloadAll} title="Download HTML"><Download size={12} /></button>
+              </>
+            )}
+            {files.length > 0 && (
+              <>
+                <button type="button" style={btn(false)} onClick={() => void downloadZip()} title="Download ZIP"><Package size={12} /></button>
+                <button type="button" style={btn(false)} onClick={exportPdf} title="Export PDF"><Printer size={12} /></button>
+                <button type="button" style={btn(shareCopied)} onClick={() => void copyShareLink()} title="Copy share link"><Share2 size={12} />{shareCopied ? 'Copied' : 'Share'}</button>
+                <button type="button" style={btn(false)} onClick={handoffToLocalAgent} title="Handoff to local coding agent"><Send size={12} />Handoff</button>
+              </>
+            )}
           </>
         )}
         <div style={{ width: 1, height: 16, background: 'var(--border)' }} />
@@ -884,6 +1346,7 @@ export function DesignStudio({ onClose }: Props) {
                 <span style={{ fontSize: 10, letterSpacing: '0.1em', color: 'var(--text-2)', fontFamily: 'var(--font-mono)' }}>FILES</span>
                 <div style={{ flex: 1 }} />
                 <button type="button" style={{ ...btn(false), padding: '2px 4px' }}
+                  disabled={!canEdit}
                   onClick={() => fileInputRef.current?.click()} title="Upload asset">
                   <Upload size={11} />
                 </button>
@@ -938,7 +1401,7 @@ export function DesignStudio({ onClose }: Props) {
                         fontFamily: 'var(--font-mono)',
                       }}>
                       <RotateCcw size={10} />
-                      v{history.length - i} — {new Date(h.timestamp).toLocaleTimeString()}
+                      {h.label || `v${history.length - i}`} — {new Date(h.timestamp).toLocaleTimeString()}
                     </div>
                   ))}
                 </>
@@ -1035,6 +1498,7 @@ export function DesignStudio({ onClose }: Props) {
                     style={{
                       flex: 1,
                       minWidth: 0,
+                      position: 'relative',
                       display: 'flex',
                       alignItems: device === 'desktop' ? 'stretch' : 'flex-start',
                       justifyContent: 'center',
@@ -1059,6 +1523,7 @@ export function DesignStudio({ onClose }: Props) {
                       }}
                       title="Design Preview"
                     />
+                    {renderInlineCommentLayer()}
                   </div>
                 </div>
               ) : viewMode === 'code' ? (
@@ -1085,6 +1550,7 @@ export function DesignStudio({ onClose }: Props) {
                   data-pane="preview"
                   style={{
                     height: '100%',
+                    position: 'relative',
                     display: 'flex',
                     alignItems: device === 'desktop' ? 'stretch' : 'flex-start',
                     justifyContent: 'center',
@@ -1109,6 +1575,7 @@ export function DesignStudio({ onClose }: Props) {
                     }}
                     title="Design Preview"
                   />
+                  {renderInlineCommentLayer()}
                 </div>
               )}
             </div>
@@ -1131,8 +1598,51 @@ export function DesignStudio({ onClose }: Props) {
             gap: 6, flexShrink: 0,
           }}>
             <span style={{ fontSize: 10, letterSpacing: '0.1em', color: 'var(--text-2)', fontFamily: 'var(--font-mono)' }}>DESIGN CHAT</span>
+            <div style={{ flex: 1 }} />
+            <button type="button" style={{ ...btn(false), padding: '2px 6px', fontSize: 10 }} onClick={requestVariations} disabled={!canEdit || isLoading}>3 Variants</button>
+            <button type="button" style={{ ...btn(false), padding: '2px 6px', fontSize: 10 }} onClick={requestAccessibilityReview} disabled={!canEdit || isLoading}>A11y pass</button>
             {isLoading && <Loader size={11} color="var(--accent)" style={{ animation: 'spin 1s linear infinite' }} />}
           </div>
+
+          {inlineComments.length > 0 && (
+            <div style={{
+              borderBottom: '1px solid var(--border)',
+              padding: '8px 10px',
+              background: 'var(--bg-0)',
+              maxHeight: 180,
+              overflowY: 'auto',
+              flexShrink: 0,
+            }}>
+              <div style={{
+                fontSize: 9,
+                letterSpacing: '0.1em',
+                color: 'var(--text-2)',
+                fontFamily: 'var(--font-mono)',
+                marginBottom: 6,
+              }}>
+                INLINE COMMENTS ({inlineComments.filter((row) => !row.resolved).length} open)
+              </div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                {[...inlineComments].slice(-6).map((comment) => (
+                  <div key={comment.id} style={{
+                    border: '1px solid var(--border)',
+                    borderRadius: 8,
+                    padding: '6px 8px',
+                    background: comment.resolved ? 'var(--bg-2)' : 'var(--bg-1)',
+                  }}>
+                    <div style={{ fontSize: 11, color: 'var(--text-1)', lineHeight: 1.45, marginBottom: 6 }}>
+                      ({Math.round(comment.xPct)}%, {Math.round(comment.yPct)}%) {comment.text}
+                    </div>
+                    <div style={{ display: 'flex', gap: 4 }}>
+                      <button type="button" style={{ ...btn(false), padding: '2px 6px', fontSize: 10 }} onClick={() => applyInlineComment(comment)} disabled={!canEdit || isLoading}>Apply</button>
+                      <button type="button" style={{ ...btn(Boolean(comment.resolved)), padding: '2px 6px', fontSize: 10 }} onClick={() => toggleInlineComment(comment.id)}>{comment.resolved ? 'Reopen' : 'Done'}</button>
+                      <button type="button" style={{ ...btn(false), padding: '2px 6px', fontSize: 10 }} onClick={() => removeInlineComment(comment.id)}>Delete</button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
 
           {/* Messages */}
           <div style={{ flex: 1, overflowY: 'auto', padding: '10px' }}>
@@ -1232,6 +1742,19 @@ export function DesignStudio({ onClose }: Props) {
           {/* Input */}
           <div style={{ borderTop: '1px solid var(--border)', padding: '8px 10px', flexShrink: 0 }}>
             <textarea
+              value={projectContext}
+              onChange={e => setProjectContext(e.target.value)}
+              placeholder="Project context (design system rules, codebase constraints, target users)..."
+              rows={2}
+              style={{
+                width: '100%', resize: 'vertical', background: 'var(--bg-1)',
+                border: '1px solid var(--border)', borderRadius: 8,
+                color: 'var(--text-1)', fontSize: 11, padding: '6px 8px',
+                outline: 'none', fontFamily: 'var(--font-mono)', lineHeight: 1.4,
+                boxSizing: 'border-box', display: 'block', marginBottom: 6,
+              }}
+            />
+            <textarea
               value={input}
               onChange={e => setInput(e.target.value)}
               onKeyDown={(e: KeyboardEvent<HTMLTextAreaElement>) => {
@@ -1249,22 +1772,23 @@ export function DesignStudio({ onClose }: Props) {
             />
             <div style={{ display: 'flex', gap: 5, marginTop: 6, alignItems: 'center' }}>
               <button type="button" onClick={() => fileInputRef.current?.click()}
+                disabled={!canEdit}
                 style={{ ...btn(false), fontSize: 10 }}>
                 <Upload size={11} /> Asset
               </button>
-              <input ref={fileInputRef} type="file" multiple accept="image/*,.css,.js,.json"
+              <input ref={fileInputRef} type="file" multiple accept="image/*,.css,.js,.json,.html,.ts,.tsx,.jsx,.md,.txt,.py,.yaml,.yml"
                 style={{ display: 'none' }}
                 onChange={e => void handleAssetUpload(e.target.files)} />
               <div style={{ flex: 1 }} />
               <button type="button"
-                disabled={!input.trim() || isLoading}
+                disabled={!input.trim() || isLoading || !canEdit}
                 onClick={() => void sendMessage(input)}
                 style={{
                   display: 'flex', alignItems: 'center', gap: 5,
                   padding: '5px 14px', borderRadius: 7, border: 'none',
-                  background: input.trim() && !isLoading ? 'var(--accent)' : 'var(--bg-3)',
-                  color: input.trim() && !isLoading ? '#fff' : 'var(--text-2)',
-                  fontSize: 12, cursor: input.trim() && !isLoading ? 'pointer' : 'not-allowed',
+                  background: input.trim() && !isLoading && canEdit ? 'var(--accent)' : 'var(--bg-3)',
+                  color: input.trim() && !isLoading && canEdit ? '#fff' : 'var(--text-2)',
+                  fontSize: 12, cursor: input.trim() && !isLoading && canEdit ? 'pointer' : 'not-allowed',
                   fontWeight: 500,
                 }}>
                 {isLoading ? <Loader size={12} /> : <Send size={12} />}
