@@ -3,17 +3,19 @@ import {
   MouseEvent as ReactMouseEvent,
 } from 'react'
 import {
-  X, Monitor, Tablet, Smartphone, Download, RefreshCw,
+  Monitor, Tablet, Smartphone, Download, RefreshCw,
   Upload, Send, Trash2, Eye, Code, File as FileIcon,
   ExternalLink, Wand2, SplitSquareHorizontal, Maximize2,
   Minimize2, ChevronRight, ChevronDown, RotateCcw, Copy,
   MessageSquare, Share2, Package, Printer, Save,
-  Folder, FolderOpen, Loader,
+  Folder, FolderOpen, Loader, ArrowLeft, Square, CheckSquare,
+  StopCircle,
 } from 'lucide-react'
 import { buildApiHeaders } from '../lib/api'
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter'
 import { vscDarkPlus } from 'react-syntax-highlighter/dist/esm/styles/prism'
 import JSZip from 'jszip'
+import VisualWebEditorArtifact, { VisualEditorSourcePayload } from './VisualWebEditorArtifact'
 
 const API = '/api/chat'
 export const DESIGN_STUDIO_STORAGE_KEY = 'kodo.design-studio.state.v1'
@@ -23,7 +25,7 @@ const MAX_PERSISTED_HISTORY = 20
 // ─── Types ──────────────────────────────────────────────────────────────────
 
 type DeviceMode = 'desktop' | 'tablet' | 'mobile'
-type ViewMode = 'preview' | 'code' | 'split'
+type ViewMode = 'preview' | 'code' | 'split' | 'editor'
 type ShareAccess = 'view' | 'comment' | 'edit'
 
 const DEVICE_WIDTHS: Record<DeviceMode, string> = {
@@ -209,7 +211,7 @@ export function decodeDesignSharePayload(raw: string): DesignSharePayload | null
     const shareAccess: ShareAccess = parsed.shareAccess === 'view' || parsed.shareAccess === 'comment'
       ? parsed.shareAccess
       : 'edit'
-    const viewMode: ViewMode = parsed.viewMode === 'code' || parsed.viewMode === 'split'
+    const viewMode: ViewMode = parsed.viewMode === 'code' || parsed.viewMode === 'split' || parsed.viewMode === 'editor'
       ? parsed.viewMode
       : 'preview'
     const device: DeviceMode = parsed.device === 'tablet' || parsed.device === 'mobile'
@@ -292,7 +294,7 @@ function loadPersistedDesignStudioState(): PersistedDesignStudioState | null {
     const normalizedSelected = selectedExists ? selectedFileId : (files[0]?.id ?? null)
 
     const device: DeviceMode = parsed.device === 'tablet' || parsed.device === 'mobile' ? parsed.device : 'desktop'
-    const viewMode: ViewMode = parsed.viewMode === 'preview' || parsed.viewMode === 'code' || parsed.viewMode === 'split'
+    const viewMode: ViewMode = parsed.viewMode === 'preview' || parsed.viewMode === 'code' || parsed.viewMode === 'split' || parsed.viewMode === 'editor'
       ? parsed.viewMode
       : 'preview'
     const shareAccess: ShareAccess = parsed.shareAccess === 'view' || parsed.shareAccess === 'comment'
@@ -584,6 +586,8 @@ export function DesignStudio({ onClose }: Props) {
   const [projectContext, setProjectContext] = useState('')
   const [shareAccess, setShareAccess] = useState<ShareAccess>('edit')
   const [hydrated, setHydrated] = useState(false)
+  const [sessionRestored, setSessionRestored] = useState(false)
+  const [planItems, setPlanItems] = useState<{ id: string; text: string; done: boolean }[]>([])
   const messagesRef = useRef(messages)
   messagesRef.current = messages
 
@@ -634,6 +638,7 @@ export function DesignStudio({ onClose }: Props) {
     if (persisted.files.length > 0) {
       setPreviewHtml(buildPreviewHtml(persisted.files))
       setRefreshKey((k) => k + 1)
+      setSessionRestored(true)
     }
     setHydrated(true)
   }, [])
@@ -647,12 +652,14 @@ export function DesignStudio({ onClose }: Props) {
   useEffect(() => {
     if (!hydrated || typeof window === 'undefined') return
 
+    // Strip file content from message history to stay within localStorage quota.
+    // The files array is persisted separately and is the source of truth.
     const persistedMessages = messages
       .slice(-MAX_PERSISTED_MESSAGES)
       .map((message) => ({
         ...message,
         isStreaming: false,
-        files: message.files?.map((file) => ({ ...file })),
+        files: message.files?.map((file) => ({ ...file, content: '' })),
       }))
 
     const payload: PersistedDesignStudioState = {
@@ -736,7 +743,25 @@ export function DesignStudio({ onClose }: Props) {
 
     const isFirst = messagesRef.current.length === 0
     const prefix = isFirst
-      ? 'You are a UI/UX design assistant. Output complete, self-contained HTML with embedded CSS and JS. Designs must be visually stunning, modern, and responsive. Put HTML in ```html filename.html blocks. You may also use separate ```css and ```js blocks with filenames. Never reference external files not in the response.\n\n'
+      ? `You are Kodo Design Studio — an expert UI/UX engineer and visual designer. Your goal is to produce stunning, production-quality web designs.
+
+RESPONSE FORMAT — follow this exactly:
+## Plan
+1. [Specific component or section you will build]
+2. [Next component]
+(3–8 items, each concrete and descriptive — e.g. "Sticky nav with logo, links, and CTA button")
+
+Then output all code files immediately after the plan.
+
+RULES:
+- Output HTML in \`\`\`html index.html code blocks. Embed all CSS inside <style> tags and all JS inside <script> tags.
+- You may also output separate \`\`\`css styles.css and \`\`\`js script.js blocks.
+- Never reference external files that are not included in your response.
+- Designs must be visually stunning, modern, pixel-perfect, and fully responsive.
+- Use real placeholder content (no "Lorem ipsum"). Write realistic copy for the industry/use-case.
+- Animations, micro-interactions, and gradients are encouraged.
+
+`
       : ''
 
     const contextSections: string[] = []
@@ -831,6 +856,19 @@ export function DesignStudio({ onClose }: Props) {
         }
       }
 
+      // Parse plan items from ## Plan section
+      const planMatch = acc.match(/^##\s*Plan\s*\n([\s\S]*?)(?=\n##|\n```|$)/m)
+      if (planMatch) {
+        const lines = planMatch[1].split('\n').filter(l => /^\d+\.\s+\S/.test(l.trim()))
+        if (lines.length > 0) {
+          setPlanItems(lines.map(l => ({
+            id: genId(),
+            text: l.replace(/^\d+\.\s+/, '').trim(),
+            done: false,
+          })))
+        }
+      }
+
       // Parse files and update preview after streaming completes
       const extracted = extractFiles(acc)
       if (extracted.length > 0) {
@@ -845,6 +883,8 @@ export function DesignStudio({ onClose }: Props) {
           label: `Generation ${prev.length + 1}`,
         }])
         setMessages(prev => prev.map(m => m.id === aid ? { ...m, files: extracted } : m))
+        // Mark all plan items done when files are generated
+        setPlanItems(prev => prev.map(item => ({ ...item, done: true })))
       } else if (acc.trim()) {
         // No code blocks found — show raw response as a fallback text file so
         // the user can see what the model actually returned
@@ -863,6 +903,21 @@ export function DesignStudio({ onClose }: Props) {
       setIsLoading(false)
     }
   }, [assets, inlineComments, isLoading, projectContext, sessionId, shareAccess])
+
+  const handleVisualEditorSourceChange = useCallback((payload: VisualEditorSourcePayload) => {
+    // Strip injected harness script so it isn't double-injected on reload
+    const cleanHtml = payload.html
+      .replace(/<script[^>]*id="__veh"[\s\S]*?<\/script>/gi, '')
+      .replace(/<div[^>]*id="__veo"[^>]*><\/div>/gi, '')
+    const nextFiles: DesignFile[] = [
+      { id: 'visual-editor-index', name: 'index.html', language: 'html', content: cleanHtml },
+      { id: 'visual-editor-styles', name: 'styles.css', language: 'css', content: payload.css },
+    ]
+
+    setFiles(nextFiles)
+    setSelectedFileId((prev) => (prev && nextFiles.some((file) => file.id === prev) ? prev : nextFiles[0].id))
+    setPreviewHtml(cleanHtml)
+  }, [])
 
   const restoreHistory = (entry: HistoryEntry) => {
     setFiles(entry.files)
@@ -953,6 +1008,14 @@ export function DesignStudio({ onClose }: Props) {
     window.setTimeout(() => {
       win.print()
     }, 350)
+  }
+
+  const cancelRequest = () => {
+    abortRef.current?.abort()
+    setIsLoading(false)
+    setMessages(prev => prev.map(m =>
+      m.isStreaming ? { ...m, isStreaming: false, content: m.content || '(Cancelled)' } : m,
+    ))
   }
 
   const openInTab = () => {
@@ -1228,6 +1291,23 @@ export function DesignStudio({ onClose }: Props) {
         borderBottom: '1px solid var(--border)',
         background: 'var(--bg-1)', flexShrink: 0,
       }}>
+        <button
+          type="button"
+          onClick={onClose}
+          title="Back to Kodo"
+          style={{
+            display: 'flex', alignItems: 'center', gap: 5,
+            padding: '4px 10px', borderRadius: 6,
+            border: '1px solid var(--border)',
+            background: 'var(--bg-2)',
+            color: 'var(--text-1)', fontSize: 11,
+            cursor: 'pointer', fontFamily: 'var(--font-mono)',
+            flexShrink: 0,
+          }}
+        >
+          <ArrowLeft size={12} /> Back to Kodo
+        </button>
+        <div style={{ width: 1, height: 16, background: 'var(--border)' }} />
         <Wand2 size={15} color="var(--accent)" />
         <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-0)', marginRight: 4 }}>Design Studio</span>
         <div style={{ width: 1, height: 16, background: 'var(--border)' }} />
@@ -1236,6 +1316,7 @@ export function DesignStudio({ onClose }: Props) {
         <button type="button" style={btn(viewMode === 'preview')} onClick={() => setViewMode('preview')}><Eye size={11} />Preview</button>
         <button type="button" style={btn(viewMode === 'code')} onClick={() => setViewMode('code')}><Code size={11} />Code</button>
         <button type="button" style={btn(viewMode === 'split')} onClick={() => setViewMode('split')}><SplitSquareHorizontal size={11} />Split</button>
+        <button type="button" style={btn(viewMode === 'editor')} onClick={() => setViewMode('editor')}><Wand2 size={11} />Editor</button>
         <div style={{ width: 1, height: 16, background: 'var(--border)' }} />
 
         {/* Device */}
@@ -1310,8 +1391,6 @@ export function DesignStudio({ onClose }: Props) {
             )}
           </>
         )}
-        <div style={{ width: 1, height: 16, background: 'var(--border)' }} />
-        <button type="button" style={btn(false)} onClick={onClose} title="Close"><X size={14} /></button>
       </div>
 
       {/* ══ BODY ══════════════════════════════════════════════════════════════ */}
@@ -1444,7 +1523,14 @@ export function DesignStudio({ onClose }: Props) {
           </div>
 
           {/* Content */}
-          {!previewHtml && files.length === 0 ? (
+          {viewMode === 'editor' ? (
+            <div style={{ flex: 1, minHeight: 0 }}>
+              <VisualWebEditorArtifact
+                html={selectedFile?.language === 'html' ? selectedFile.content : (previewHtml || '')}
+                onSourceChange={handleVisualEditorSourceChange}
+              />
+            </div>
+          ) : !previewHtml && files.length === 0 ? (
             <div style={{
               flex: 1, display: 'flex', flexDirection: 'column',
               alignItems: 'center', justifyContent: 'center',
@@ -1646,8 +1732,38 @@ export function DesignStudio({ onClose }: Props) {
 
           {/* Messages */}
           <div style={{ flex: 1, overflowY: 'auto', padding: '10px' }}>
+            {/* Session restored notice */}
+            {sessionRestored && messages.length > 0 && (
+              <div style={{
+                display: 'flex', alignItems: 'center', gap: 6,
+                padding: '6px 10px', marginBottom: 8, borderRadius: 8,
+                background: 'rgba(108,99,255,0.08)', border: '1px solid rgba(108,99,255,0.2)',
+                fontSize: 10, color: 'var(--accent)', fontFamily: 'var(--font-mono)',
+              }}>
+                <RotateCcw size={11} /> Previous session restored — {files.length} file{files.length !== 1 ? 's' : ''} loaded
+              </div>
+            )}
+
             {messages.length === 0 && (
               <div style={{ paddingTop: 4 }}>
+                {sessionRestored && files.length > 0 && (
+                  <div style={{
+                    padding: '10px 12px', marginBottom: 10, borderRadius: 10,
+                    background: 'rgba(108,99,255,0.08)', border: '1px solid rgba(108,99,255,0.2)',
+                    fontSize: 11, color: 'var(--text-1)',
+                  }}>
+                    <div style={{ fontWeight: 600, color: 'var(--accent)', marginBottom: 4, fontSize: 12 }}>
+                      Previous project restored
+                    </div>
+                    <div style={{ color: 'var(--text-2)', fontSize: 10, fontFamily: 'var(--font-mono)' }}>
+                      {files.map(f => f.name).join(', ')}
+                    </div>
+                    <div style={{ marginTop: 6, display: 'flex', gap: 5 }}>
+                      <button type="button" style={{ ...btn(false), fontSize: 10 }} onClick={() => setViewMode('preview')}>View Preview</button>
+                      <button type="button" style={{ ...btn(false), fontSize: 10 }} onClick={() => setViewMode('editor')}>Open Editor</button>
+                    </div>
+                  </div>
+                )}
                 <div style={{ fontSize: 11, color: 'var(--text-2)', marginBottom: 8, fontFamily: 'var(--font-mono)' }}>Quick starts</div>
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 5 }}>
                   {STARTERS.map(s => (
@@ -1659,6 +1775,46 @@ export function DesignStudio({ onClose }: Props) {
                       }}>
                       <div style={{ fontSize: 16, marginBottom: 3 }}>{s.icon}</div>
                       <div style={{ fontWeight: 500 }}>{s.label}</div>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Plan checklist card */}
+            {planItems.length > 0 && (
+              <div style={{
+                marginBottom: 10, padding: '10px 12px', borderRadius: 10,
+                background: 'var(--bg-2)', border: '1px solid var(--border)',
+              }}>
+                <div style={{
+                  fontSize: 10, fontWeight: 700, letterSpacing: '0.08em',
+                  color: 'var(--accent)', fontFamily: 'var(--font-mono)', marginBottom: 8,
+                }}>
+                  BUILD PLAN
+                </div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
+                  {planItems.map((item, i) => (
+                    <button
+                      key={item.id}
+                      type="button"
+                      onClick={() => setPlanItems(prev => prev.map(p => p.id === item.id ? { ...p, done: !p.done } : p))}
+                      style={{
+                        display: 'flex', alignItems: 'flex-start', gap: 7,
+                        background: 'none', border: 'none', cursor: 'pointer',
+                        textAlign: 'left', padding: '2px 0',
+                      }}
+                    >
+                      {item.done
+                        ? <CheckSquare size={13} color="var(--accent)" style={{ flexShrink: 0, marginTop: 1 }} />
+                        : <Square size={13} color="var(--text-2)" style={{ flexShrink: 0, marginTop: 1 }} />}
+                      <span style={{
+                        fontSize: 11, lineHeight: 1.45,
+                        color: item.done ? 'var(--text-2)' : 'var(--text-0)',
+                        textDecoration: item.done ? 'line-through' : 'none',
+                      }}>
+                        {i + 1}. {item.text}
+                      </span>
                     </button>
                   ))}
                 </div>
@@ -1780,20 +1936,35 @@ export function DesignStudio({ onClose }: Props) {
                 style={{ display: 'none' }}
                 onChange={e => void handleAssetUpload(e.target.files)} />
               <div style={{ flex: 1 }} />
-              <button type="button"
-                disabled={!input.trim() || isLoading || !canEdit}
-                onClick={() => void sendMessage(input)}
-                style={{
-                  display: 'flex', alignItems: 'center', gap: 5,
-                  padding: '5px 14px', borderRadius: 7, border: 'none',
-                  background: input.trim() && !isLoading && canEdit ? 'var(--accent)' : 'var(--bg-3)',
-                  color: input.trim() && !isLoading && canEdit ? '#fff' : 'var(--text-2)',
-                  fontSize: 12, cursor: input.trim() && !isLoading && canEdit ? 'pointer' : 'not-allowed',
-                  fontWeight: 500,
-                }}>
-                {isLoading ? <Loader size={12} /> : <Send size={12} />}
-                {isLoading ? 'Generating…' : 'Send'}
-              </button>
+              {isLoading ? (
+                <button
+                  type="button"
+                  onClick={cancelRequest}
+                  style={{
+                    display: 'flex', alignItems: 'center', gap: 5,
+                    padding: '5px 14px', borderRadius: 7, border: '1px solid rgba(255,80,80,0.4)',
+                    background: 'rgba(255,60,60,0.08)',
+                    color: '#ff6b6b',
+                    fontSize: 12, cursor: 'pointer', fontWeight: 500,
+                  }}
+                >
+                  <StopCircle size={12} /> Cancel
+                </button>
+              ) : (
+                <button type="button"
+                  disabled={!input.trim() || !canEdit}
+                  onClick={() => void sendMessage(input)}
+                  style={{
+                    display: 'flex', alignItems: 'center', gap: 5,
+                    padding: '5px 14px', borderRadius: 7, border: 'none',
+                    background: input.trim() && canEdit ? 'var(--accent)' : 'var(--bg-3)',
+                    color: input.trim() && canEdit ? '#fff' : 'var(--text-2)',
+                    fontSize: 12, cursor: input.trim() && canEdit ? 'pointer' : 'not-allowed',
+                    fontWeight: 500,
+                  }}>
+                  <Send size={12} /> Send
+                </button>
+              )}
             </div>
           </div>
         </div>
