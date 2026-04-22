@@ -692,12 +692,12 @@ function upsertDesignFileInMap(map: Map<string, DesignFile>, filePath: string, c
   const key = normalizedPath.toLowerCase()
   const existing = map.get(key)
   const language = existing?.language || inferLanguageFromFileName(normalizedPath)
-  const sanitizedContent = sanitizeDesignFileContent(normalizedPath, language, content)
   map.set(key, {
     id: existing?.id || genId(),
     name: normalizedPath,
     language,
-    content: sanitizedContent,
+    // Keep raw tool content so subsequent file_edit old_str matching remains exact.
+    content,
   })
   return true
 }
@@ -715,15 +715,9 @@ function applyFileEditToMap(
   const existing = map.get(key)
   if (!existing || !existing.content.includes(oldStr)) return false
 
-  const updatedContent = sanitizeDesignFileContent(
-    existing.name,
-    existing.language,
-    existing.content.replace(oldStr, newStr),
-  )
-
   map.set(key, {
     ...existing,
-    content: updatedContent,
+    content: existing.content.replace(oldStr, newStr),
   })
   return true
 }
@@ -1516,7 +1510,12 @@ RULES:
       // Parse files and update preview after streaming completes
       const extracted = extractFiles(acc)
       const derivedFromTools = sawToolFileMutation
-        ? Array.from(toolDerivedFiles.values()).filter((file) => file.content.trim().length > 0)
+        ? Array.from(toolDerivedFiles.values())
+          .map((file) => ({
+            ...file,
+            content: sanitizeDesignFileContent(file.name, file.language, file.content),
+          }))
+          .filter((file) => file.content.trim().length > 0)
         : []
       const resolvedFiles = extracted.length > 0 ? extracted : derivedFromTools
 
