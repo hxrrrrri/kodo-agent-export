@@ -591,6 +591,7 @@ export default function VisualWebEditorArtifact({ html: initialHtml = '', onSour
     }
 
     const handler = (e: MessageEvent) => {
+      if (e.source !== iframeRef.current?.contentWindow) return
       const m = e.data as Record<string, unknown>
       if (!m?.type) return
 

@@ -11,6 +11,14 @@ from observability.audit import log_audit_event
 
 router = APIRouter(prefix="/api/skills/custom", tags=["skills-admin"])
 CUSTOM_SKILLS_DIR = Path.home() / ".kodo" / "skills"
+_ALLOWED_NAME_CHARS = set("abcdefghijklmnopqrstuvwxyz0123456789-_")
+
+
+def _normalize_skill_name(raw: str) -> str:
+    text = raw.strip().lower().replace(" ", "-")
+    if not text or any(ch not in _ALLOWED_NAME_CHARS for ch in text):
+        raise HTTPException(status_code=400, detail="Invalid skill name")
+    return text
 
 
 class CustomSkillRequest(BaseModel):
@@ -88,7 +96,7 @@ async def delete_custom_skill(name: str, request: Request):
     require_api_auth(request)
     await enforce_rate_limit(request, MEMORY_RATE_LIMITER, "skills_custom_delete")
 
-    normalized = name.strip().lower().replace(" ", "-")
+    normalized = _normalize_skill_name(name)
     path = CUSTOM_SKILLS_DIR / f"{normalized}.md"
     if not path.exists():
         raise HTTPException(status_code=404, detail="Custom skill not found")

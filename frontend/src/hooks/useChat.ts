@@ -1,6 +1,7 @@
 import { useCallback, useMemo, useRef } from 'react'
 import {
   ArtifactItem,
+  ArtifactRef,
   AdvisorReview,
   PreviewItem,
   TodoItem,
@@ -14,6 +15,7 @@ import {
   ToolCall,
 } from '../store/chatStore'
 import { buildApiHeaders, parseApiError } from '../lib/api'
+import { parseArtifacts } from '../lib/artifacts/parser'
 import { pushUiNotification } from '../lib/notifications'
 
 const API = '/api/chat'
@@ -313,6 +315,57 @@ function inferFilename(info: string, language: string, index: number): string | 
 
   const ext = LANGUAGE_EXTENSION_MAP[language] || 'txt'
   return `artifact-${index}.${ext}`
+}
+
+/**
+ * Pushes any v2 artifacts in the accumulated content into the session-artifact
+ * store and returns the list of ArtifactRef pointers that should be attached
+ * to the message. Running this on every streamed token is safe — the store
+ * dedupes by (id, version) and only replaces when the body has changed.
+ */
+const persistedArtifacts = new Set<string>()
+
+function persistArtifact(sessionId: string, artifact: {
+  id: string
+  type: string
+  title: string
+  version: number
+  files: Array<{ path: string; content: string; language: string }>
+  entrypoint?: string
+}): void {
+  const key = `${sessionId}:${artifact.id}:${artifact.version}`
+  if (persistedArtifacts.has(key)) return
+  persistedArtifacts.add(key)
+  void fetch(`/api/artifacts/${encodeURIComponent(sessionId)}`, {
+    method: 'POST',
+    headers: buildApiHeaders({ 'Content-Type': 'application/json' }),
+    body: JSON.stringify({
+      id: artifact.id,
+      type: artifact.type,
+      title: artifact.title,
+      version: artifact.version,
+      files: artifact.files,
+      entrypoint: artifact.entrypoint,
+    }),
+  }).catch(() => {
+    persistedArtifacts.delete(key)
+  })
+}
+
+function ingestArtifactsV2(content: string): ArtifactRef[] {
+  const { artifacts } = parseArtifacts(content)
+  if (artifacts.length === 0) return []
+  const store = useChatStore.getState()
+  const sessionId = store.sessionId || ''
+  const refs: ArtifactRef[] = []
+  for (const artifact of artifacts) {
+    store.upsertSessionArtifact(artifact)
+    refs.push({ id: artifact.id, version: artifact.version })
+    if (sessionId) {
+      persistArtifact(sessionId, artifact)
+    }
+  }
+  return refs
 }
 
 function extractArtifacts(content: string, artifactModeEnabled: boolean): ArtifactItem[] | undefined {
@@ -666,6 +719,16 @@ export function useChat() {
             timestamp: normalizeTimestamp(item.timestamp),
           }
         })
+      // Re-ingest v2 artifacts from the loaded history so the version timeline is rebuilt.
+      store.clearSessionArtifacts()
+      for (const msg of messages) {
+        if (msg.role === 'assistant' && typeof msg.content === 'string' && msg.content.trim()) {
+          const refs = ingestArtifactsV2(msg.content)
+          if (refs.length > 0) {
+            msg.artifactRefs = refs
+          }
+        }
+      }
       store.setMessages(messages)
       const metadata = data.metadata as { mode?: string; project_dir?: string } | undefined
       const mode = normalizeClientMode(metadata?.mode || 'execute', useChatStore.getState().availableModes)
@@ -907,6 +970,7 @@ export function useChat() {
       store.setSessionMode('execute')
       store.setCheckpoints([])
       store.clearMessages()
+      store.clearSessionArtifacts()
     } catch (e) {
       console.error('Failed to create session', e)
       store.setError(String(e))
@@ -1119,21 +1183,18 @@ export function useChat() {
     switch (event.type) {
       case 'text':
         if (!silent && assistantId) {
-          store.updateMessageById(assistantId, (msg) => ({
-            ...msg,
-            content: (() => {
-              const next = msg.content + String(event.content || '')
-              return next
-            })(),
-            artifacts: (() => {
-              const next = msg.content + String(event.content || '')
-              return extractArtifacts(next, useChatStore.getState().artifactModeEnabled)
-            })(),
-            previews: (() => {
-              const next = msg.content + String(event.content || '')
-              return extractPreviews(next)
-            })(),
-          }))
+          store.updateMessageById(assistantId, (msg) => {
+            const next = msg.content + String(event.content || '')
+            const artifactModeEnabled = useChatStore.getState().artifactModeEnabled
+            const artifactRefs = ingestArtifactsV2(next)
+            return {
+              ...msg,
+              content: next,
+              artifacts: extractArtifacts(next, artifactModeEnabled),
+              artifactRefs: artifactRefs.length > 0 ? artifactRefs : undefined,
+              previews: extractPreviews(next),
+            }
+          })
         }
         eventHandlers?.onText?.(String(event.content || ''), event)
         break

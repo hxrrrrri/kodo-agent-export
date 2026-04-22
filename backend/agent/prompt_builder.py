@@ -1,4 +1,5 @@
 from agent.modes import get_mode
+from artifacts.protocol_prompt import build_artifact_system_block
 from caveman import build_mode_prompt as build_caveman_mode_prompt
 from caveman import normalize_mode as normalize_caveman_mode
 from memory.manager import memory_manager
@@ -52,8 +53,21 @@ async def build_system_prompt(
     project_dir: str | None,
     mode: str | None,
     caveman_mode: str | None = None,
+    artifact_mode: bool = False,
 ) -> str:
-    sections = [BASE_SYSTEM_PROMPT, get_mode(mode).prompt]
+    sections: list[str] = [BASE_SYSTEM_PROMPT]
+
+    # Artifact protocol goes directly after the base contract so weaker local
+    # models (Llama-3, Gemma, small Ollama tags) see the capability affirmation
+    # before the dense tool catalogue and do not refuse by claiming they cannot
+    # render React / HTML / Mermaid.
+    artifact_block = ""
+    if artifact_mode and feature_enabled("ARTIFACTS_V2", default="1"):
+        artifact_block = build_artifact_system_block(True)
+        if artifact_block.strip():
+            sections.append(artifact_block)
+
+    sections.append(get_mode(mode).prompt)
 
     tool_context = build_tool_prompt_context()
     if tool_context:
@@ -69,5 +83,10 @@ async def build_system_prompt(
             caveman_prompt = build_caveman_mode_prompt(normalized_caveman_mode)
             if caveman_prompt.strip():
                 sections.append(caveman_prompt)
+
+    # Repeat the artifact block at the end too — LLMs weight recent instructions
+    # heavier, so this re-primes right before the user message lands.
+    if artifact_block.strip():
+        sections.append("REMINDER: You can emit live artifacts using the ARTIFACT PROTOCOL above. Never refuse by claiming you lack a renderer.")
 
     return "\n\n".join([section for section in sections if section.strip()])

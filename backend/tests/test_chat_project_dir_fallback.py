@@ -62,8 +62,10 @@ def test_send_uses_stored_session_project_dir_when_request_omits_it(monkeypatch,
         mode: str,
         approval_callback=None,
         model_override: str | None = None,
+        artifact_mode: bool = False,
     ):
         captured["runner_project_dir"] = str(project_dir or "")
+        captured["artifact_mode"] = bool(artifact_mode)
         yield {"type": "text", "content": "ok"}
         yield {"type": "done", "usage": {"input_tokens": 1, "output_tokens": 1, "model": "test-model"}}
 

@@ -264,7 +264,7 @@ export function ArtifactSidePanel({ artifacts, onClose }: Props) {
               <iframe
                 key={`${artifact.id}-${device}-${activeTab}`}
                 srcDoc={artifact.content}
-                sandbox="allow-scripts allow-same-origin allow-forms"
+                sandbox="allow-scripts"
                 style={{
                   width: DEVICE_WIDTHS[device],
                   height: device === 'desktop' ? '100%' : 600,

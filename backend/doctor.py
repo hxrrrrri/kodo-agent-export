@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import os
 from dataclasses import asdict, dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 
 import aiofiles
@@ -180,7 +180,7 @@ async def run_report() -> dict[str, Any]:
     failed = len(checks) - passed
 
     payload: dict[str, Any] = {
-        "generated_at": datetime.utcnow().isoformat() + "Z",
+        "generated_at": datetime.now(timezone.utc).replace(tzinfo=None).isoformat() + "Z",
         "summary": {
             "total": len(checks),
             "passed": passed,

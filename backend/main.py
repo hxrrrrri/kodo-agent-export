@@ -11,13 +11,19 @@ load_dotenv(override=True)
 
 # MCP stdio tool servers require subprocess support, which is unavailable on
 # Windows selector loops. Force proactor policy for uvicorn worker processes.
-if os.name == "nt" and hasattr(asyncio, "WindowsProactorEventLoopPolicy"):
-    asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
+if os.name == "nt":
+    import warnings
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", DeprecationWarning)
+        policy_cls = getattr(asyncio, "WindowsProactorEventLoopPolicy", None)
+        if policy_cls is not None:
+            asyncio.set_event_loop_policy(policy_cls())
 
 from fastapi import FastAPI
 from fastapi import Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from api.artifacts import router as artifacts_router
 from api.bridge import router as bridge_router
 from api.chat import router as chat_router
 from api.collab import router as collab_router
@@ -96,6 +102,7 @@ app.include_router(marketplace_router, prefix="/api")
 app.include_router(skills_admin_router)
 app.include_router(collab_router)
 app.include_router(cron_router, prefix="/api")
+app.include_router(artifacts_router)
 
 
 @app.middleware("http")

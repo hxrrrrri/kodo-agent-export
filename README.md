@@ -19,7 +19,7 @@
 ---
 
 **KODO** is a fully self-hosted autonomous coding agent.  
-FastAPI backend · React UI · Multi-provider AI · Real-time streaming · Session memory
+FastAPI backend · React UI · Multi-provider AI · Real-time streaming · Session memory · Live artifacts with preview
 
 [![Python](https://img.shields.io/badge/Python-3.11+-3776AB?style=flat-square&logo=python&logoColor=white)](https://python.org)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.110+-009688?style=flat-square&logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com)
@@ -43,6 +43,8 @@ FastAPI backend · React UI · Multi-provider AI · Real-time streaming · Sessi
 - [AI Providers](#ai-providers)
 - [Smart Router](#smart-router)
 - [Agent Modes](#agent-modes)
+- [Artifacts v2](#artifacts-v2)
+- [Design Studio](#design-studio)
 - [Slash Commands](#slash-commands)
 - [Built-in Tools](#built-in-tools)
 - [Skills System](#skills-system)
@@ -50,6 +52,9 @@ FastAPI backend · React UI · Multi-provider AI · Real-time streaming · Sessi
 - [Prompt Library](#prompt-library)
 - [Notebook Panel](#notebook-panel)
 - [Session Replay](#session-replay)
+- [Cron & Scheduling](#cron--scheduling)
+- [Marketplace Packs](#marketplace-packs)
+- [KrawlX Web Crawler](#krawlx-web-crawler)
 - [API Reference](#api-reference)
 - [Permission System](#permission-system)
 - [Observability](#observability)
@@ -64,11 +69,15 @@ FastAPI backend · React UI · Multi-provider AI · Real-time streaming · Sessi
 KODO is a **self-hosted AI coding agent** you run on your own machine or server. It gives you a full chat interface powered by any major AI provider — Anthropic Claude, OpenAI GPT, Gemini, DeepSeek, Groq, Ollama, and more — with a rich set of agent capabilities:
 
 - **Autonomous tool execution** — the agent reads files, runs bash/shell commands, searches the web, queries databases, and edits code end-to-end.
+- **Live artifacts** — Claude.ai-style artifact side panel with sandboxed React/HTML/SVG/Mermaid/Graphviz/Markdown preview, multi-file bundles, versioning with diff view, ZIP download, and public share links. Provider-neutral: works identically with Anthropic, OpenAI, Gemini, Ollama, and every other configured provider.
 - **Session memory** — every conversation is persisted locally under `~/.kodo`, with full checkpoint and restore support.
 - **Multi-provider smart routing** — switch providers on the fly or let KODO automatically route to the fastest, cheapest, or highest-quality provider.
-- **Collaboration** — share a live read-only view of any session via a share link.
+- **Collaboration** — share a live read-only view of any session or individual artifact via a share link.
 - **Replay** — step through any past session like a video with autoplay and JSON export.
+- **Design Studio** — visual web editor with drag-drop, live theme extraction, and iframe harness for building pages without writing code.
 - **Prompt & skill library** — build, store, and reuse prompt templates and custom markdown skills.
+- **Cron scheduler** — fire agent runs on simple intervals (`every_15_minutes`, `daily_09:00`, etc.).
+- **Marketplace packs** — export/import skills, prompts, and cron jobs as zip bundles.
 - **PWA support** — install as a desktop app with offline shell caching.
 
 Everything runs locally. No cloud dependency beyond your chosen AI provider API key.
@@ -85,7 +94,9 @@ Everything runs locally. No cloud dependency beyond your chosen AI provider API 
 | **Multi-Provider** | Anthropic, OpenAI, Gemini, DeepSeek, Groq, OpenRouter, GitHub Models, Ollama, AtomicChat, Codex |
 | **Smart Router** | Health-checked auto-routing by latency, cost, quality, or balanced strategy |
 | **Agent Modes** | Execute, Plan, Debug, Review — each with distinct prompting behavior |
-| **Collaboration** | Share links, observer read-only mode, live SSE viewer stream |
+| **Artifacts v2** | Live preview (HTML / React+JSX / SVG / Mermaid / Markdown / Graphviz), multi-file bundles, versioning + diff, ZIP download, public share links, provider-neutral text protocol |
+| **Design Studio** | Visual web editor with drag-drop, theme extraction, iframe harness, DOM tree view, undo/redo |
+| **Collaboration** | Share links, observer read-only mode, live SSE viewer stream, shared artifact pages |
 | **Replay** | Step controls, autoplay, JSON export, message highlighting |
 | **Prompt Library** | CRUD API + UI, `{{variable}}` template rendering |
 | **Custom Skills** | Markdown-based skill builder with upload/edit UI |
@@ -93,11 +104,14 @@ Everything runs locally. No cloud dependency beyond your chosen AI provider API 
 | **Notebook** | Python/Node cell execution with per-cell outputs |
 | **Split Editor** | CodeMirror editor with open/edit/save + diff preview |
 | **Web Search** | Firecrawl, Tavily, SerpAPI, DuckDuckGo fallback |
+| **KrawlX** | Structured website crawler with callback webhook delivery |
 | **Screenshot** | URL screenshot capture with base64 PNG output (opt-in) |
 | **Database** | Read-only SQL via `SELECT` — SQLite, PostgreSQL, MySQL (opt-in) |
 | **Email** | SMTP dispatch via `send_email` tool (opt-in) |
 | **TTS** | OpenAI text-to-speech (opt-in) |
 | **Image Gen** | DALL-E 3 image generation (opt-in) |
+| **Cron** | Agent runs on simple interval expressions, stored under `~/.kodo/cron.json` |
+| **Marketplace** | Export/import skills + prompts + cron as `.kodopack` zip bundles |
 | **MCP Servers** | Add/remove/call Model Context Protocol tool servers |
 | **Webhooks** | Inbound webhook endpoint with HMAC signature verification |
 | **Notifications** | Browser + desktop notification center |
@@ -137,7 +151,7 @@ Everything runs locally. No cloud dependency beyond your chosen AI provider API 
 │  ┌────▼──────────────────────────────────────────────┐  │
 │  │                  Tool Orchestration                │  │
 │  │  bash · file_read/write/edit · git · glob · grep  │  │
-│  │  web_fetch · web_search · repl · screenshot       │  │
+│  │  web_fetch · web_search · krawlx · repl · screenshot│  │
 │  │  database_query · send_email · image_gen · caveman│  │
 │  │  mcp_* · task_* · agent_* · memory_write          │  │
 │  └────┬──────────────────────────────────────────────┘  │
@@ -148,7 +162,8 @@ Everything runs locally. No cloud dependency beyond your chosen AI provider API 
 │  │  OpenRouter · GitHub Models · Ollama · Codex      │  │
 │  └───────────────────────────────────────────────────┘  │
 │                                                          │
-│  Storage: ~/.kodo/{sessions, usage, audit, profiles}    │
+│  Storage: ~/.kodo/{sessions, usage, audit, profiles,   │
+│                    artifacts, cron, bridge, skills}     │
 └─────────────────────────────────────────────────────────┘
          │
 ┌────────▼────────┐
@@ -162,14 +177,19 @@ Everything runs locally. No cloud dependency beyond your chosen AI provider API 
 |---|---|
 | `backend/agent/session_runner.py` | Core agent loop, streaming, tool dispatch |
 | `backend/agent/loop.py` | Autonomous execution loop with tool call handling |
-| `backend/agent/prompt_builder.py` | System prompt assembly with mode + skill injection |
+| `backend/agent/prompt_builder.py` | System prompt assembly with mode + artifact + skill injection |
 | `backend/agent/coordinator.py` | Multi-agent coordination |
 | `backend/agent/permissions.py` | Tool permission checking and approval |
 | `backend/agent/modes.py` | Execute / Plan / Debug / Review mode definitions |
+| `backend/artifacts/` | Artifact v2 protocol prompt + session-scoped store |
 | `backend/providers/smart_router.py` | Health-checked multi-provider routing |
 | `backend/providers/` | Individual provider adapters (OpenAI-compat, Gemini, etc.) |
 | `backend/api/chat.py` | Chat + session REST + SSE endpoints |
+| `backend/api/artifacts.py` | Artifact upsert/list/get + public share endpoint |
 | `backend/api/collab.py` | Collaboration share/view/stream endpoints |
+| `backend/api/cron.py` | Cron scheduler endpoints + background fire loop |
+| `backend/api/marketplace.py` | Pack export/import endpoints |
+| `backend/api/krawlx.py` | Structured web crawler with signed callback delivery |
 | `backend/api/prompts.py` | Prompt library CRUD |
 | `backend/api/skills_admin.py` | Custom skill CRUD |
 | `backend/tools/` | All 30+ agent tools |
@@ -207,7 +227,11 @@ kodo-agent-export/
 │   │
 │   ├── api/                        # REST + SSE route handlers
 │   │   ├── chat.py                 # /api/chat — send, sessions, stream, code-review
+│   │   ├── artifacts.py            # /api/artifacts — upsert, list, get, share
 │   │   ├── collab.py               # /api/collab — share, observe, viewer stream
+│   │   ├── cron.py                 # /api/cron — scheduled agent jobs
+│   │   ├── marketplace.py          # /api/marketplace — pack export/import
+│   │   ├── krawlx.py               # /api/krawlx — structured crawler
 │   │   ├── prompts.py              # /api/prompts — CRUD + render
 │   │   ├── skills_admin.py         # /api/skills/custom — CRUD
 │   │   ├── providers.py            # /api/providers — list, switch
@@ -218,6 +242,10 @@ kodo-agent-export/
 │   │   ├── bridge.py               # /api/bridge — VSCode bridge
 │   │   ├── permission_hub.py       # /api/permissions — approval UI support
 │   │   └── security.py             # Auth token middleware
+│   │
+│   ├── artifacts/                  # Artifact v2 module
+│   │   ├── protocol_prompt.py      # Provider-neutral system prompt block
+│   │   └── store.py                # Session-scoped LRU artifact store
 │   │
 │   ├── tools/                      # Agent tool implementations
 │   │   ├── bash.py                 # Shell command execution
@@ -291,7 +319,8 @@ kodo-agent-export/
 │   │   │   └── useCollabSession.ts # Collaboration session hook
 │   │   ├── lib/
 │   │   │   ├── api.ts              # Typed API client
-│   │   │   └── notifications.ts    # Notification helper
+│   │   │   ├── notifications.ts    # Notification helper
+│   │   │   └── artifacts/          # Parser, types, ZIP download
 │   │   ├── components/
 │   │   │   ├── ChatWindow.tsx      # Main chat interface
 │   │   │   ├── MessageBubble.tsx   # Individual message rendering
@@ -308,7 +337,13 @@ kodo-agent-export/
 │   │   │   ├── ProviderPanel.tsx   # Provider/model switcher
 │   │   │   ├── NotificationCenter.tsx # Notification inbox
 │   │   │   ├── AgentGraph.tsx      # Agent execution graph view
+│   │   │   ├── DesignStudio.tsx    # Visual web editor
+│   │   │   ├── VisualWebEditorArtifact.tsx # Iframe-based DOM editor
+│   │   │   ├── ArtifactSidePanel.tsx  # Legacy v1 artifact panel
+│   │   │   ├── artifacts/          # Artifact v2 runtimes (html, react, svg, mermaid, markdown, dot, code), diff view, file tree, version switcher, side panel
 │   │   │   └── KodoLogoMark.tsx    # Logo component
+│   │   ├── pages/
+│   │   │   └── SharedArtifactPage.tsx # Public read-only artifact view
 │   │   └── styles/                 # Global CSS
 │   └── package.json
 │
@@ -447,6 +482,7 @@ ALLOWED_ORIGINS=http://localhost:5173
 
 | Flag | Default | Description |
 |---|---|---|
+| `KODO_ENABLE_ARTIFACTS_V2` | `1` | Provider-neutral artifact protocol + live preview |
 | `KODO_ENABLE_SMART_ROUTER` | `1` | Multi-provider health-checked routing |
 | `KODO_ENABLE_PROVIDER_DISCOVERY` | `1` | Auto-detect configured providers |
 | `KODO_ENABLE_PROFILES` | `1` | Named provider/model/mode profiles |
@@ -459,8 +495,10 @@ ALLOWED_ORIGINS=http://localhost:5173
 | `KODO_ENABLE_COMMAND_EXPANSION` | `1` | Slash command processing |
 | `KODO_ENABLE_WEBHOOKS` | `1` | Inbound webhook endpoint |
 | `KODO_ENABLE_DOCTOR` | `1` | `/doctor` diagnostic endpoint |
+| `KODO_ENABLE_CRON` | `1` | Background cron loop + API |
+| `KODO_ENABLE_KRAWLX` | `1` | KrawlX structured web crawler |
 | `KODO_ENABLE_TTS` | `0` | Text-to-speech (OpenAI) |
-| `KODO_ENABLE_COLLAB` | `0` | Session sharing + collaboration |
+| `KODO_ENABLE_COLLAB` | `0` | Session sharing + shared artifact pages |
 | `KODO_ENABLE_SCREENSHOT` | `0` | URL screenshot (needs playwright) |
 | `KODO_ENABLE_DATABASE` | `1` | Read-only SQL queries (needs `DB_URL`) |
 | `KODO_ENABLE_EMAIL` | `0` | SMTP email dispatch |
@@ -532,6 +570,86 @@ Switch the agent's behaviour with `/mode set <name>`:
 | **Plan** | `plan` | Outlines a numbered plan before major actions, milestone reporting |
 | **Debug** | `debug` | Hypothesis → verify → fix → re-verify cycle |
 | **Review** | `review` | Risk-focused code review: bugs, security, regressions, missing tests |
+
+---
+
+## Artifacts v2
+
+KODO ships a Claude.ai-style artifacts system that works with **every** configured provider — no Anthropic tool-use, no OpenAI function-calling, no JSON mode. Models emit artifacts as plain fenced code blocks with a structured info string, so Llama via Ollama, Gemma, Gemini, and DeepSeek all produce artifacts identically.
+
+### Supported types
+
+| Type | Preview |
+|---|---|
+| `html` | Sandboxed srcdoc iframe |
+| `html-multi` | Multi-file bundle stitched via blob URLs |
+| `react` | React 18 + esm.sh importmap (or Babel standalone fallback) |
+| `react-multi` | Multi-file React bundle |
+| `svg` | Inline render inside iframe |
+| `mermaid` | mermaid@10 CDN render |
+| `markdown` | GitHub-flavoured markdown |
+| `dot` | Graphviz via `@viz-js/viz` WASM |
+| `code` | Syntax-highlighted code only (no preview) |
+
+### Protocol
+
+Toggle **Artifact mode** in the composer bar, then the model emits:
+
+```text
+​```artifact type=react id=todo-app title="Todo App" version=1
+export default function App() {
+  const [items, setItems] = React.useState([])
+  return <div><h1>Todos: {items.length}</h1></div>
+}
+​```
+```
+
+To update an artifact, re-emit with the same `id=` and `version=N+1` containing the full new content. The side panel shows a version switcher with inline diff.
+
+Multi-file bundles share an `id` across consecutive fences with `bundle=true`:
+
+```text
+​```artifact type=html-multi id=landing title="Landing" version=1 bundle=true filename=index.html entrypoint=true
+<!DOCTYPE html>...
+​```
+​```artifact type=html-multi id=landing title="Landing" version=1 bundle=true filename=styles.css
+body { ... }
+​```
+```
+
+### Features
+
+- Code / Preview / Split view with desktop / tablet / mobile device frames
+- File tree for multi-file bundles with entrypoint marker
+- Version switcher with line-level diff view
+- Per-artifact download and multi-file ZIP download
+- Share link — creates a collab-token-gated public URL at `/shared-artifact/<session>/<artifact>?token=...&version=...`
+- Opt-in sandbox relaxations (`allow-forms`, `allow-popups`) per artifact
+- Progressive streaming — partial artifact content is suppressed until the closing fence, no broken mid-stream renders
+
+### Hardening
+
+- Every artifact runs inside `<iframe sandbox="allow-scripts" srcdoc=...>` — **no** `allow-same-origin`, so artifact JS cannot read the parent app's cookies or localStorage
+- Host never interpolates artifact content into parent DOM
+- 2 MB size cap at upsert and render
+- Artifact IDs with `/`, `\`, `..`, or null bytes are rejected at the API boundary
+- Every iframe `postMessage` handler checks `e.source === iframeRef.current?.contentWindow`
+- Storage LRU-capped at 50 versions per artifact, 100 artifacts per session, stored at `~/.kodo/artifacts/<session_id>.json`
+
+See [`backend/docs/artifacts_v2.md`](backend/docs/artifacts_v2.md) for the design and [`backend/docs/artifacts_manual_test.md`](backend/docs/artifacts_manual_test.md) for the per-provider manual test checklist.
+
+---
+
+## Design Studio
+
+A visual web editor built on top of the artifact iframe harness. Open it with `/open design studio` or the sidebar button.
+
+- Drag-drop layout primitives onto a live iframe canvas
+- Click any element to edit inline: text, padding, margin, colours, font, display, flex direction, gap, box-shadow
+- Theme extraction pulls colour palette / typography from any URL and applies it to the current design
+- DOM tree sidebar for navigating and selecting elements
+- Full undo / redo history
+- Export as HTML artifact when done
 
 ---
 
@@ -778,6 +896,88 @@ Any past session can be replayed step-by-step:
 
 ---
 
+## Cron & Scheduling
+
+Fire agent prompts on an interval. Jobs are persisted to `~/.kodo/cron.json` and run on a background loop started at app boot.
+
+Supported cron expressions:
+
+| Expression | Meaning |
+|---|---|
+| `every_N_minutes` | Every N minutes (min 1) |
+| `every_N_hours` | Every N hours (min 1) |
+| `daily_HH:MM` | Every day at HH:MM local time |
+| `weekly_<day>_HH:MM` | Weekly on `monday`..`sunday` at HH:MM |
+
+```bash
+# Create a job
+curl -X POST http://localhost:8000/api/cron \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $KODO_TOKEN" \
+  -d '{
+    "name": "morning-standup",
+    "cron_expr": "daily_09:00",
+    "prompt": "Review yesterdays commits and draft a standup note.",
+    "project_dir": "/home/me/project",
+    "enabled": true
+  }'
+
+# List jobs + recent runs
+curl http://localhost:8000/api/cron
+curl http://localhost:8000/api/cron/runs
+```
+
+All cron endpoints require `API_AUTH_TOKEN` when the token is set. `project_dir` is validated against the path guard before storage.
+
+---
+
+## Marketplace Packs
+
+Export a portable bundle of custom skills, prompts, and cron jobs as a `.kodopack` (zip). Useful for sharing a KODO setup across machines or teams.
+
+```bash
+# Export
+curl -X POST http://localhost:8000/api/marketplace/export \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $KODO_TOKEN" \
+  -d '{"name": "my-setup", "description": "Personal Kodo pack"}' \
+  -o my-setup.kodopack
+
+# Import (max 10 MB)
+curl -X POST http://localhost:8000/api/marketplace/import \
+  -H "Authorization: Bearer $KODO_TOKEN" \
+  -F "file=@my-setup.kodopack"
+```
+
+Packs are zip archives with `pack.json` metadata plus `skills/*.md`, `prompts.json`, and `cron.json`. On import, name collisions append `_imported`.
+
+---
+
+## KrawlX Web Crawler
+
+Structured multi-page crawler with robots.txt support, optional same-origin limit, include/exclude pattern matching, and signed callback delivery for long crawls.
+
+```bash
+curl -X POST http://localhost:8000/api/krawlx/crawl \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $KODO_TOKEN" \
+  -d '{
+    "url": "https://example.com/docs",
+    "max_pages": 40,
+    "max_depth": 2,
+    "same_origin": true,
+    "obey_robots": true,
+    "include_patterns": ["/docs/*"],
+    "exclude_patterns": ["/docs/archive/*"],
+    "callback_url": "https://your-server/hook",
+    "callback_secret": "shared-secret"
+  }'
+```
+
+Set `FIRECRAWL_API_KEY` in `.env` to enable Firecrawl-backed crawling; falls back to the built-in httpx scraper otherwise.
+
+---
+
 ## API Reference
 
 ### Health
@@ -817,6 +1017,16 @@ POST   /api/skills/custom                       → create custom skill
 DELETE /api/skills/custom/{name}                → delete custom skill
 ```
 
+### Artifacts
+
+```
+POST   /api/artifacts/{session_id}                     → upsert artifact (authed)
+GET    /api/artifacts/{session_id}                     → list session artifacts
+GET    /api/artifacts/{session_id}/{artifact_id}       → get latest or ?version=N
+GET    /api/artifacts/{session_id}/{artifact_id}/versions → all versions
+GET    /api/artifacts/shared/{session_id}/{artifact_id}?token=...&version=N → public (collab token)
+```
+
 ### Collaboration
 
 ```
@@ -824,6 +1034,28 @@ POST   /api/collab/sessions/{id}/share          → create share link
 DELETE /api/collab/sessions/{id}/share          → revoke share link
 GET    /api/collab/sessions/{id}/stream         → observer SSE stream
 GET    /api/collab/sessions/{id}/viewers        → viewer count
+```
+
+### Cron
+
+```
+GET    /api/cron                                → list jobs
+POST   /api/cron                                → upsert job
+DELETE /api/cron/{name}                         → delete job
+GET    /api/cron/runs                           → recent firings
+```
+
+### Marketplace
+
+```
+POST   /api/marketplace/export                  → export a .kodopack zip
+POST   /api/marketplace/import                  → import a .kodopack zip (multipart)
+```
+
+### KrawlX
+
+```
+POST   /api/krawlx/crawl                        → crawl with optional signed callback
 ```
 
 ### Providers & Profiles
@@ -914,8 +1146,8 @@ BRIDGE_TOKEN_TTL_SECONDS=3600
 
 ```bash
 cd frontend
-npm run typecheck    # TypeScript type check
-npm run test         # Vitest unit tests
+npx tsc --noEmit     # TypeScript type check (clean)
+npx vitest run       # Vitest unit tests (51 passing)
 npm run build        # Production build
 ```
 
@@ -925,9 +1157,21 @@ npm run build        # Production build
 cd backend
 source .venv/bin/activate   # or .venv\Scripts\activate on Windows
 
-pytest -q               # Run test suite
+python -m pytest -q     # Run test suite (172 passing)
+python -m ruff check .  # Lint (clean)
 python -m mypy .        # Type check
 ```
+
+### Security posture
+
+The codebase was hardened in the current release (see commit history):
+
+- Iframe sandbox reduced to `allow-scripts` only across every artifact runtime (legacy + v2)
+- `postMessage` handlers check `e.source`
+- Path-guard enforced on every user-supplied path (chat, webhooks, cron, bridge, skills, design-file read)
+- Cron and skills_admin endpoints require auth + input validation
+- Bridge tokens use HMAC-SHA256 with constant-time comparison
+- Share tokens are `secrets.token_urlsafe(24)` with configurable TTL
 
 ---
 

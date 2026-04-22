@@ -1,4 +1,7 @@
 import { create } from 'zustand'
+import { ArtifactRef, ArtifactV2 } from '../lib/artifacts/types'
+
+export type { ArtifactV2, ArtifactRef } from '../lib/artifacts/types'
 
 export const THEME_KEYS = [
   'dark',
@@ -109,6 +112,7 @@ export interface Message {
   toolCalls?: ToolCall[]
   todoItems?: TodoItem[]
   artifacts?: ArtifactItem[]
+  artifactRefs?: ArtifactRef[]
   previews?: PreviewItem[]
   isStreaming?: boolean
   usage?: {
@@ -203,6 +207,9 @@ interface ChatState {
   messageSearchQuery: string
   selectedArtifact: ArtifactItem | null
   designStudioOpen: boolean
+  // sessionArtifacts[id] is an ordered list of versions (oldest first) for that artifact id.
+  sessionArtifacts: Record<string, ArtifactV2[]>
+  selectedArtifactV2: { id: string; version: number } | null
 
   setSessionId: (id: string | null) => void
   setSessions: (sessions: Session[]) => void
@@ -227,6 +234,9 @@ interface ChatState {
   setSelectedArtifact: (artifact: ArtifactItem | null) => void
   setDesignStudioOpen: (open: boolean) => void
   clearMessages: () => void
+  upsertSessionArtifact: (artifact: ArtifactV2) => void
+  clearSessionArtifacts: () => void
+  setSelectedArtifactV2: (ref: { id: string; version: number } | null) => void
 }
 
 export const useChatStore = create<ChatState>((set) => ({
@@ -244,11 +254,13 @@ export const useChatStore = create<ChatState>((set) => ({
   availableModes: [],
   commands: [],
   theme: 'claude',
-  artifactModeEnabled: false,
+  artifactModeEnabled: true,
   searchQuery: '',
   messageSearchQuery: '',
   selectedArtifact: null,
   designStudioOpen: false,
+  sessionArtifacts: {},
+  selectedArtifactV2: null,
 
   setSessionId: (id) => set({ sessionId: id }),
   setSessions: (sessions) => set({ sessions }),
@@ -292,4 +304,17 @@ export const useChatStore = create<ChatState>((set) => ({
   setSelectedArtifact: (selectedArtifact) => set({ selectedArtifact }),
   setDesignStudioOpen: (designStudioOpen) => set({ designStudioOpen }),
   clearMessages: () => set({ messages: [] }),
+  upsertSessionArtifact: (artifact) =>
+    set((s) => {
+      const existing = s.sessionArtifacts[artifact.id] || []
+      const filtered = existing.filter((v) => v.version !== artifact.version)
+      const next = [...filtered, artifact].sort((a, b) => a.version - b.version)
+      // LRU cap per artifact id at 50 versions.
+      const capped = next.length > 50 ? next.slice(next.length - 50) : next
+      return {
+        sessionArtifacts: { ...s.sessionArtifacts, [artifact.id]: capped },
+      }
+    }),
+  clearSessionArtifacts: () => set({ sessionArtifacts: {}, selectedArtifactV2: null }),
+  setSelectedArtifactV2: (ref) => set({ selectedArtifactV2: ref }),
 }))

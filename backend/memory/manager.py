@@ -6,6 +6,10 @@ from pathlib import Path
 from typing import Any
 
 
+def _utc_iso() -> str:
+    return datetime.now(timezone.utc).replace(tzinfo=None).isoformat()
+
+
 KODO_DIR = Path.home() / ".kodo"
 GLOBAL_MEMORY_FILE = KODO_DIR / "MEMORY.md"
 SESSIONS_DIR = KODO_DIR / "sessions"
@@ -44,7 +48,7 @@ class MemoryManager:
         label: str | None = None,
     ) -> str:
         checkpoint_id = f"cp_{uuid.uuid4().hex[:12]}"
-        created_at = datetime.utcnow().isoformat()
+        created_at = _utc_iso()
         session_dir = CHECKPOINTS_DIR / session_id
         session_dir.mkdir(parents=True, exist_ok=True)
 
@@ -152,7 +156,7 @@ class MemoryManager:
 
         data = {
             "session_id": session_id,
-            "updated_at": datetime.utcnow().isoformat(),
+            "updated_at": _utc_iso(),
             "metadata": merged_metadata,
             "messages": messages,
         }
@@ -349,7 +353,7 @@ class MemoryManager:
 
     async def append_to_memory(self, content: str, section: str | None = None):
         """Append a note to the global memory file."""
-        timestamp = datetime.utcnow().strftime("%Y-%m-%d %H:%M")
+        timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M")
         heading = section.strip() if isinstance(section, str) and section.strip() else "Note"
         note = f"\n## {heading} [{timestamp}]\n{content}\n"
         async with aiofiles.open(GLOBAL_MEMORY_FILE, "a") as f:
@@ -365,7 +369,7 @@ class MemoryManager:
         session_id = (override_session_id or payload.get("session_id") or "").strip()
 
         if not session_id:
-            session_id = datetime.utcnow().strftime("imported-%Y%m%d%H%M%S")
+            session_id = datetime.now(timezone.utc).strftime("imported-%Y%m%d%H%M%S")
 
         if not isinstance(messages, list):
             raise ValueError("messages must be a list")

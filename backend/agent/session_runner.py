@@ -296,6 +296,7 @@ class SessionRunner:
         mode: str,
         approval_callback: Callable[[str, str, str], Awaitable[bool]] | None = None,
         model_override: str | None = None,
+        artifact_mode: bool = False,
     ) -> AsyncGenerator[dict[str, Any], None]:
         assistant_parts: list[str] = []
         usage_payload: dict[str, Any] | None = None
@@ -318,6 +319,7 @@ class SessionRunner:
                 project_dir=project_dir,
                 mode=mode,
                 model_override=model_override,
+                artifact_mode=bool(artifact_mode),
             )
         except Exception as exc:
             yield {"type": "error", "message": str(exc)}
@@ -471,6 +473,7 @@ class SessionRunner:
         stream_callback: Callable[[dict[str, Any]], Awaitable[None]] | None = None,
         approval_callback: Callable[[str, str, str], Awaitable[bool]] | None = None,
         model_override: str | None = None,
+        artifact_mode: bool = False,
     ) -> SessionResult:
         async for event in self.stream(
             session_id=session_id,
@@ -479,6 +482,7 @@ class SessionRunner:
             mode=mode,
             approval_callback=approval_callback,
             model_override=model_override,
+            artifact_mode=bool(artifact_mode),
         ):
             if stream_callback is not None:
                 await stream_callback(event)

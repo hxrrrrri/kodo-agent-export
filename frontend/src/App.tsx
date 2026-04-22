@@ -4,15 +4,22 @@ import ChatWindow from './components/ChatWindow'
 import { NotificationCenter } from './components/NotificationCenter'
 import { EditorPanel } from './components/EditorPanel'
 import { ArtifactSidePanel } from './components/ArtifactSidePanel'
+import { ArtifactSidePanelV2 } from './components/artifacts/ArtifactSidePanelV2'
 import { DesignStudio } from './components/DesignStudio'
 import { useChatStore } from './store/chatStore'
 import { THEME_KEYS, THEME_TONES, ThemeKey } from './store/chatStore'
 import { requestUiNotificationPermission } from './lib/notifications'
+import { SharedArtifactPage, parseSharedRoute } from './pages/SharedArtifactPage'
 
 const SIDEBAR_COLLAPSE_STORAGE_KEY = 'kodo_sidebar_collapsed'
 const THEME_STORAGE_KEY = 'kodo_theme'
 
 export default function App() {
+  const sharedRoute = typeof window !== 'undefined' ? parseSharedRoute(window.location.href) : null
+  if (sharedRoute) {
+    return <SharedArtifactPage route={sharedRoute} />
+  }
+
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
   const [editorOpen, setEditorOpen] = useState(false)
   const [editorWidthPercent, setEditorWidthPercent] = useState(40)
@@ -22,11 +29,13 @@ export default function App() {
   const setTheme = useChatStore((state) => state.setTheme)
   const selectedArtifact = useChatStore((state) => state.selectedArtifact)
   const setSelectedArtifact = useChatStore((state) => state.setSelectedArtifact)
+  const selectedArtifactV2 = useChatStore((state) => state.selectedArtifactV2)
+  const setSelectedArtifactV2 = useChatStore((state) => state.setSelectedArtifactV2)
   const designStudioOpen = useChatStore((state) => state.designStudioOpen)
   const setDesignStudioOpen = useChatStore((state) => state.setDesignStudioOpen)
 
   // artifact panel takes precedence over editor when both could be open
-  const artifactOpen = selectedArtifact !== null
+  const artifactOpen = selectedArtifact !== null || selectedArtifactV2 !== null
   const showEditor = editorOpen && !artifactOpen
 
   useEffect(() => {
@@ -156,7 +165,7 @@ export default function App() {
           <ChatWindow editorOpen={showEditor} onToggleEditor={toggleEditor} />
         </div>
 
-        {artifactOpen && selectedArtifact && (
+        {artifactOpen && (
           <>
             <div
               role="separator"
@@ -172,10 +181,17 @@ export default function App() {
               }}
             />
             <div style={{ width: `${artifactWidthPercent}%`, flexShrink: 0, height: '100%' }}>
-              <ArtifactSidePanel
-                artifacts={[selectedArtifact]}
-                onClose={() => setSelectedArtifact(null)}
-              />
+              {selectedArtifactV2 ? (
+                <ArtifactSidePanelV2
+                  artifactId={selectedArtifactV2.id}
+                  onClose={() => setSelectedArtifactV2(null)}
+                />
+              ) : selectedArtifact ? (
+                <ArtifactSidePanel
+                  artifacts={[selectedArtifact]}
+                  onClose={() => setSelectedArtifact(null)}
+                />
+              ) : null}
             </div>
           </>
         )}

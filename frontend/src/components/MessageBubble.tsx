@@ -4,7 +4,7 @@ import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter'
 import { vscDarkPlus } from 'react-syntax-highlighter/dist/esm/styles/prism'
-import { AdvisorReview, ArtifactItem, Message, PreviewItem, useChatStore } from '../store/chatStore'
+import { AdvisorReview, ArtifactItem, ArtifactRef, Message, PreviewItem, useChatStore } from '../store/chatStore'
 import { buildApiHeaders, parseApiError } from '../lib/api'
 import { ToolCallCard } from './ToolCallCard'
 
@@ -175,6 +175,80 @@ function AdvisorReviewCard({ review }: { review: AdvisorReview }) {
 }
 
 
+
+function ArtifactRefPanel({ refs }: { refs: ArtifactRef[] }) {
+  const sessionArtifacts = useChatStore((s) => s.sessionArtifacts)
+  const setSelectedArtifactV2 = useChatStore((s) => s.setSelectedArtifactV2)
+
+  const resolved = refs
+    .map((ref) => {
+      const versions = sessionArtifacts[ref.id] || []
+      const latest = versions[versions.length - 1]
+      return latest ? { ref, artifact: latest, versionCount: versions.length } : null
+    })
+    .filter((x): x is NonNullable<typeof x> => x !== null)
+
+  if (resolved.length === 0) return null
+
+  return (
+    <div style={{
+      marginTop: 12,
+      border: '1px solid var(--border)',
+      borderRadius: 'var(--radius)',
+      overflow: 'hidden',
+      background: 'var(--bg-0)',
+    }}>
+      <div style={{
+        display: 'flex',
+        alignItems: 'center',
+        background: 'var(--bg-2)',
+        borderBottom: '1px solid var(--border)',
+        padding: '5px 10px',
+      }}>
+        <span style={{
+          fontSize: 9,
+          letterSpacing: '0.12em',
+          color: 'var(--accent)',
+          fontFamily: 'var(--font-mono)',
+        }}>
+          ARTIFACTS
+        </span>
+      </div>
+      <div style={{ padding: 8, display: 'flex', flexDirection: 'column', gap: 6 }}>
+        {resolved.map(({ artifact, versionCount }) => (
+          <button
+            key={artifact.id}
+            type="button"
+            onClick={() => setSelectedArtifactV2({ id: artifact.id, version: artifact.version })}
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              padding: '8px 12px',
+              borderRadius: 6,
+              border: '1px solid var(--border)',
+              background: 'var(--bg-1)',
+              color: 'var(--text-0)',
+              textAlign: 'left',
+              cursor: 'pointer',
+              gap: 10,
+            }}
+          >
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 2, minWidth: 0 }}>
+              <span style={{ fontSize: 12, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                {artifact.title}
+              </span>
+              <span style={{ fontSize: 10, color: 'var(--text-2)', fontFamily: 'var(--font-mono)' }}>
+                {artifact.type} · v{artifact.version}{versionCount > 1 ? ` (${versionCount} versions)` : ''} · {artifact.files.length} file{artifact.files.length === 1 ? '' : 's'}
+              </span>
+            </div>
+            <Maximize2 size={13} style={{ color: 'var(--accent)', flexShrink: 0 }} />
+          </button>
+        ))}
+      </div>
+    </div>
+  )
+}
 
 function ArtifactPanel({ artifacts }: { artifacts: ArtifactItem[] }) {
   const [activeIdx, setActiveIdx] = useState(0)
@@ -945,8 +1019,13 @@ export function MessageBubble({
         </div>
       )}
 
-      {/* Artifacts */}
-      {message.artifacts && message.artifacts.length > 0 && (
+      {/* Artifacts v2 refs */}
+      {message.artifactRefs && message.artifactRefs.length > 0 && (
+        <ArtifactRefPanel refs={message.artifactRefs} />
+      )}
+
+      {/* Artifacts (legacy) */}
+      {(!message.artifactRefs || message.artifactRefs.length === 0) && message.artifacts && message.artifacts.length > 0 && (
         <ArtifactPanel artifacts={message.artifacts} />
       )}
 

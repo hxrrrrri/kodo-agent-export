@@ -2,7 +2,7 @@ import json
 import os
 import shlex
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -1015,7 +1015,7 @@ async def execute_command(
     if command == "/checkpoint":
         if not args:
             history = await memory_manager.load_session(session_id)
-            label = f"checkpoint at {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')}"
+            label = f"checkpoint at {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')}"
             checkpoint_id = await memory_manager.create_checkpoint(session_id, history, label=label)
             return CommandExecutionResult(name="checkpoint", text=f"Created checkpoint {checkpoint_id}: {label}")
 

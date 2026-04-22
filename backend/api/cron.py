@@ -12,10 +12,11 @@ import aiofiles
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 
-from api.security import enforce_rate_limit, MEMORY_RATE_LIMITER
+from api.security import enforce_rate_limit, MEMORY_RATE_LIMITER, require_api_auth
 from observability.audit import log_audit_event
 from privacy import feature_enabled
 from tasks.manager import task_manager
+from tools.path_guard import enforce_allowed_path
 
 router = APIRouter(prefix="/cron", tags=["cron"])
 
@@ -139,6 +140,7 @@ def start_cron_loop() -> None:
 async def list_cron_jobs(request: Request) -> dict[str, Any]:
     if not _cron_enabled():
         return {"jobs": [], "enabled": False}
+    require_api_auth(request)
     await enforce_rate_limit(request, MEMORY_RATE_LIMITER, "list_cron")
     return {"jobs": await _load_jobs(), "enabled": True}
 
@@ -147,6 +149,7 @@ async def list_cron_jobs(request: Request) -> dict[str, Any]:
 async def upsert_cron_job(body: CronJob, request: Request) -> dict[str, Any]:
     if not _cron_enabled():
         raise HTTPException(status_code=404, detail="Cron is disabled. Set KODO_ENABLE_CRON=1.")
+    require_api_auth(request)
     await enforce_rate_limit(request, MEMORY_RATE_LIMITER, "upsert_cron")
     if _parse_interval_seconds(body.cron_expr) is None:
         raise HTTPException(
@@ -156,6 +159,14 @@ async def upsert_cron_job(body: CronJob, request: Request) -> dict[str, Any]:
                 "daily_HH:MM, or weekly_DAY_HH:MM"
             ),
         )
+
+    project_dir = body.project_dir
+    if project_dir:
+        try:
+            project_dir = enforce_allowed_path(project_dir)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
     jobs = await _load_jobs()
     jobs = [j for j in jobs if j.get("name") != body.name]
     jobs.append(
@@ -163,7 +174,7 @@ async def upsert_cron_job(body: CronJob, request: Request) -> dict[str, Any]:
             "name": body.name,
             "cron_expr": body.cron_expr,
             "prompt": body.prompt,
-            "project_dir": body.project_dir,
+            "project_dir": project_dir,
             "enabled": body.enabled,
             "created_at": _utc_now(),
             "last_run": None,
@@ -179,6 +190,7 @@ async def upsert_cron_job(body: CronJob, request: Request) -> dict[str, Any]:
 async def delete_cron_job(name: str, request: Request) -> dict[str, Any]:
     if not _cron_enabled():
         raise HTTPException(status_code=404, detail="Cron is disabled.")
+    require_api_auth(request)
     await enforce_rate_limit(request, MEMORY_RATE_LIMITER, "delete_cron")
     jobs = await _load_jobs()
     jobs = [j for j in jobs if j.get("name") != name]
@@ -191,5 +203,6 @@ async def delete_cron_job(name: str, request: Request) -> dict[str, Any]:
 async def list_recent_runs(request: Request) -> dict[str, Any]:
     if not _cron_enabled():
         return {"runs": []}
+    require_api_auth(request)
     await enforce_rate_limit(request, MEMORY_RATE_LIMITER, "list_cron_runs")
     return {"runs": list(_RECENT_RUNS)}

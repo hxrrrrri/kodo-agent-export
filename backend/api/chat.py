@@ -8,7 +8,7 @@ import shutil
 import subprocess
 import uuid
 import zipfile
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -1034,6 +1034,7 @@ async def send_message(req: ChatRequest, request: Request):
                 mode=effective_mode,
                 approval_callback=approval_callback,
                 model_override=stored_model_override or None,
+                artifact_mode=bool(req.artifact_mode),
             ):
                 if event.get("type") == "text":
                     assistant_parts.append(str(event.get("content", "")))
@@ -2181,7 +2182,7 @@ async def get_session_events(session_id: str, request: Request):
 
     def _push(event_type: str, **kwargs: Any) -> None:
         nonlocal event_index
-        timestamp = str(kwargs.pop("timestamp", "")).strip() or datetime.utcnow().isoformat()
+        timestamp = str(kwargs.pop("timestamp", "")).strip() or datetime.now(timezone.utc).replace(tzinfo=None).isoformat()
         event = {
             "event_index": event_index,
             "event_type": event_type,

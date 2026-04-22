@@ -9,9 +9,10 @@ from agent.session_runner import SessionRunner
 
 
 class FakeAgentLoop:
-    def __init__(self, session_id: str, project_dir=None, mode=None, model_override=None):
+    def __init__(self, session_id: str, project_dir=None, mode=None, model_override=None, artifact_mode=False):
         self.provider = 'openai'
         self.model = model_override or 'gpt-4o'
+        self.artifact_mode = artifact_mode
 
     async def run(self, user_message, history, approval_callback=None):
         yield {
@@ -36,9 +37,10 @@ class FakeAgentLoop:
 
 
 class CancelledAgentLoop:
-    def __init__(self, session_id: str, project_dir=None, mode=None, model_override=None):
+    def __init__(self, session_id: str, project_dir=None, mode=None, model_override=None, artifact_mode=False):
         self.provider = 'openai'
         self.model = 'gpt-4o'
+        self.artifact_mode = artifact_mode
 
     async def run(self, user_message, history, approval_callback=None):
         raise asyncio.CancelledError()

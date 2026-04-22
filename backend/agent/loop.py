@@ -663,11 +663,13 @@ class AgentLoop:
         project_dir: str | None = None,
         mode: str | None = None,
         model_override: str | None = None,
+        artifact_mode: bool = False,
     ):
         self.session_id = session_id
         self.project_dir = project_dir
         self.mode = normalize_mode(mode)
         self.model_override = _normalize_model_name(model_override) or None
+        self.artifact_mode = bool(artifact_mode)
 
         self.router_mode = os.getenv("ROUTER_MODE", "fixed").strip().lower()
         self.smart_router: SmartRouter | None = None
@@ -751,6 +753,7 @@ class AgentLoop:
             project_dir=self.project_dir,
             mode=self.mode,
             caveman_mode=caveman_mode,
+            artifact_mode=self.artifact_mode,
         )
 
     async def run(
