@@ -2262,7 +2262,7 @@ async def get_session_events(session_id: str, request: Request):
 
 
 @router.get("/read-design-file")
-async def read_design_file(path: str = Query(..., max_length=1024), request: Request | None = None):
+async def read_design_file(path: str = Query(..., max_length=1024)):
     """Read a file from disk for Design Studio display. Only allows safe, non-system paths."""
     from tools.path_guard import enforce_allowed_path
     try:
