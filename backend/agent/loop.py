@@ -373,7 +373,13 @@ def _infer_local_forced_tool_call(
     if provider not in LOCAL_PROVIDER_NAMES:
         return None
 
-    prompt = " ".join(_text_from_content(user_message).lower().split())
+    raw_prompt = _text_from_content(user_message)
+    # Design Studio and some chat surfaces prepend rich context blocks before
+    # the latest user ask. Evaluate intent from the latest segment so context
+    # phrases like "File names:" do not trigger forced filesystem listings.
+    segments = [chunk.strip() for chunk in re.split(r"\n{2,}", raw_prompt) if chunk.strip()]
+    prompt_source = segments[-1] if segments else raw_prompt
+    prompt = " ".join(prompt_source.lower().split())
     if not prompt:
         return None
 

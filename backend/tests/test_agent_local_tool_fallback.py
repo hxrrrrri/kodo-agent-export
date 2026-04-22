@@ -86,3 +86,25 @@ def test_local_forced_tool_ignores_design_prompts_with_filename_instructions():
     )
 
     assert forced is None
+
+
+def test_local_forced_tool_ignores_design_prompt_when_context_mentions_file_names():
+    prompt = (
+        "Attached codebase and design context:\n"
+        "--- repo.txt ---\n"
+        "File names:\n"
+        ".dockerignore\n"
+        "README.md\n"
+        "docker-compose.yml\n\n"
+        "You are Kodo Design Studio — an expert UI/UX engineer and visual designer.\n"
+        "Output HTML in ```html index.html code blocks.\n\n"
+        "Design a product card grid with hover animations, filters, and cart -- e-commerce style"
+    )
+
+    forced = loop_mod._infer_local_forced_tool_call(
+        user_message=prompt,
+        provider="ollama",
+        project_dir="C:/workspace",
+    )
+
+    assert forced is None

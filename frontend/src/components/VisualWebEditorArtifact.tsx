@@ -44,7 +44,7 @@ interface SiteTheme {
 const HARNESS = `<script id="__veh">(function(){
 if(window.__veh_loaded)return;
 window.__veh_loaded=true;
-var sel=null,ov=null,clipboard=null,pendingDrop=null;
+var sel=null,ov=null,clipboard=null,pendingDrop=null,suppressClick=false;
 var hist=[],histIdx=-1;
 
 /* overlay */
@@ -129,13 +129,20 @@ window.parent.postMessage({type:'element-selected',id:el.dataset&&el.dataset.veI
 
 /* theme extraction */
 function extractTheme(){
-var b=window.getComputedStyle(document.body);
-var btns=Array.from(document.querySelectorAll('button,[role=button]')).filter(function(el){var c=window.getComputedStyle(el).backgroundColor;return c&&c!=='rgba(0, 0, 0, 0)'&&c!=='transparent';});
+var h_el=document.documentElement;
+var b=window.getComputedStyle(document.body);var h=window.getComputedStyle(h_el);
+var bg=b.backgroundColor;
+if(!bg||bg==='rgba(0, 0, 0, 0)'||bg==='transparent')bg=h.backgroundColor;
+if(!bg||bg==='rgba(0, 0, 0, 0)'||bg==='transparent')bg='#ffffff';
+var textCol=b.color||h.color;
+var font=b.fontFamily||h.fontFamily||'system-ui,sans-serif';
+var btns=Array.from(document.querySelectorAll('button,[role=button],[type=submit],.btn,.button')).filter(function(el){var c=window.getComputedStyle(el).backgroundColor;return c&&c!=='rgba(0, 0, 0, 0)'&&c!=='transparent';});
 var links=document.querySelectorAll('a');var heads=document.querySelectorAll('h1,h2,h3');
-return{bg:b.backgroundColor,text:b.color,font:b.fontFamily,
-btnBg:btns.length?window.getComputedStyle(btns[0]).backgroundColor:'',
-btnColor:btns.length?window.getComputedStyle(btns[0]).color:'',
-btnRadius:btns.length?window.getComputedStyle(btns[0]).borderRadius:'6px',
+var btnEl=btns.length?window.getComputedStyle(btns[0]):null;
+return{bg:bg,text:textCol,font:font,
+btnBg:btnEl?btnEl.backgroundColor:'',
+btnColor:btnEl?btnEl.color:'',
+btnRadius:btnEl?btnEl.borderRadius:'6px',
 linkColor:links.length?window.getComputedStyle(links[0]).color:'',
 headColor:heads.length?window.getComputedStyle(heads[0]).color:''};}
 
@@ -159,7 +166,7 @@ else{if(target.before)target.before(n);else target.parentNode.insertBefore(n,tar
 assignIds(n);saveHist();sync();pickEl(n);}
 
 /* events */
-document.addEventListener('click',function(e){e.preventDefault();e.stopPropagation();pickEl(e.target);},true);
+document.addEventListener('click',function(e){if(suppressClick){e.stopPropagation();return;}e.preventDefault();e.stopPropagation();pickEl(e.target);},true);
 document.addEventListener('dblclick',function(e){
 if(!sel||sel.id==='__veo')return;
 e.preventDefault();e.stopPropagation();
@@ -214,13 +221,70 @@ if(e.key==='ArrowLeft')sel.style.left=(l2-step)+'px';
 if(e.key==='ArrowRight')sel.style.left=(l2+step)+'px';
 updOv(sel);saveHist();sync();}}},false);
 
+/* drop indicator */
+var dropInd=null;
+function mkDropInd(){if(dropInd)return;dropInd=document.createElement('div');dropInd.id='__ve_di';
+dropInd.style.cssText='position:fixed;height:3px;background:linear-gradient(90deg,#6c63ff,#a78bfa);border-radius:2px;pointer-events:none;z-index:2147483646;display:none;box-shadow:0 0 8px rgba(108,99,255,0.45);transition:top 60ms,left 60ms,width 60ms;';
+document.body.appendChild(dropInd);}
+function showDropInd(el,before){mkDropInd();var r=el.getBoundingClientRect();
+dropInd.style.top=(before?r.top:r.bottom)-1.5+'px';
+dropInd.style.left=r.left+'px';dropInd.style.width=r.width+'px';dropInd.style.display='block';}
+function hideDropInd(){if(dropInd)dropInd.style.display='none';}
+
+/* internal element drag-to-reorder */
+var intDragSrc=null,intGhost=null,intDragActive=false;
+document.addEventListener('mousedown',function(e){
+if(e.button!==0||!sel||sel.contentEditable==='true')return;
+if(e.target!==sel&&!sel.contains(e.target))return;
+var sx=e.clientX,sy=e.clientY,moved=false;
+function onMove(ev){
+var dx=ev.clientX-sx,dy=ev.clientY-sy;
+if(!moved&&(Math.abs(dx)>6||Math.abs(dy)>6)){
+moved=true;intDragActive=true;intDragSrc=sel;
+var r=intDragSrc.getBoundingClientRect();
+intGhost=document.createElement('div');
+intGhost.style.cssText='position:fixed;pointer-events:none;z-index:2147483645;opacity:0.52;border:2px dashed #6c63ff;border-radius:6px;background:rgba(108,99,255,0.06);box-shadow:0 4px 20px rgba(0,0,0,0.14);transition:none;';
+intGhost.style.width=r.width+'px';intGhost.style.height=r.height+'px';
+intGhost.style.left=r.left+'px';intGhost.style.top=r.top+'px';
+document.body.appendChild(intGhost);}
+if(moved&&intGhost){
+intGhost.style.left=(ev.clientX-parseFloat(intGhost.style.width)/2)+'px';
+intGhost.style.top=(ev.clientY-20)+'px';
+hideOv();
+var cands=document.elementsFromPoint(ev.clientX,ev.clientY)||[];
+for(var i=0;i<cands.length;i++){var c=cands[i];
+if(c===intDragSrc||intDragSrc.contains(c)||c===intGhost||c===ov||c===dropInd||c.id==='__ve_di'||c.id==='__veo'||c===document.body||c===document.documentElement||c.tagName==='HTML'||c.tagName==='SCRIPT'||c.tagName==='STYLE')continue;
+var r3=c.getBoundingClientRect();showDropInd(c,ev.clientY<r3.top+r3.height/2);break;}}}
+function onUp(ev){
+document.removeEventListener('mousemove',onMove);document.removeEventListener('mouseup',onUp);
+if(intGhost&&intGhost.parentNode)intGhost.parentNode.removeChild(intGhost);intGhost=null;
+hideDropInd();
+if(!moved||!intDragSrc){intDragActive=false;intDragSrc=null;return;}
+suppressClick=true;setTimeout(function(){suppressClick=false;},120);
+var cands2=document.elementsFromPoint(ev.clientX,ev.clientY)||[];
+var target=null,insertBef=false;
+for(var j=0;j<cands2.length;j++){var c2=cands2[j];
+if(c2===intDragSrc||intDragSrc.contains(c2)||c2===intGhost||c2===ov||c2===dropInd||c2.id==='__ve_di'||c2.id==='__veo'||c2===document.body||c2===document.documentElement||c2.tagName==='HTML'||c2.tagName==='SCRIPT'||c2.tagName==='STYLE')continue;
+target=c2;var r4=c2.getBoundingClientRect();insertBef=ev.clientY<r4.top+r4.height/2;break;}
+if(target&&target.parentNode){
+if(insertBef){if(target.before)target.before(intDragSrc);else target.parentNode.insertBefore(intDragSrc,target);}
+else{if(target.after)target.after(intDragSrc);else target.parentNode.insertBefore(intDragSrc,target.nextSibling);}}
+intDragActive=false;intDragSrc=null;
+if(sel){updOv(sel);saveHist();sync();reportTree();}}
+document.addEventListener('mousemove',onMove);document.addEventListener('mouseup',onUp);},true);
+
 /* drop: pre-load via 'drag-start' postMessage; no dataTransfer cross-doc needed */
-document.addEventListener('dragover',function(e){if(pendingDrop){e.preventDefault();if(e.dataTransfer)e.dataTransfer.dropEffect='copy';}});
+document.addEventListener('dragover',function(e){if(pendingDrop){e.preventDefault();if(e.dataTransfer)e.dataTransfer.dropEffect='copy';
+var cands=document.elementsFromPoint(e.clientX,e.clientY)||[];
+for(var i=0;i<cands.length;i++){var c=cands[i];
+if(c===document.body||c===document.documentElement||c.id==='__veo'||c.id==='__veh'||c.id==='__ve_di'||c.tagName==='SCRIPT'||c.tagName==='HTML'||c.tagName==='STYLE')continue;
+var r=c.getBoundingClientRect();showDropInd(c,e.clientY<r.top+r.height/2);break;}}});
 document.addEventListener('drop',function(e){
-e.preventDefault();
+e.preventDefault();hideDropInd();
 var h=pendingDrop;pendingDrop=null;
 if(!h)return;
 insertHtml(h,e.clientX,e.clientY);});
+document.addEventListener('dragleave',function(e){if(!e.relatedTarget)hideDropInd();});
 
 /* message handler */
 window.addEventListener('message',function(e){
@@ -306,8 +370,8 @@ function makePalette(theme: SiteTheme | null): PaletteGroup[] {
   const textC = (theme?.text && toHex(theme.text)) || '#111111'
   const headC = (theme?.headColor && toHex(theme.headColor)) || textC
   const linkC = (theme?.linkColor && toHex(theme.linkColor)) || btnBg
-  const rawFont = theme?.font || 'system-ui'
-  const font = rawFont.split(',')[0].replace(/['"]/g, '').trim() || 'system-ui'
+  const rawFont = theme?.font || 'system-ui, sans-serif'
+  const font = rawFont || 'system-ui, sans-serif'
 
   return [
     {
@@ -647,9 +711,16 @@ export default function VisualWebEditorArtifact({ html: initialHtml = '', onSour
   }
 
   // Palette drag: send postMessage to iframe BEFORE drag so iframe's drop handler has the HTML
-  const onPaletteDragStart = (e: ReactDragEvent, html: string) => {
+  const onPaletteDragStart = (e: ReactDragEvent, html: string, label: string) => {
     e.dataTransfer.effectAllowed = 'copy'
-    e.dataTransfer.setData('text/plain', 'component') // needed to enable drag
+    e.dataTransfer.setData('text/plain', 'component')
+    // Skeleton ghost shows component name + approx dimensions
+    const ghost = document.createElement('div')
+    ghost.style.cssText = 'position:fixed;top:-9999px;left:-9999px;padding:8px 18px;background:linear-gradient(135deg,rgba(108,99,255,0.12),rgba(167,139,250,0.1));border:2px dashed #6c63ff;border-radius:8px;color:#6c63ff;font-size:13px;font-weight:700;white-space:nowrap;pointer-events:none;font-family:system-ui,sans-serif;letter-spacing:0.02em;'
+    ghost.textContent = `⬡ ${label}`
+    document.body.appendChild(ghost)
+    e.dataTransfer.setDragImage(ghost, ghost.offsetWidth / 2, 20)
+    setTimeout(() => { if (ghost.parentNode) ghost.parentNode.removeChild(ghost) }, 0)
     dragDropSentRef.current = true
     send({ type: 'drag-start', html })
   }
@@ -691,7 +762,7 @@ export default function VisualWebEditorArtifact({ html: initialHtml = '', onSour
                 <div style={{ padding: '8px 10px 3px', fontSize: 9, fontWeight: 700, color: 'var(--text-2)', letterSpacing: '0.07em', textTransform: 'uppercase' }}>{group.group}</div>
                 {group.items.map(item => (
                   <div key={item.label} draggable
-                    onDragStart={e => onPaletteDragStart(e, item.html)}
+                    onDragStart={e => onPaletteDragStart(e, item.html, item.label)}
                     onDragEnd={onPaletteDragEnd}
                     title={`Drag to canvas to add ${item.label}`}
                     style={{ padding: '5px 10px', cursor: 'grab', borderRadius: 4, fontSize: 12, color: 'var(--text-1)', display: 'flex', alignItems: 'center', gap: 6, margin: '1px 6px', userSelect: 'none' }}

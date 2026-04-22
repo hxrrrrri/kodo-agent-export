@@ -9,7 +9,7 @@ import {
   Minimize2, ChevronRight, ChevronDown, RotateCcw, Copy,
   MessageSquare, Share2, Package, Printer, Save,
   Folder, FolderOpen, Loader, ArrowLeft, Square, CheckSquare,
-  StopCircle,
+  StopCircle, Pencil, Plus, Clock,
 } from 'lucide-react'
 import { buildApiHeaders } from '../lib/api'
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter'
@@ -21,6 +21,7 @@ const API = '/api/chat'
 export const DESIGN_STUDIO_STORAGE_KEY = 'kodo.design-studio.state.v1'
 const MAX_PERSISTED_MESSAGES = 40
 const MAX_PERSISTED_HISTORY = 20
+const MAX_PERSISTED_MESSAGE_FILE_CHARS = 200000
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -111,9 +112,78 @@ export interface DesignFileTreeNode {
   children?: DesignFileTreeNode[]
 }
 
+interface DesignSystemConfig {
+  brandName: string
+  primaryColor: string
+  secondaryColor: string
+  accentColor: string
+  fontFamily: string
+  borderRadius: 'none' | 'sm' | 'md' | 'lg' | 'full'
+  style: 'minimal' | 'material' | 'glassmorphism' | 'neumorphism' | 'brutalist'
+  customRules: string
+}
+
+interface DesignProject {
+  id: string
+  name: string
+  createdAt: number
+  updatedAt: number
+  messages: DesignMessage[]
+  files: DesignFile[]
+  selectedFileId: string | null
+  history: HistoryEntry[]
+  inlineComments: InlineComment[]
+  projectContext: string
+  shareAccess: ShareAccess
+  device: DeviceMode
+  viewMode: ViewMode
+  fileTreeW: number
+  chatW: number
+  splitCodeW: number
+  fileTreeOpen: boolean
+  expandedFolders: Record<string, boolean>
+}
+
+interface ProjectSummary {
+  id: string
+  name: string
+  createdAt: number
+  updatedAt: number
+  fileNames: string[]
+}
+
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
 function genId() { return Math.random().toString(36).slice(2, 11) }
+
+function isHtmlLanguage(language: string): boolean {
+  const normalized = language.trim().toLowerCase()
+  return normalized === 'html' || normalized === 'htm'
+}
+
+function isHtmlFileName(fileName: string): boolean {
+  const normalized = normalizeDesignPath(fileName).toLowerCase()
+  return normalized.endsWith('.html') || normalized.endsWith('.htm')
+}
+
+function normalizeMalformedHtml(content: string): string {
+  return content
+    .replace(/<<(?=\s*[a-zA-Z!/])/g, '<')
+    .replace(/<!DOCTYPEDOCTYPE/gi, '<!DOCTYPE')
+    .replace(/<(?!\/)([a-zA-Z][a-zA-Z0-9-]{1,})(\1)(?=(?:\s|>|\/))/g, '<$1')
+    .replace(/<\/(?:([a-zA-Z][a-zA-Z0-9-]{1,})(\1))(?=\s*>)/g, '</$1')
+    .replace(/<(?!\/)(a|p|i|b|u|s|q)\1(?=(?:\s|>|\/))/gi, '<$1')
+    .replace(/<\/(a|p|i|b|u|s|q)\1(?=\s*>)/gi, '</$1')
+    .replace(/<(?!\/)hh([1-6])(?=(?:\s|>|\/))/gi, '<h$1')
+    .replace(/<\/hh([1-6])(?=\s*>)/gi, '</h$1')
+}
+
+function sanitizeDesignFileContent(name: string, language: string, content: string): string {
+  if (!isHtmlLanguage(language) && !isHtmlFileName(name)) {
+    return content
+  }
+  return normalizeMalformedHtml(content)
+}
 
 function toDesignFile(value: unknown): DesignFile | null {
   if (!value || typeof value !== 'object') return null
@@ -125,7 +195,8 @@ function toDesignFile(value: unknown): DesignFile | null {
     ? candidate.language
     : (name.split('.').pop() || 'text')
   const id = typeof candidate.id === 'string' && candidate.id.trim() ? candidate.id : genId()
-  return { id, name, language, content }
+  const sanitizedContent = sanitizeDesignFileContent(name, language, content)
+  return { id, name, language, content: sanitizedContent }
 }
 
 function toDesignMessage(value: unknown): DesignMessage | null {
@@ -420,6 +491,8 @@ const LANG_EXT: Record<string, string> = {
   python: 'py', shell: 'sh', bash: 'sh',
 }
 
+const KNOWN_FENCE_LANGS = new Set<string>(Object.keys(LANG_EXT))
+
 const FILE_ICONS: Record<string, string> = {
   html: '🌐', css: '🎨', js: '⚡', ts: '🔷', jsx: '⚛', tsx: '⚛',
   json: '{}', svg: '🖼', md: '📝', py: '🐍', sh: '⚙',
@@ -431,43 +504,69 @@ function getFileIcon(name: string): string {
 }
 
 export function extractFiles(content: string): DesignFile[] {
-  // [^\S\n]+ = horizontal whitespace only (no newlines), so the optional filename
-  // doesn't consume the newline that separates the lang tag from code content.
-  const re = /```(\w+)(?:[^\S\n]+([^\n`]+))?\n([\s\S]*?)```/g
+  const re = /```([^\n`]*)\n([\s\S]*?)```/g
   const files: DesignFile[] = []
   const seen = new Set<string>()
   let m: RegExpExecArray | null
   let idx = 0
 
   while ((m = re.exec(content)) !== null) {
-    const lang = m[1].toLowerCase()
-    if (!LANG_EXT[lang] && !['html', 'css', 'js', 'jsx', 'ts', 'tsx', 'svg', 'json'].includes(lang)) continue
-    const ext = LANG_EXT[lang] || lang
-    const rawName = (m[2] || '').trim()
-    let name = rawName
+    const info = (m[1] || '').trim()
+    const code = m[2] || ''
+    if (!code.trim()) continue
+
+    const tokens = info.split(/\s+/).filter(Boolean)
+    const firstToken = (tokens[0] || '').toLowerCase()
+    const hasKnownLang = firstToken ? KNOWN_FENCE_LANGS.has(firstToken) : false
+
+    let lang = hasKnownLang ? firstToken : ''
+    let name = ''
+
+    if (hasKnownLang && tokens.length > 1) {
+      name = tokens.slice(1).join(' ').trim()
+    } else if (!hasKnownLang && tokens.length === 1) {
+      const maybePath = normalizeDesignPath(tokens[0])
+      if (maybePath && /\.\w+$/.test(maybePath)) {
+        name = maybePath
+      }
+    }
+
+    if (!name && !lang) continue
+
     if (!name) {
       idx += 1
+      const ext = LANG_EXT[lang] || lang || 'txt'
       name = `file-${idx}.${ext}`
     }
+
     name = normalizeDesignPath(name) || name
-    const code = m[3] || ''
-    if (!code.trim()) continue
+    if (!lang) {
+      lang = inferLanguageFromFileName(name)
+    }
+
+    if (!name) {
+      idx += 1
+      name = `file-${idx}.txt`
+    }
+
+    const sanitizedCode = sanitizeDesignFileContent(name, lang, code)
     const dedupeKey = name.toLowerCase()
     if (seen.has(dedupeKey)) {
       const existing = files.find(f => f.name.toLowerCase() === dedupeKey)
-      if (existing) existing.content = code
+      if (existing) existing.content = sanitizedCode
     } else {
       seen.add(dedupeKey)
-      files.push({ id: genId(), name, language: lang, content: code })
+      files.push({ id: genId(), name, language: lang, content: sanitizedCode })
     }
   }
 
   // Fallback: treat raw HTML (no code fence) as index.html
   if (files.length === 0) {
     const trimmed = content.trim()
-    const lower = trimmed.toLowerCase()
+    const sanitized = sanitizeDesignFileContent('index.html', 'html', trimmed)
+    const lower = sanitized.toLowerCase()
     if (lower.startsWith('<!doctype') || lower.startsWith('<html')) {
-      files.push({ id: genId(), name: 'index.html', language: 'html', content: trimmed })
+      files.push({ id: genId(), name: 'index.html', language: 'html', content: sanitized })
     }
   }
 
@@ -480,7 +579,7 @@ function buildPreviewHtml(files: DesignFile[]): string {
   const jsFiles = files.filter(f => ['javascript', 'js', 'jsx'].includes(f.language) || f.name.match(/\.(js|jsx)$/))
 
   if (htmlFile) {
-    let html = htmlFile.content
+    let html = sanitizeDesignFileContent(htmlFile.name, htmlFile.language, htmlFile.content)
     // Inject external CSS/JS files
     const cssInject = cssFiles.map(f => `<style>/* ${f.name} */\n${f.content}</style>`).join('\n')
     const jsInject = jsFiles.map(f => `<script>/* ${f.name} */\n${f.content}</script>`).join('\n')
@@ -499,10 +598,167 @@ function buildPreviewHtml(files: DesignFile[]): string {
   return `<!DOCTYPE html><html><head><style>${css}</style></head><body>${js ? `<script>${js}</script>` : ''}</body></html>`
 }
 
-function summarizeAssistantContent(content: string): string {
-  // Replace complete code blocks with a short badge; leave incomplete (streaming) ones as-is
-  return content.replace(/```(\w+)(?:[^\S\n]+[^\n`]*)?\n[\s\S]*?```/g, (_, lang) => `[${lang.toUpperCase()} generated]`)
+function normalizePlanItemText(value: string): string {
+  return value
+    .replace(/\*\*([^*]+)\*\*/g, '$1')
+    .replace(/`([^`]+)`/g, '$1')
+    .replace(/\s+/g, ' ')
+    .trim()
 }
+
+function dedupePlanItems(items: string[]): string[] {
+  const seen = new Set<string>()
+  const deduped: string[] = []
+  for (const item of items) {
+    const cleaned = normalizePlanItemText(item)
+    if (!cleaned) continue
+    const key = cleaned.toLowerCase()
+    if (seen.has(key)) continue
+    seen.add(key)
+    deduped.push(cleaned)
+  }
+  return deduped
+}
+
+export function extractPlanItemsFromAssistant(content: string): string[] {
+  const sectionMatch = content.match(/(?:^|\n)(?:#{1,4}\s*)?(?:plan|build plan|todo|to-do|tasks?|implementation plan|roadmap)\s*:?\s*\n([\s\S]*?)(?=\n#{1,6}\s+\S|\n```|$)/i)
+
+  const parseListLines = (value: string): string[] => value
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .filter((line) => /^(?:(?:-\s*)?\[[ xX]\]\s+|\d+[.)]\s+|[-*+]\s+)/.test(line))
+    .map((line) => line.replace(/^(?:(?:-\s*)?\[[ xX]\]\s+|\d+[.)]\s+|[-*+]\s+)/, '').trim())
+    .filter((line) => line.length >= 3)
+
+  let items = sectionMatch ? parseListLines(sectionMatch[1]) : []
+  if (items.length === 0) {
+    const listLines = parseListLines(content)
+    if (listLines.length >= 2) items = listLines
+  }
+
+  return dedupePlanItems(items).slice(0, 8)
+}
+
+export function buildPromptPlanItems(prompt: string): string[] {
+  const cleanedPrompt = prompt.replace(/\s+/g, ' ').trim()
+  if (!cleanedPrompt) return []
+
+  const subjectMatch = cleanedPrompt.match(/\b(?:build|create|design|make|generate|develop|craft)\b\s+(.+?)(?:\b(?:with|using|for|that|including|where)\b|[.?!]|$)/i)
+  const rawSubject = (subjectMatch?.[1] || cleanedPrompt)
+    .replace(/^(a|an|the)\s+/i, '')
+    .trim()
+  const subject = rawSubject.length > 72 ? `${rawSubject.slice(0, 69).trim()}...` : rawSubject
+
+  const featureSegment = (cleanedPrompt.match(/\b(?:with|including|plus|featuring)\b\s+(.+)$/i)?.[1] || '')
+  const featureItems = dedupePlanItems(
+    featureSegment
+      .split(/,|\band\b/i)
+      .map((part) => part.trim())
+      .filter((part) => part.length >= 4)
+      .map((part) => part.replace(/[.]+$/, '')),
+  ).slice(0, 2)
+
+  const base = [
+    `Understand goals and constraints for ${subject || 'the requested design'}`,
+    `Build the core layout and semantic structure for ${subject || 'the page'}`,
+    ...featureItems.map((item) => `Implement ${item}`),
+    'Polish responsiveness, interactions, and accessibility',
+    'Validate generated files and preview output before delivery',
+  ]
+
+  return dedupePlanItems(base).slice(0, 8)
+}
+
+function inferLanguageFromFileName(fileName: string): string {
+  const ext = fileName.split('.').pop()?.toLowerCase() || ''
+  if (!ext) return 'text'
+  const byExt: Record<string, string> = {
+    js: 'javascript',
+    jsx: 'jsx',
+    ts: 'typescript',
+    tsx: 'tsx',
+    py: 'python',
+    md: 'markdown',
+    yml: 'yaml',
+  }
+  return byExt[ext] || ext
+}
+
+function upsertDesignFileInMap(map: Map<string, DesignFile>, filePath: string, content: string): boolean {
+  const normalizedPath = normalizeDesignPath(filePath)
+  if (!normalizedPath || typeof content !== 'string') return false
+
+  const key = normalizedPath.toLowerCase()
+  const existing = map.get(key)
+  const language = existing?.language || inferLanguageFromFileName(normalizedPath)
+  const sanitizedContent = sanitizeDesignFileContent(normalizedPath, language, content)
+  map.set(key, {
+    id: existing?.id || genId(),
+    name: normalizedPath,
+    language,
+    content: sanitizedContent,
+  })
+  return true
+}
+
+function applyFileEditToMap(
+  map: Map<string, DesignFile>,
+  filePath: string,
+  oldStr: string,
+  newStr: string,
+): boolean {
+  const normalizedPath = normalizeDesignPath(filePath)
+  if (!normalizedPath || !oldStr) return false
+
+  const key = normalizedPath.toLowerCase()
+  const existing = map.get(key)
+  if (!existing || !existing.content.includes(oldStr)) return false
+
+  const updatedContent = sanitizeDesignFileContent(
+    existing.name,
+    existing.language,
+    existing.content.replace(oldStr, newStr),
+  )
+
+  map.set(key, {
+    ...existing,
+    content: updatedContent,
+  })
+  return true
+}
+
+function applyToolStartEventToDesignFiles(
+  event: unknown,
+  map: Map<string, DesignFile>,
+): boolean {
+  if (!event || typeof event !== 'object') return false
+  const payload = event as Record<string, unknown>
+  if (String(payload.type || '').toLowerCase() !== 'tool_start') return false
+
+  const toolName = String(payload.tool || '').toLowerCase().trim()
+  const input = payload.input
+  if (!input || typeof input !== 'object') return false
+  const toolInput = input as Record<string, unknown>
+
+  if (toolName === 'file_write') {
+    const path = typeof toolInput.path === 'string' ? toolInput.path : ''
+    const content = typeof toolInput.content === 'string' ? toolInput.content : ''
+    if (!path) return false
+    return upsertDesignFileInMap(map, path, content)
+  }
+
+  if (toolName === 'file_edit') {
+    const path = typeof toolInput.path === 'string' ? toolInput.path : ''
+    const oldStr = typeof toolInput.old_str === 'string' ? toolInput.old_str : ''
+    const newStr = typeof toolInput.new_str === 'string' ? toolInput.new_str : ''
+    if (!path) return false
+    return applyFileEditToMap(map, path, oldStr, newStr)
+  }
+
+  return false
+}
+
 
 const STARTERS = [
   { icon: '🌐', label: 'Landing page', prompt: 'Build a stunning SaaS landing page with hero, features grid, pricing, and CTA — modern dark theme' },
@@ -512,6 +768,199 @@ const STARTERS = [
   { icon: '💳', label: 'Pricing table', prompt: 'Create an animated pricing table with 3 tiers, feature comparison, toggle, highlighted plan' },
   { icon: '📝', label: 'Blog', prompt: 'Design a minimal blog layout with header, article cards, sidebar, and dark/light mode toggle' },
 ]
+
+// ─── Project Storage ─────────────────────────────────────────────────────────
+
+const DS_PROJECTS_INDEX = 'kodo.ds.projects.v1'
+const dsProjectKey = (id: string) => `kodo.ds.p.${id}`
+
+function listProjectSummaries(): ProjectSummary[] {
+  try {
+    const raw = localStorage.getItem(DS_PROJECTS_INDEX)
+    if (!raw) return []
+    const arr = JSON.parse(raw)
+    if (!Array.isArray(arr)) return []
+    return arr
+      .filter((s): s is ProjectSummary => Boolean(s?.id))
+      .sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0))
+  } catch { return [] }
+}
+
+function saveProjectToStorage(project: DesignProject): void {
+  try {
+    const stripped: DesignProject = {
+      ...project,
+      updatedAt: Date.now(),
+      messages: project.messages.slice(-MAX_PERSISTED_MESSAGES).map(m => ({
+        ...m,
+        isStreaming: false,
+        files: m.files?.map(f => ({
+          ...f,
+          content: typeof f.content === 'string'
+            ? f.content.slice(0, MAX_PERSISTED_MESSAGE_FILE_CHARS)
+            : '',
+        })),
+      })),
+      history: project.history.slice(-MAX_PERSISTED_HISTORY),
+    }
+    const key = dsProjectKey(project.id)
+    localStorage.setItem(key, JSON.stringify(stripped))
+
+    const summaries = listProjectSummaries().filter((s) => s.id !== project.id)
+    const summary: ProjectSummary = {
+      id: project.id,
+      name: project.name,
+      createdAt: project.createdAt,
+      updatedAt: Date.now(),
+      fileNames: project.files.map(f => f.name).slice(0, 5),
+    }
+    summaries.unshift(summary)
+    localStorage.setItem(DS_PROJECTS_INDEX, JSON.stringify(summaries))
+  } catch { /* quota — ignore */ }
+}
+
+function loadProjectFromStorage(id: string): DesignProject | null {
+  try {
+    const raw = localStorage.getItem(dsProjectKey(id))
+    if (!raw) return null
+    const parsed = JSON.parse(raw) as Partial<DesignProject>
+
+    const history = Array.isArray(parsed.history)
+      ? parsed.history
+        .map((entry): HistoryEntry | null => {
+          if (!entry || typeof entry !== 'object') return null
+          const row = entry as Partial<HistoryEntry>
+          const rowFiles = Array.isArray(row.files)
+            ? row.files.map(toDesignFile).filter((f): f is DesignFile => f !== null)
+            : []
+          if (rowFiles.length === 0) return null
+          return {
+            files: rowFiles,
+            timestamp: typeof row.timestamp === 'number' && Number.isFinite(row.timestamp)
+              ? row.timestamp
+              : Date.now(),
+            label: typeof row.label === 'string' && row.label.trim() ? row.label.trim() : undefined,
+          }
+        })
+        .filter((row): row is HistoryEntry => row !== null)
+      : []
+
+    return {
+      id: String(parsed.id || id),
+      name: String(parsed.name || 'Untitled'),
+      createdAt: Number(parsed.createdAt) || Date.now(),
+      updatedAt: Number(parsed.updatedAt) || Date.now(),
+      messages: Array.isArray(parsed.messages)
+        ? parsed.messages.map(toDesignMessage).filter((m): m is DesignMessage => m !== null)
+        : [],
+      files: Array.isArray(parsed.files)
+        ? parsed.files.map(toDesignFile).filter((f): f is DesignFile => f !== null)
+        : [],
+      selectedFileId: typeof parsed.selectedFileId === 'string' ? parsed.selectedFileId : null,
+      history,
+      inlineComments: Array.isArray(parsed.inlineComments) ? parsed.inlineComments : [],
+      projectContext: typeof parsed.projectContext === 'string' ? parsed.projectContext : '',
+      shareAccess: parsed.shareAccess === 'view' || parsed.shareAccess === 'comment' ? parsed.shareAccess : 'edit',
+      device: parsed.device === 'tablet' || parsed.device === 'mobile' ? parsed.device : 'desktop',
+      viewMode: parsed.viewMode === 'code' || parsed.viewMode === 'split' || parsed.viewMode === 'editor' ? parsed.viewMode : 'preview',
+      fileTreeW: clampWidth(parsed.fileTreeW, 140, 420, 200),
+      chatW: clampWidth(parsed.chatW, 260, 560, 340),
+      splitCodeW: clampWidth(parsed.splitCodeW, 25, 75, 50),
+      fileTreeOpen: typeof parsed.fileTreeOpen === 'boolean' ? parsed.fileTreeOpen : true,
+      expandedFolders: parsed.expandedFolders && typeof parsed.expandedFolders === 'object'
+        ? parsed.expandedFolders as Record<string, boolean>
+        : {},
+    }
+  } catch { return null }
+}
+
+function deleteProjectFromStorage(id: string): void {
+  try {
+    localStorage.removeItem(dsProjectKey(id))
+    const summaries = listProjectSummaries().filter(s => s.id !== id)
+    localStorage.setItem(DS_PROJECTS_INDEX, JSON.stringify(summaries))
+  } catch { /* */ }
+}
+
+function renameProjectInStorage(id: string, name: string): void {
+  try {
+    const summaries = listProjectSummaries()
+    const idx = summaries.findIndex(s => s.id === id)
+    if (idx >= 0) { summaries[idx] = { ...summaries[idx], name }; localStorage.setItem(DS_PROJECTS_INDEX, JSON.stringify(summaries)) }
+    const raw = localStorage.getItem(dsProjectKey(id))
+    if (raw) {
+      const parsed = JSON.parse(raw)
+      localStorage.setItem(dsProjectKey(id), JSON.stringify({ ...parsed, name }))
+    }
+  } catch { /* */ }
+}
+
+function blankProject(name = 'New Design'): DesignProject {
+  return {
+    id: genId(), name, createdAt: Date.now(), updatedAt: Date.now(),
+    messages: [], files: [], selectedFileId: null, history: [],
+    inlineComments: [], projectContext: '', shareAccess: 'edit',
+    device: 'desktop', viewMode: 'preview',
+    fileTreeW: 200, chatW: 340, splitCodeW: 50, fileTreeOpen: true, expandedFolders: {},
+  }
+}
+
+function migrateOldDesignData(): void {
+  try {
+    const raw = localStorage.getItem('kodo.design-studio.state.v1')
+    if (!raw) return
+    if (listProjectSummaries().length > 0) { localStorage.removeItem('kodo.design-studio.state.v1'); return }
+    const persisted = loadPersistedDesignStudioState()
+    if (!persisted || persisted.messages.length === 0) { localStorage.removeItem('kodo.design-studio.state.v1'); return }
+    const project = blankProject('Restored Project')
+    project.messages = persisted.messages
+    project.files = persisted.files
+    project.selectedFileId = persisted.selectedFileId
+    project.history = persisted.history
+    project.inlineComments = persisted.inlineComments
+    project.projectContext = persisted.projectContext
+    project.shareAccess = persisted.shareAccess
+    saveProjectToStorage(project)
+    localStorage.removeItem('kodo.design-studio.state.v1')
+  } catch { /* */ }
+}
+
+// ─── Design System ───────────────────────────────────────────────────────────
+
+const DS_DESIGN_SYSTEM_KEY = 'kodo.ds.designSystem.v1'
+
+const DEFAULT_DESIGN_SYSTEM: DesignSystemConfig = {
+  brandName: '', primaryColor: '#6366f1', secondaryColor: '#8b5cf6',
+  accentColor: '#06b6d4', fontFamily: 'Inter, system-ui, sans-serif',
+  borderRadius: 'md', style: 'minimal', customRules: '',
+}
+
+function loadDesignSystem(): DesignSystemConfig {
+  try {
+    const raw = localStorage.getItem(DS_DESIGN_SYSTEM_KEY)
+    if (!raw) return { ...DEFAULT_DESIGN_SYSTEM }
+    return { ...DEFAULT_DESIGN_SYSTEM, ...JSON.parse(raw) }
+  } catch { return { ...DEFAULT_DESIGN_SYSTEM } }
+}
+
+function saveDesignSystem(ds: DesignSystemConfig): void {
+  try { localStorage.setItem(DS_DESIGN_SYSTEM_KEY, JSON.stringify(ds)) } catch { /* */ }
+}
+
+function buildDesignSystemPrompt(ds: DesignSystemConfig): string {
+  if (!ds.brandName && !ds.customRules && ds.primaryColor === DEFAULT_DESIGN_SYSTEM.primaryColor) return ''
+  const lines: string[] = ['Design System:']
+  if (ds.brandName) lines.push(`- Brand: ${ds.brandName}`)
+  lines.push(`- Primary color: ${ds.primaryColor}`)
+  lines.push(`- Secondary color: ${ds.secondaryColor}`)
+  lines.push(`- Accent color: ${ds.accentColor}`)
+  lines.push(`- Font: ${ds.fontFamily}`)
+  const radii: Record<DesignSystemConfig['borderRadius'], string> = { none: '0px', sm: '4px', md: '8px', lg: '16px', full: '9999px' }
+  lines.push(`- Border radius: ${radii[ds.borderRadius]}`)
+  lines.push(`- Visual style: ${ds.style}`)
+  if (ds.customRules) lines.push(`- Rules: ${ds.customRules}`)
+  return lines.join('\n')
+}
 
 // ─── Sub-components ──────────────────────────────────────────────────────────
 
@@ -551,6 +1000,172 @@ function DragHandle({ onDrag, handleId }: { onDrag: (delta: number) => void; han
   )
 }
 
+// ─── Project Picker ──────────────────────────────────────────────────────────
+
+interface ProjectPickerProps {
+  projects: ProjectSummary[]
+  onOpen: (id: string) => void
+  onDelete: (id: string) => void
+  onCreate: () => void
+  onClose: () => void
+}
+
+function ProjectPicker({ projects, onOpen, onDelete, onCreate, onClose }: ProjectPickerProps) {
+  const [hoveredId, setHoveredId] = useState<string | null>(null)
+  const [confirmDelete, setConfirmDelete] = useState<string | null>(null)
+
+  return (
+    <div style={{
+      position: 'fixed', inset: 0, zIndex: 1001,
+      background: 'var(--bg-0)', display: 'flex', flexDirection: 'column',
+    }}>
+      {/* Header */}
+      <div style={{
+        height: 56, display: 'flex', alignItems: 'center', gap: 12,
+        padding: '0 24px', borderBottom: '1px solid var(--border)',
+        background: 'var(--bg-1)', flexShrink: 0,
+      }}>
+        <button type="button" onClick={onClose}
+          style={{ display: 'flex', alignItems: 'center', gap: 6, background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-2)', fontSize: 12, padding: '4px 8px', borderRadius: 6 }}>
+          <ArrowLeft size={14} /> Kodo
+        </button>
+        <div style={{ width: 1, height: 18, background: 'var(--border)' }} />
+        <Wand2 size={18} color="var(--accent)" />
+        <span style={{ fontSize: 15, fontWeight: 700, color: 'var(--text-0)' }}>Design Studio</span>
+        <div style={{ flex: 1 }} />
+        <button type="button" onClick={onCreate}
+          style={{
+            display: 'flex', alignItems: 'center', gap: 6,
+            background: 'var(--accent)', border: 'none', borderRadius: 8,
+            color: '#fff', fontSize: 12, fontWeight: 600, padding: '7px 16px', cursor: 'pointer',
+          }}>
+          <Plus size={14} /> New Design
+        </button>
+      </div>
+
+      {/* Body */}
+      <div style={{ flex: 1, overflow: 'auto', padding: '32px 32px' }}>
+        {projects.length === 0 ? (
+          /* Empty state */
+          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100%', gap: 16, color: 'var(--text-2)' }}>
+            <Wand2 size={56} style={{ opacity: 0.15 }} />
+            <div style={{ fontSize: 20, fontWeight: 700, color: 'var(--text-1)' }}>Start your first design</div>
+            <div style={{ fontSize: 13, opacity: 0.6, textAlign: 'center', maxWidth: 360 }}>
+              Create websites, dashboards, and interactive prototypes by describing what you want.
+            </div>
+            <button type="button" onClick={onCreate}
+              style={{
+                marginTop: 8, display: 'flex', alignItems: 'center', gap: 8,
+                background: 'var(--accent)', border: 'none', borderRadius: 10,
+                color: '#fff', fontSize: 14, fontWeight: 600, padding: '12px 28px', cursor: 'pointer',
+              }}>
+              <Plus size={16} /> Create your first design
+            </button>
+          </div>
+        ) : (
+          <>
+            <div style={{ fontSize: 11, letterSpacing: '0.08em', color: 'var(--text-2)', fontFamily: 'var(--font-mono)', marginBottom: 16, fontWeight: 600 }}>
+              YOUR PROJECTS — {projects.length}
+            </div>
+            <div style={{
+              display: 'grid',
+              gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))',
+              gap: 16,
+            }}>
+              {/* New Design card */}
+              <button type="button" onClick={onCreate}
+                style={{
+                  display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
+                  height: 180, borderRadius: 12, border: '2px dashed var(--border)',
+                  background: 'transparent', cursor: 'pointer', color: 'var(--text-2)', gap: 8,
+                  transition: 'border-color 0.15s, color 0.15s',
+                }}
+                onMouseEnter={e => { (e.currentTarget as HTMLButtonElement).style.borderColor = 'var(--accent)'; (e.currentTarget as HTMLButtonElement).style.color = 'var(--accent)' }}
+                onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.borderColor = 'var(--border)'; (e.currentTarget as HTMLButtonElement).style.color = 'var(--text-2)' }}
+              >
+                <Plus size={24} />
+                <span style={{ fontSize: 12, fontWeight: 600 }}>New Design</span>
+              </button>
+
+              {/* Project cards */}
+              {projects.map(p => (
+                <div
+                  key={p.id}
+                  style={{
+                    borderRadius: 12, border: `2px solid ${hoveredId === p.id ? 'var(--accent)' : 'var(--border)'}`,
+                    background: 'var(--bg-1)', overflow: 'hidden', cursor: 'pointer',
+                    transition: 'border-color 0.15s, box-shadow 0.15s',
+                    boxShadow: hoveredId === p.id ? '0 4px 24px rgba(0,0,0,0.18)' : 'none',
+                    display: 'flex', flexDirection: 'column',
+                  }}
+                  onMouseEnter={() => setHoveredId(p.id)}
+                  onMouseLeave={() => setHoveredId(null)}
+                  onClick={() => onOpen(p.id)}
+                >
+                  {/* Thumbnail */}
+                  <div style={{
+                    height: 120, background: 'linear-gradient(135deg, var(--bg-2) 0%, var(--bg-3) 100%)',
+                    display: 'flex', alignItems: 'center', justifyContent: 'center',
+                    flexShrink: 0,
+                  }}>
+                    <Wand2 size={32} style={{ opacity: 0.2 }} color="var(--accent)" />
+                  </div>
+
+                  {/* Card body */}
+                  <div style={{ padding: '10px 12px', flex: 1 }}>
+                    <div style={{ fontWeight: 700, fontSize: 13, color: 'var(--text-0)', marginBottom: 4, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      {p.name}
+                    </div>
+                    <div style={{ fontSize: 10, color: 'var(--text-2)', fontFamily: 'var(--font-mono)', marginBottom: 6 }}>
+                      {new Date(p.updatedAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })}
+                    </div>
+                    <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
+                      {p.fileNames.slice(0, 3).map(n => (
+                        <span key={n} style={{ fontSize: 9, padding: '1px 6px', borderRadius: 4, background: 'var(--bg-3)', color: 'var(--text-2)', fontFamily: 'var(--font-mono)' }}>
+                          {n}
+                        </span>
+                      ))}
+                      {p.fileNames.length > 3 && (
+                        <span style={{ fontSize: 9, color: 'var(--text-2)', fontFamily: 'var(--font-mono)' }}>+{p.fileNames.length - 3}</span>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Footer actions */}
+                  <div style={{
+                    padding: '6px 12px', borderTop: '1px solid var(--border)',
+                    display: 'flex', justifyContent: 'flex-end', gap: 4,
+                    opacity: hoveredId === p.id ? 1 : 0, transition: 'opacity 0.15s',
+                  }}>
+                    {confirmDelete === p.id ? (
+                      <>
+                        <span style={{ fontSize: 10, color: '#ff7070', flex: 1, display: 'flex', alignItems: 'center' }}>Delete?</span>
+                        <button type="button" onClick={e => { e.stopPropagation(); onDelete(p.id); setConfirmDelete(null) }}
+                          style={{ fontSize: 10, padding: '2px 8px', borderRadius: 4, border: 'none', background: '#ff4040', color: '#fff', cursor: 'pointer' }}>
+                          Yes
+                        </button>
+                        <button type="button" onClick={e => { e.stopPropagation(); setConfirmDelete(null) }}
+                          style={{ fontSize: 10, padding: '2px 8px', borderRadius: 4, border: '1px solid var(--border)', background: 'transparent', color: 'var(--text-1)', cursor: 'pointer' }}>
+                          No
+                        </button>
+                      </>
+                    ) : (
+                      <button type="button" onClick={e => { e.stopPropagation(); setConfirmDelete(p.id) }}
+                        style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 10, padding: '2px 8px', borderRadius: 4, border: 'none', background: 'transparent', color: 'var(--text-2)', cursor: 'pointer' }}>
+                        <Trash2 size={11} /> Delete
+                      </button>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  )
+}
+
 // ─── Main component ──────────────────────────────────────────────────────────
 
 type Props = { onClose: () => void }
@@ -586,62 +1201,113 @@ export function DesignStudio({ onClose }: Props) {
   const [projectContext, setProjectContext] = useState('')
   const [shareAccess, setShareAccess] = useState<ShareAccess>('edit')
   const [hydrated, setHydrated] = useState(false)
-  const [sessionRestored, setSessionRestored] = useState(false)
+  const [activeProjectId, setActiveProjectId] = useState<string | null>(null)
+  const [projectName, setProjectName] = useState('New Design')
+  const [projectCreatedAt, setProjectCreatedAt] = useState<number>(Date.now())
+  const [allProjects, setAllProjects] = useState<ProjectSummary[]>([])
+  const [leftPanelTab, setLeftPanelTab] = useState<'sessions' | 'files'>('files')
+  const [isRenamingProject, setIsRenamingProject] = useState(false)
+  const [projectRenameInput, setProjectRenameInput] = useState('')
   const [planItems, setPlanItems] = useState<{ id: string; text: string; done: boolean }[]>([])
+  const [expandedArtifacts, setExpandedArtifacts] = useState<Record<string, boolean>>({})
+  const [isEditingCode, setIsEditingCode] = useState(false)
+  const [designSystem, setDesignSystem] = useState<DesignSystemConfig>(DEFAULT_DESIGN_SYSTEM)
+  const [showDesignSystem, setShowDesignSystem] = useState(false)
   const messagesRef = useRef(messages)
   messagesRef.current = messages
+  const filesRef = useRef(files)
+  filesRef.current = files
 
   const messagesEndRef = useRef<HTMLDivElement>(null)
+
+  // ── Project callbacks ───────────────────────────────────────────────────────
+  const applyProject = useCallback((project: DesignProject) => {
+    setActiveProjectId(project.id)
+    setProjectName(project.name)
+    setProjectCreatedAt(project.createdAt)
+    setMessages(project.messages)
+    setFiles(project.files)
+    setSelectedFileId(project.selectedFileId)
+    setHistory(project.history)
+    setInlineComments(project.inlineComments)
+    setProjectContext(project.projectContext)
+    setShareAccess(project.shareAccess)
+    setDevice(project.device)
+    setViewMode(project.viewMode)
+    setFileTreeW(project.fileTreeW)
+    setChatW(project.chatW)
+    setSplitCodeW(project.splitCodeW)
+    setFileTreeOpen(project.fileTreeOpen)
+    setExpandedFolders(project.expandedFolders)
+    setPlanItems([])
+    setError(null)
+    if (project.files.length > 0) setPreviewHtml(buildPreviewHtml(project.files))
+    else setPreviewHtml(null)
+  }, [])
+
+  const handleOpenProject = useCallback((id: string) => {
+    const project = loadProjectFromStorage(id)
+    if (!project) return
+    applyProject(project)
+    setLeftPanelTab('files')
+  }, [applyProject])
+
+  const handleCreateProject = useCallback(() => {
+    const project = blankProject()
+    saveProjectToStorage(project)
+    applyProject(project)
+    setAllProjects(listProjectSummaries())
+    setLeftPanelTab('files')
+  }, [applyProject])
+
+  const handleDeleteProject = useCallback((id: string) => {
+    deleteProjectFromStorage(id)
+    setAllProjects(listProjectSummaries())
+    if (activeProjectId === id) {
+      setActiveProjectId(null)
+      setProjectName('New Design')
+      setProjectCreatedAt(Date.now())
+      setMessages([]); setFiles([]); setSelectedFileId(null)
+      setHistory([]); setInlineComments([]); setProjectContext('')
+      setPreviewHtml(null); setPlanItems([]); setError(null)
+    }
+  }, [activeProjectId])
+
+  const handleRenameProject = useCallback((id: string, name: string) => {
+    renameProjectInStorage(id, name)
+    setAllProjects(listProjectSummaries())
+    if (id === activeProjectId) setProjectName(name)
+  }, [activeProjectId])
   const fileInputRef = useRef<HTMLInputElement>(null)
   const splitContainerRef = useRef<HTMLDivElement>(null)
   const previewContainerRef = useRef<HTMLDivElement>(null)
   const abortRef = useRef<AbortController | null>(null)
 
   useEffect(() => {
+    setDesignSystem(loadDesignSystem())
     const shared = typeof window !== 'undefined'
       ? readSharePayloadFromHash(window.location.hash)
       : null
     if (shared) {
-      setFiles(shared.files)
-      setSelectedFileId(shared.selectedFileId)
-      setViewMode(shared.viewMode)
-      setDevice(shared.device)
-      setInlineComments(shared.inlineComments)
-      setShareAccess(shared.shareAccess)
-      setPreviewHtml(buildPreviewHtml(shared.files))
-      setRefreshKey((k) => k + 1)
+      const project = blankProject('Shared Design')
+      project.files = shared.files
+      project.selectedFileId = shared.selectedFileId
+      project.viewMode = shared.viewMode
+      project.device = shared.device
+      project.inlineComments = shared.inlineComments
+      project.shareAccess = shared.shareAccess
+      saveProjectToStorage(project)
+      applyProject(project)
+      setAllProjects(listProjectSummaries())
       setHydrated(true)
       return
     }
-
-    const persisted = loadPersistedDesignStudioState()
-    if (!persisted) {
-      setHydrated(true)
-      return
-    }
-
-    setMessages(persisted.messages)
-    setFiles(persisted.files)
-    setSelectedFileId(persisted.selectedFileId)
-    setHistory(persisted.history)
-    setDevice(persisted.device)
-    setViewMode(persisted.viewMode)
-    setFileTreeW(persisted.fileTreeW)
-    setChatW(persisted.chatW)
-    setSplitCodeW(persisted.splitCodeW)
-    setFileTreeOpen(persisted.fileTreeOpen)
-    setExpandedFolders(persisted.expandedFolders)
-    setInlineComments(persisted.inlineComments)
-    setProjectContext(persisted.projectContext)
-    setShareAccess(persisted.shareAccess)
-
-    if (persisted.files.length > 0) {
-      setPreviewHtml(buildPreviewHtml(persisted.files))
-      setRefreshKey((k) => k + 1)
-      setSessionRestored(true)
-    }
+    migrateOldDesignData()
+    const projects = listProjectSummaries()
+    setAllProjects(projects)
     setHydrated(true)
-  }, [])
+    // Do NOT auto-open last project — show project picker instead
+  }, [applyProject])
 
   useEffect(() => {
     if (shareAccess === 'view' && commentMode) {
@@ -650,60 +1316,29 @@ export function DesignStudio({ onClose }: Props) {
   }, [shareAccess, commentMode])
 
   useEffect(() => {
-    if (!hydrated || typeof window === 'undefined') return
-
-    // Strip file content from message history to stay within localStorage quota.
-    // The files array is persisted separately and is the source of truth.
-    const persistedMessages = messages
-      .slice(-MAX_PERSISTED_MESSAGES)
-      .map((message) => ({
-        ...message,
-        isStreaming: false,
-        files: message.files?.map((file) => ({ ...file, content: '' })),
-      }))
-
-    const payload: PersistedDesignStudioState = {
-      messages: persistedMessages,
-      files,
-      selectedFileId,
-      history: history.slice(-MAX_PERSISTED_HISTORY),
-      inlineComments,
-      projectContext,
-      shareAccess,
-      device,
-      viewMode,
-      fileTreeW,
-      chatW,
-      splitCodeW,
-      fileTreeOpen,
-      expandedFolders,
-      updatedAt: Date.now(),
+    if (!hydrated || !activeProjectId) return
+    const project: DesignProject = {
+      id: activeProjectId, name: projectName,
+      createdAt: projectCreatedAt, updatedAt: Date.now(),
+      messages, files, selectedFileId, history, inlineComments,
+      projectContext, shareAccess, device, viewMode,
+      fileTreeW, chatW, splitCodeW, fileTreeOpen, expandedFolders,
     }
-
-    try {
-      window.localStorage.setItem(DESIGN_STUDIO_STORAGE_KEY, JSON.stringify(payload))
-    } catch {
-      // Ignore persistence quota errors and continue the current session in memory.
-    }
-  }, [
-    hydrated,
-    messages,
-    files,
-    selectedFileId,
-    history,
-    inlineComments,
-    projectContext,
-    shareAccess,
-    device,
-    viewMode,
-    fileTreeW,
-    chatW,
-    splitCodeW,
-    fileTreeOpen,
-    expandedFolders,
-  ])
+    saveProjectToStorage(project)
+    setAllProjects(listProjectSummaries())
+  }, [hydrated, activeProjectId, projectName, projectCreatedAt, messages, files, selectedFileId,
+      history, inlineComments, projectContext, shareAccess, device, viewMode,
+      fileTreeW, chatW, splitCodeW, fileTreeOpen, expandedFolders])
 
   useEffect(() => { messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' }) }, [messages])
+
+  useEffect(() => {
+    if (files.length === 0) return
+    const html = buildPreviewHtml(files)
+    if (html !== previewHtml) {
+      setPreviewHtml(html)
+    }
+  }, [files]) // intentionally omit previewHtml to avoid loop
 
   // Init session
   useEffect(() => {
@@ -760,6 +1395,8 @@ RULES:
 - Designs must be visually stunning, modern, pixel-perfect, and fully responsive.
 - Use real placeholder content (no "Lorem ipsum"). Write realistic copy for the industry/use-case.
 - Animations, micro-interactions, and gradients are encouraged.
+- After the plan, output ONLY code blocks — no prose, no explanations, no commentary.
+- Do NOT write markdown text between code blocks.
 
 `
       : ''
@@ -768,6 +1405,8 @@ RULES:
     if (projectContext.trim()) {
       contextSections.push(`Project context:\n${projectContext.trim()}`)
     }
+    const dsPrompt = buildDesignSystemPrompt(designSystem)
+    if (dsPrompt) contextSections.push(dsPrompt)
 
     const textAssets = assets
       .filter((asset) => Boolean(asset.textContent && asset.textContent.trim()))
@@ -819,6 +1458,14 @@ RULES:
     }
 
     try {
+      const toolDerivedFiles = new Map<string, DesignFile>()
+      for (const existingFile of filesRef.current) {
+        const normalizedName = normalizeDesignPath(existingFile.name)
+        if (!normalizedName) continue
+        toolDerivedFiles.set(normalizedName.toLowerCase(), { ...existingFile, name: normalizedName })
+      }
+      let sawToolFileMutation = false
+
       const res = await fetch(`${API}/send`, {
         method: 'POST',
         headers: buildApiHeaders({ 'Content-Type': 'application/json' }),
@@ -848,6 +1495,9 @@ RULES:
           if (!raw) continue
           try {
             const ev = JSON.parse(raw)
+            if (applyToolStartEventToDesignFiles(ev, toolDerivedFiles)) {
+              sawToolFileMutation = true
+            }
             if (ev.type === 'text') {
               acc += String(ev.content || '')
               setMessages(prev => prev.map(m => m.id === aid ? { ...m, content: acc } : m))
@@ -856,33 +1506,35 @@ RULES:
         }
       }
 
-      // Parse plan items from ## Plan section
-      const planMatch = acc.match(/^##\s*Plan\s*\n([\s\S]*?)(?=\n##|\n```|$)/m)
-      if (planMatch) {
-        const lines = planMatch[1].split('\n').filter(l => /^\d+\.\s+\S/.test(l.trim()))
-        if (lines.length > 0) {
-          setPlanItems(lines.map(l => ({
-            id: genId(),
-            text: l.replace(/^\d+\.\s+/, '').trim(),
-            done: false,
-          })))
-        }
+      const assistantPlan = extractPlanItemsFromAssistant(acc)
+      const fallbackPlan = assistantPlan.length === 0 ? buildPromptPlanItems(trimmed) : []
+      const resolvedPlan = assistantPlan.length > 0 ? assistantPlan : fallbackPlan
+      if (resolvedPlan.length > 0) {
+        setPlanItems(resolvedPlan.map((item) => ({ id: genId(), text: item, done: false })))
       }
 
       // Parse files and update preview after streaming completes
       const extracted = extractFiles(acc)
-      if (extracted.length > 0) {
-        setFiles(extracted)
-        setSelectedFileId(extracted[0].id)
-        const html = buildPreviewHtml(extracted)
+      const derivedFromTools = sawToolFileMutation
+        ? Array.from(toolDerivedFiles.values()).filter((file) => file.content.trim().length > 0)
+        : []
+      const resolvedFiles = extracted.length > 0 ? extracted : derivedFromTools
+
+      if (resolvedFiles.length > 0) {
+        const selected = resolvedFiles.find((file) => file.language === 'html' || file.name.endsWith('.html'))
+          || resolvedFiles[0]
+
+        setFiles(resolvedFiles)
+        setSelectedFileId(selected.id)
+        const html = buildPreviewHtml(resolvedFiles)
         setPreviewHtml(html)
         setRefreshKey(k => k + 1)
         setHistory(prev => [...prev, {
-          files: extracted,
+          files: resolvedFiles,
           timestamp: Date.now(),
           label: `Generation ${prev.length + 1}`,
         }])
-        setMessages(prev => prev.map(m => m.id === aid ? { ...m, files: extracted } : m))
+        setMessages(prev => prev.map(m => m.id === aid ? { ...m, files: resolvedFiles } : m))
         // Mark all plan items done when files are generated
         setPlanItems(prev => prev.map(item => ({ ...item, done: true })))
       } else if (acc.trim()) {
@@ -902,7 +1554,7 @@ RULES:
       setMessages(prev => prev.map(m => m.id === aid ? { ...m, isStreaming: false } : m))
       setIsLoading(false)
     }
-  }, [assets, inlineComments, isLoading, projectContext, sessionId, shareAccess])
+  }, [assets, designSystem, inlineComments, isLoading, projectContext, sessionId, shareAccess])
 
   const handleVisualEditorSourceChange = useCallback((payload: VisualEditorSourcePayload) => {
     // Strip injected harness script so it isn't double-injected on reload
@@ -1068,6 +1720,154 @@ RULES:
   const canEdit = shareAccess === 'edit'
   const canComment = shareAccess !== 'view'
   const fileTree = useMemo(() => buildDesignFileTree(files), [files])
+  const sessionEntries = useMemo(() => {
+    const messageEntries: Array<{ id: string; prompt: string; files: DesignFile[]; timestamp?: number }> = []
+
+    for (let i = 0; i < messages.length; i += 1) {
+      const message = messages[i]
+      if (message.role !== 'assistant' || !Array.isArray(message.files) || message.files.length === 0) continue
+
+      const filesForSession = message.files.filter((file) => file.content.trim().length > 0)
+      if (filesForSession.length === 0) continue
+
+      const previous = i > 0 ? messages[i - 1] : undefined
+      const promptSource = previous?.role === 'user' ? previous.content : 'Generation'
+      const prompt = promptSource.replace(/\s+/g, ' ').trim().slice(0, 80) || 'Generation'
+
+      messageEntries.push({
+        id: `message-${message.id}`,
+        prompt,
+        files: filesForSession,
+      })
+    }
+
+    if (messageEntries.length > 0) return messageEntries.reverse()
+
+    return [...history]
+      .reverse()
+      .map((entry, idx) => ({
+        id: `history-${entry.timestamp}-${idx}`,
+        prompt: entry.label || `Generation ${history.length - idx}`,
+        files: entry.files.filter((file) => file.content.trim().length > 0),
+        timestamp: entry.timestamp,
+      }))
+      .filter((entry) => entry.files.length > 0)
+  }, [messages, history])
+
+  const handleCodeEdit = useCallback((content: string) => {
+    if (!selectedFileId) return
+    setFiles(prev => {
+      const next = prev.map(f => f.id === selectedFileId ? { ...f, content } : f)
+      const html = buildPreviewHtml(next)
+      setPreviewHtml(html)
+      setRefreshKey(k => k + 1)
+      return next
+    })
+  }, [selectedFileId])
+
+  const renderAssistantMessage = (msg: DesignMessage): JSX.Element => {
+    const content = msg.content
+    // During streaming with no content yet
+    if (msg.isStreaming && !content) {
+      return <span style={{ color: 'var(--text-2)', fontStyle: 'italic' }}>Generating...</span>
+    }
+
+    const parts: JSX.Element[] = []
+    const re = /```([^\n`]*)\n([\s\S]*?)```/g
+    let last = 0
+    let match: RegExpExecArray | null
+    let codeIndex = 0
+
+    while ((match = re.exec(content)) !== null) {
+      // Text before this code block
+      const before = content.slice(last, match.index).trim()
+      if (before) {
+        parts.push(
+          <span key={`text-${match.index}`} style={{ whiteSpace: 'pre-wrap', display: 'block', marginBottom: 6 }}>
+            {before}
+          </span>
+        )
+      }
+
+      const info = match[1].trim()
+      const code = match[2]
+      const lineCount = code.split('\n').length
+      // Infer filename from fence info
+      const infoTokens = info.split(/\s+/)
+      const lang = infoTokens[0] || 'text'
+      const possibleName = infoTokens[1] || ''
+      const fileName = possibleName && /\.\w+$/.test(possibleName) ? possibleName : `${lang || 'code'}.${LANG_EXT[lang] || lang || 'txt'}`
+      const artifactKey = `${msg.id}-${codeIndex}`
+      const isExpanded = expandedArtifacts[artifactKey] ?? false
+
+      parts.push(
+        <div key={artifactKey} style={{
+          background: 'var(--bg-3)', border: '1px solid var(--border)',
+          borderRadius: 8, padding: '6px 10px', marginBottom: 6,
+        }}>
+          <button
+            type="button"
+            onClick={() => setExpandedArtifacts(prev => ({ ...prev, [artifactKey]: !prev[artifactKey] }))}
+            style={{
+              display: 'flex', alignItems: 'center', gap: 6, width: '100%',
+              background: 'none', border: 'none', cursor: 'pointer', padding: 0,
+              color: 'var(--text-0)', fontSize: 11, fontFamily: 'var(--font-mono)',
+            }}
+          >
+            {isExpanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+            <span>{getFileIcon(fileName)}</span>
+            <span style={{ flex: 1, textAlign: 'left' }}>{fileName}</span>
+            <span style={{ color: 'var(--text-2)', fontSize: 10 }}>{lineCount} lines</span>
+          </button>
+          {isExpanded && (
+            <div style={{ marginTop: 6, borderRadius: 4, overflow: 'hidden' }}>
+              <SyntaxHighlighter
+                style={vscDarkPlus}
+                language={lang || 'text'}
+                PreTag="div"
+                customStyle={{ margin: 0, borderRadius: 4, fontSize: 11, padding: '8px 10px', lineHeight: 1.6 }}
+              >
+                {code}
+              </SyntaxHighlighter>
+            </div>
+          )}
+        </div>
+      )
+      codeIndex++
+      last = match.index + match[0].length
+    }
+
+    // Remaining text after last code block
+    const tail = content.slice(last).trim()
+
+    // During streaming: show animated label if there's an open/partial fence
+    if (msg.isStreaming && tail.includes('```')) {
+      const partialLangMatch = tail.match(/```([^\n`]*)/)
+      const partialInfo = partialLangMatch ? partialLangMatch[1].trim() : ''
+      const partialTokens = partialInfo.split(/\s+/)
+      const partialName = partialTokens[1] && /\.\w+$/.test(partialTokens[1]) ? partialTokens[1] : (partialTokens[0] ? `${partialTokens[0]}.${LANG_EXT[partialTokens[0]] || partialTokens[0]}` : 'code')
+      parts.push(
+        <div key="streaming-artifact" style={{
+          background: 'var(--bg-3)', border: '1px solid var(--border)',
+          borderRadius: 8, padding: '6px 10px', marginBottom: 6,
+          display: 'flex', alignItems: 'center', gap: 6,
+          fontSize: 11, fontFamily: 'var(--font-mono)', color: 'var(--accent)',
+        }}>
+          <Loader size={11} style={{ animation: 'spin 1s linear infinite', flexShrink: 0 }} />
+          Building {partialName}…
+        </div>
+      )
+    } else if (tail) {
+      parts.push(
+        <span key="tail" style={{ whiteSpace: 'pre-wrap', display: 'block' }}>{tail}</span>
+      )
+    }
+
+    if (parts.length === 0) {
+      return <span style={{ whiteSpace: 'pre-wrap' }}>{content}</span>
+    }
+    return <>{parts}</>
+  }
 
   const addInlineCommentAtPoint = (xPct: number, yPct: number) => {
     if (!canComment) return
@@ -1188,6 +1988,7 @@ RULES:
 
   const handleSelectFile = (file: DesignFile) => {
     setSelectedFileId(file.id)
+    setIsEditingCode(false)
     if (viewMode === 'preview') setViewMode('code')
   }
 
@@ -1277,6 +2078,20 @@ RULES:
   })
 
   // ── Render ─────────────────────────────────────────────────────────────────
+
+  // Show project picker when no active project
+  if (!activeProjectId) {
+    return (
+      <ProjectPicker
+        projects={allProjects}
+        onOpen={handleOpenProject}
+        onDelete={handleDeleteProject}
+        onCreate={handleCreateProject}
+        onClose={onClose}
+      />
+    )
+  }
+
   return (
     <div style={{
       position: 'fixed', inset: 0, zIndex: 1000,
@@ -1293,8 +2108,8 @@ RULES:
       }}>
         <button
           type="button"
-          onClick={onClose}
-          title="Back to Kodo"
+          onClick={() => setActiveProjectId(null)}
+          title="Back to projects"
           style={{
             display: 'flex', alignItems: 'center', gap: 5,
             padding: '4px 10px', borderRadius: 6,
@@ -1305,11 +2120,49 @@ RULES:
             flexShrink: 0,
           }}
         >
-          <ArrowLeft size={12} /> Back to Kodo
+          <ArrowLeft size={12} /> Projects
         </button>
         <div style={{ width: 1, height: 16, background: 'var(--border)' }} />
         <Wand2 size={15} color="var(--accent)" />
-        <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-0)', marginRight: 4 }}>Design Studio</span>
+        {/* Project name (inline rename) */}
+        {isRenamingProject ? (
+          <input
+            autoFocus
+            value={projectRenameInput}
+            onChange={e => setProjectRenameInput(e.target.value)}
+            onKeyDown={e => {
+              if (e.key === 'Enter') {
+                const n = projectRenameInput.trim()
+                if (n) { setProjectName(n); handleRenameProject(activeProjectId, n) }
+                setIsRenamingProject(false)
+              }
+              if (e.key === 'Escape') setIsRenamingProject(false)
+            }}
+            onBlur={() => {
+              const n = projectRenameInput.trim()
+              if (n) { setProjectName(n); handleRenameProject(activeProjectId, n) }
+              setIsRenamingProject(false)
+            }}
+            style={{
+              background: 'var(--bg-2)', border: '1px solid var(--accent)', borderRadius: 5,
+              color: 'var(--text-0)', fontSize: 12, padding: '2px 8px', outline: 'none',
+              fontWeight: 600, width: 160,
+            }}
+          />
+        ) : (
+          <button
+            type="button"
+            onClick={() => { setProjectRenameInput(projectName); setIsRenamingProject(true) }}
+            style={{
+              display: 'flex', alignItems: 'center', gap: 5, padding: '2px 8px', borderRadius: 5,
+              border: 'none', background: 'transparent', color: 'var(--text-0)', fontSize: 12,
+              cursor: 'pointer', fontWeight: 600, maxWidth: 200, overflow: 'hidden',
+              textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+            }}
+          >
+            {projectName} <Pencil size={10} color="var(--text-2)" />
+          </button>
+        )}
         <div style={{ width: 1, height: 16, background: 'var(--border)' }} />
 
         {/* View mode */}
@@ -1368,6 +2221,10 @@ RULES:
           <Save size={11} />
           Save revision
         </button>
+        <div style={{ width: 1, height: 16, background: 'var(--border)' }} />
+        <button type="button" style={btn(showDesignSystem)} onClick={() => setShowDesignSystem(s => !s)} title="Design system">
+          <Package size={11} />DS
+        </button>
 
         <div style={{ flex: 1 }} />
 
@@ -1421,20 +2278,165 @@ RULES:
             </button>
             {fileTreeOpen && (
               <>
-                <FolderOpen size={12} color="var(--accent)" />
-                <span style={{ fontSize: 10, letterSpacing: '0.1em', color: 'var(--text-2)', fontFamily: 'var(--font-mono)' }}>FILES</span>
-                <div style={{ flex: 1 }} />
-                <button type="button" style={{ ...btn(false), padding: '2px 4px' }}
-                  disabled={!canEdit}
-                  onClick={() => fileInputRef.current?.click()} title="Upload asset">
-                  <Upload size={11} />
+                {/* Tab switcher */}
+                <button type="button" onClick={() => setLeftPanelTab('sessions')} style={{
+                  display: 'flex', alignItems: 'center', gap: 4, background: 'none', border: 'none',
+                  cursor: 'pointer', padding: '2px 4px', borderRadius: 4, fontSize: 9,
+                  fontFamily: 'var(--font-mono)', letterSpacing: '0.08em',
+                  color: leftPanelTab === 'sessions' ? 'var(--accent)' : 'var(--text-2)',
+                  fontWeight: leftPanelTab === 'sessions' ? 700 : 400,
+                }}>
+                  <Clock size={10} />SESSIONS
                 </button>
+                <button type="button" onClick={() => setLeftPanelTab('files')} style={{
+                  display: 'flex', alignItems: 'center', gap: 4, background: 'none', border: 'none',
+                  cursor: 'pointer', padding: '2px 4px', borderRadius: 4, fontSize: 9,
+                  fontFamily: 'var(--font-mono)', letterSpacing: '0.08em',
+                  color: leftPanelTab === 'files' ? 'var(--accent)' : 'var(--text-2)',
+                  fontWeight: leftPanelTab === 'files' ? 700 : 400,
+                }}>
+                  <FolderOpen size={10} />FILES
+                </button>
+                <div style={{ flex: 1 }} />
+                {leftPanelTab === 'files' && (
+                  <button type="button" style={{ ...btn(false), padding: '2px 4px' }}
+                    disabled={!canEdit}
+                    onClick={() => fileInputRef.current?.click()} title="Upload asset">
+                    <Upload size={11} />
+                  </button>
+                )}
               </>
             )}
           </div>
 
+          {/* Design System panel */}
+          {fileTreeOpen && showDesignSystem && (
+            <div style={{ flex: 1, overflowY: 'auto', padding: '10px', borderBottom: '1px solid var(--border)' }}>
+              <div style={{ fontSize: 9, letterSpacing: '0.1em', color: 'var(--accent)', fontFamily: 'var(--font-mono)', marginBottom: 8, fontWeight: 700 }}>DESIGN SYSTEM</div>
+              {([
+                { key: 'brandName', label: 'Brand name', type: 'text' },
+                { key: 'primaryColor', label: 'Primary', type: 'color' },
+                { key: 'secondaryColor', label: 'Secondary', type: 'color' },
+                { key: 'accentColor', label: 'Accent', type: 'color' },
+                { key: 'fontFamily', label: 'Font', type: 'text' },
+              ] as { key: keyof DesignSystemConfig; label: string; type: string }[]).map(({ key, label, type }) => (
+                <div key={key} style={{ marginBottom: 6 }}>
+                  <div style={{ fontSize: 9, color: 'var(--text-2)', fontFamily: 'var(--font-mono)', marginBottom: 2 }}>{label}</div>
+                  <input
+                    type={type}
+                    value={String(designSystem[key])}
+                    onChange={e => {
+                      const updated = { ...designSystem, [key]: e.target.value }
+                      setDesignSystem(updated)
+                      saveDesignSystem(updated)
+                    }}
+                    style={{
+                      width: '100%', background: 'var(--bg-2)', border: '1px solid var(--border)',
+                      borderRadius: 4, color: 'var(--text-0)', fontSize: 10,
+                      padding: type === 'color' ? '1px 4px' : '3px 6px',
+                      outline: 'none', fontFamily: 'var(--font-mono)', boxSizing: 'border-box' as const,
+                      height: type === 'color' ? 26 : 'auto',
+                    }}
+                  />
+                </div>
+              ))}
+              <div style={{ marginBottom: 6 }}>
+                <div style={{ fontSize: 9, color: 'var(--text-2)', fontFamily: 'var(--font-mono)', marginBottom: 2 }}>Radius</div>
+                <select
+                  value={designSystem.borderRadius}
+                  onChange={e => {
+                    const updated = { ...designSystem, borderRadius: e.target.value as DesignSystemConfig['borderRadius'] }
+                    setDesignSystem(updated); saveDesignSystem(updated)
+                  }}
+                  style={{ width: '100%', background: 'var(--bg-2)', border: '1px solid var(--border)', borderRadius: 4, color: 'var(--text-0)', fontSize: 10, padding: '3px 6px', outline: 'none', fontFamily: 'var(--font-mono)' }}
+                >
+                  {(['none', 'sm', 'md', 'lg', 'full'] as const).map(v => <option key={v} value={v}>{v}</option>)}
+                </select>
+              </div>
+              <div style={{ marginBottom: 6 }}>
+                <div style={{ fontSize: 9, color: 'var(--text-2)', fontFamily: 'var(--font-mono)', marginBottom: 2 }}>Style</div>
+                <select
+                  value={designSystem.style}
+                  onChange={e => {
+                    const updated = { ...designSystem, style: e.target.value as DesignSystemConfig['style'] }
+                    setDesignSystem(updated); saveDesignSystem(updated)
+                  }}
+                  style={{ width: '100%', background: 'var(--bg-2)', border: '1px solid var(--border)', borderRadius: 4, color: 'var(--text-0)', fontSize: 10, padding: '3px 6px', outline: 'none', fontFamily: 'var(--font-mono)' }}
+                >
+                  {(['minimal', 'material', 'glassmorphism', 'neumorphism', 'brutalist'] as const).map(v => <option key={v} value={v}>{v}</option>)}
+                </select>
+              </div>
+              <div style={{ marginBottom: 6 }}>
+                <div style={{ fontSize: 9, color: 'var(--text-2)', fontFamily: 'var(--font-mono)', marginBottom: 2 }}>Custom rules</div>
+                <textarea
+                  value={designSystem.customRules}
+                  onChange={e => {
+                    const updated = { ...designSystem, customRules: e.target.value }
+                    setDesignSystem(updated); saveDesignSystem(updated)
+                  }}
+                  rows={3}
+                  style={{ width: '100%', background: 'var(--bg-2)', border: '1px solid var(--border)', borderRadius: 4, color: 'var(--text-0)', fontSize: 10, padding: '3px 6px', outline: 'none', fontFamily: 'var(--font-mono)', resize: 'vertical', boxSizing: 'border-box' as const }}
+                />
+              </div>
+              <button
+                type="button"
+                style={{ ...btn(false), fontSize: 9, padding: '2px 6px' }}
+                onClick={() => { setDesignSystem({ ...DEFAULT_DESIGN_SYSTEM }); saveDesignSystem({ ...DEFAULT_DESIGN_SYSTEM }) }}
+              >
+                <Plus size={9} /> Reset
+              </button>
+            </div>
+          )}
+
+          {/* Sessions tab */}
+          {fileTreeOpen && !showDesignSystem && leftPanelTab === 'sessions' && (
+            <div style={{ flex: 1, overflowY: 'auto' }}>
+              {sessionEntries.map((entry) => {
+                return (
+                  <div key={entry.id}
+                    onClick={() => {
+                      if (entry.files.length > 0) {
+                        const htmlFile = entry.files.find((file) => file.name.endsWith('.html'))
+                        const selected = htmlFile || entry.files[0]
+                        setFiles(entry.files)
+                        setSelectedFileId(selected?.id ?? null)
+                        setPreviewHtml(buildPreviewHtml(entry.files))
+                        setRefreshKey((k) => k + 1)
+                        setLeftPanelTab('files')
+                      }
+                    }}
+                    style={{ padding: '8px 10px', cursor: 'pointer', borderLeft: '2px solid transparent', background: 'transparent' }}
+                    onMouseEnter={e => { (e.currentTarget as HTMLDivElement).style.background = 'var(--bg-2)' }}
+                    onMouseLeave={e => { (e.currentTarget as HTMLDivElement).style.background = 'transparent' }}
+                  >
+                    <div style={{ fontSize: 11, color: 'var(--text-1)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', marginBottom: 3 }}>
+                      {entry.prompt}
+                    </div>
+                    {entry.timestamp && (
+                      <div style={{ fontSize: 9, color: 'var(--text-2)', fontFamily: 'var(--font-mono)', marginBottom: 4 }}>
+                        {new Date(entry.timestamp).toLocaleString()}
+                      </div>
+                    )}
+                    <div style={{ display: 'flex', gap: 3, flexWrap: 'wrap' }}>
+                      {entry.files.slice(0, 3).map(f => (
+                        <span key={f.id} style={{ fontSize: 9, padding: '1px 5px', borderRadius: 3, background: 'var(--bg-3)', color: 'var(--text-2)', fontFamily: 'var(--font-mono)' }}>
+                          {f.name}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                )
+              })}
+              {sessionEntries.length === 0 && (
+                <div style={{ padding: '12px 10px', fontSize: 10, color: 'var(--text-2)', fontFamily: 'var(--font-mono)' }}>
+                  No generations yet
+                </div>
+              )}
+            </div>
+          )}
+
           {/* Generated files */}
-          {fileTreeOpen && (
+          {fileTreeOpen && !showDesignSystem && leftPanelTab === 'files' && (
             <div style={{ flex: 1, overflowY: 'auto', padding: '4px 0' }}>
               {fileTree.length === 0 && (
                 <div style={{ padding: '12px 12px', fontSize: 10, color: 'var(--text-2)', fontFamily: 'var(--font-mono)', lineHeight: 1.6 }}>
@@ -1510,6 +2512,11 @@ RULES:
               </span>
             )}
             <div style={{ flex: 1 }} />
+            {(viewMode === 'code' || viewMode === 'split') && selectedFile && canEdit && (
+              <button type="button" style={btn(isEditingCode)} onClick={() => setIsEditingCode(e => !e)}>
+                <Pencil size={11} />{isEditingCode ? 'Done' : 'Edit'}
+              </button>
+            )}
             {(viewMode === 'code' || viewMode === 'split') && selectedFile && (
               <button type="button" style={btn(copied)} onClick={copyCode} title="Copy code">
                 <Copy size={11} />{copied ? 'Copied!' : 'Copy'}
@@ -1558,19 +2565,36 @@ RULES:
                     maxWidth: '75%',
                     overflow: 'auto',
                     flexShrink: 0,
+                    display: 'flex', flexDirection: 'column',
                   }} data-pane="split-code">
                     {selectedFile ? (
-                      <SyntaxHighlighter
-                        style={vscDarkPlus}
-                        language={selectedFile.language || 'text'}
-                        PreTag="div"
-                        customStyle={{
-                          margin: 0, borderRadius: 0, background: '#06060e',
-                          fontSize: 12, padding: '14px 16px', minHeight: '100%', lineHeight: 1.65,
-                        }}
-                      >
-                        {selectedFile.content}
-                      </SyntaxHighlighter>
+                      isEditingCode ? (
+                        <textarea
+                          value={selectedFile.content}
+                          onChange={e => handleCodeEdit(e.target.value)}
+                          spellCheck={false}
+                          style={{
+                            width: '100%', height: '100%', minHeight: '100%',
+                            background: '#06060e', color: '#d4d4d4',
+                            border: 'none', outline: 'none', resize: 'none',
+                            fontFamily: 'var(--font-mono)', fontSize: 12,
+                            lineHeight: 1.65, padding: '14px 16px',
+                            boxSizing: 'border-box',
+                          }}
+                        />
+                      ) : (
+                        <SyntaxHighlighter
+                          style={vscDarkPlus}
+                          language={selectedFile.language || 'text'}
+                          PreTag="div"
+                          customStyle={{
+                            margin: 0, borderRadius: 0, background: '#06060e',
+                            fontSize: 12, padding: '14px 16px', minHeight: '100%', lineHeight: 1.65,
+                          }}
+                        >
+                          {selectedFile.content}
+                        </SyntaxHighlighter>
+                      )
                     ) : (
                       <div style={{ padding: 16, color: 'var(--text-2)', fontSize: 12 }}>Select a file</div>
                     )}
@@ -1613,19 +2637,35 @@ RULES:
                   </div>
                 </div>
               ) : viewMode === 'code' ? (
-                <div style={{ height: '100%', overflow: 'auto' }}>
+                <div style={{ height: '100%', overflow: 'auto', display: 'flex', flexDirection: 'column' }}>
                   {selectedFile ? (
-                    <SyntaxHighlighter
-                      style={vscDarkPlus}
-                      language={selectedFile.language || 'text'}
-                      PreTag="div"
-                      customStyle={{
-                        margin: 0, borderRadius: 0, background: '#06060e',
-                        fontSize: 12, padding: '14px 16px', minHeight: '100%', lineHeight: 1.65,
-                      }}
-                    >
-                      {selectedFile.content}
-                    </SyntaxHighlighter>
+                    isEditingCode ? (
+                      <textarea
+                        value={selectedFile.content}
+                        onChange={e => handleCodeEdit(e.target.value)}
+                        spellCheck={false}
+                        style={{
+                          width: '100%', height: '100%', minHeight: '100%',
+                          background: '#06060e', color: '#d4d4d4',
+                          border: 'none', outline: 'none', resize: 'none',
+                          fontFamily: 'var(--font-mono)', fontSize: 12,
+                          lineHeight: 1.65, padding: '14px 16px',
+                          boxSizing: 'border-box',
+                        }}
+                      />
+                    ) : (
+                      <SyntaxHighlighter
+                        style={vscDarkPlus}
+                        language={selectedFile.language || 'text'}
+                        PreTag="div"
+                        customStyle={{
+                          margin: 0, borderRadius: 0, background: '#06060e',
+                          fontSize: 12, padding: '14px 16px', minHeight: '100%', lineHeight: 1.65,
+                        }}
+                      >
+                        {selectedFile.content}
+                      </SyntaxHighlighter>
+                    )
                   ) : (
                     <div style={{ padding: 16, color: 'var(--text-2)', fontSize: 12 }}>Select a file</div>
                   )}
@@ -1732,38 +2772,8 @@ RULES:
 
           {/* Messages */}
           <div style={{ flex: 1, overflowY: 'auto', padding: '10px' }}>
-            {/* Session restored notice */}
-            {sessionRestored && messages.length > 0 && (
-              <div style={{
-                display: 'flex', alignItems: 'center', gap: 6,
-                padding: '6px 10px', marginBottom: 8, borderRadius: 8,
-                background: 'rgba(108,99,255,0.08)', border: '1px solid rgba(108,99,255,0.2)',
-                fontSize: 10, color: 'var(--accent)', fontFamily: 'var(--font-mono)',
-              }}>
-                <RotateCcw size={11} /> Previous session restored — {files.length} file{files.length !== 1 ? 's' : ''} loaded
-              </div>
-            )}
-
             {messages.length === 0 && (
               <div style={{ paddingTop: 4 }}>
-                {sessionRestored && files.length > 0 && (
-                  <div style={{
-                    padding: '10px 12px', marginBottom: 10, borderRadius: 10,
-                    background: 'rgba(108,99,255,0.08)', border: '1px solid rgba(108,99,255,0.2)',
-                    fontSize: 11, color: 'var(--text-1)',
-                  }}>
-                    <div style={{ fontWeight: 600, color: 'var(--accent)', marginBottom: 4, fontSize: 12 }}>
-                      Previous project restored
-                    </div>
-                    <div style={{ color: 'var(--text-2)', fontSize: 10, fontFamily: 'var(--font-mono)' }}>
-                      {files.map(f => f.name).join(', ')}
-                    </div>
-                    <div style={{ marginTop: 6, display: 'flex', gap: 5 }}>
-                      <button type="button" style={{ ...btn(false), fontSize: 10 }} onClick={() => setViewMode('preview')}>View Preview</button>
-                      <button type="button" style={{ ...btn(false), fontSize: 10 }} onClick={() => setViewMode('editor')}>Open Editor</button>
-                    </div>
-                  </div>
-                )}
                 <div style={{ fontSize: 11, color: 'var(--text-2)', marginBottom: 8, fontFamily: 'var(--font-mono)' }}>Quick starts</div>
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 5 }}>
                   {STARTERS.map(s => (
@@ -1833,9 +2843,9 @@ RULES:
                   color: msg.role === 'user' ? '#fff' : 'var(--text-0)',
                   fontSize: 12, lineHeight: 1.55, wordBreak: 'break-word',
                 }}>
-                  {msg.role === 'assistant' && msg.isStreaming && !msg.content
-                    ? <span style={{ color: 'var(--text-2)', fontStyle: 'italic' }}>Generating...</span>
-                    : summarizeAssistantContent(msg.content)}
+                  {msg.role === 'assistant'
+                    ? renderAssistantMessage(msg)
+                    : msg.content}
                 </div>
                 {msg.role === 'assistant' && msg.files && msg.files.length > 0 && (
                   <div style={{ display: 'flex', gap: 4, marginTop: 4, flexWrap: 'wrap' }}>

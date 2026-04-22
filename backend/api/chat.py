@@ -2261,6 +2261,25 @@ async def get_session_events(session_id: str, request: Request):
     return {"session_id": session_id, "events": events}
 
 
+@router.get("/read-design-file")
+async def read_design_file(path: str = Query(..., max_length=1024), request: Request = None):
+    """Read a file from disk for Design Studio display. Only allows safe, non-system paths."""
+    from tools.path_guard import enforce_allowed_path
+    try:
+        safe_path = enforce_allowed_path(path)
+    except ValueError as e:
+        raise HTTPException(status_code=403, detail=str(e))
+    if not os.path.isfile(safe_path):
+        raise HTTPException(status_code=404, detail="File not found")
+    try:
+        with open(safe_path, "r", encoding="utf-8", errors="replace") as f:
+            content = f.read()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    filename = os.path.basename(safe_path)
+    return {"path": path, "filename": filename, "content": content}
+
+
 @router.get("/sessions/{session_id}/export")
 async def export_session(session_id: str, request: Request):
     require_api_auth(request)
