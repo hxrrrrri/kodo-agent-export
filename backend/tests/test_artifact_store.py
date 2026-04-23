@@ -32,7 +32,7 @@ async def test_upsert_creates_version(temp_store: ArtifactStore):
     assert saved["type"] == "react"
     assert "updated_at" in saved
 
-    rows = await temp_store.list("s1")
+    rows = await temp_store.list_artifacts("s1")
     assert len(rows) == 1
     assert rows[0]["id"] == "todo-app"
     assert rows[0]["latest_version"] == 1
@@ -93,4 +93,4 @@ async def test_delete_removes_artifact(temp_store: ArtifactStore):
     await temp_store.upsert("s1", {"id": "d", "type": "html", "title": "t", "version": 1, "files": []})
     assert await temp_store.delete("s1", "d") is True
     assert await temp_store.delete("s1", "d") is False
-    assert await temp_store.list("s1") == []
+    assert await temp_store.list_artifacts("s1") == []

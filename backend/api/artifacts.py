@@ -96,7 +96,7 @@ async def list_artifacts(session_id: str, request: Request) -> dict[str, Any]:
         return {"artifacts": []}
     require_api_auth(request)
     await enforce_rate_limit(request, MEMORY_RATE_LIMITER, "artifacts_list")
-    return {"artifacts": await artifact_store.list(session_id)}
+    return {"artifacts": await artifact_store.list_artifacts(session_id)}
 
 
 @router.get("/{session_id}/{artifact_id}")

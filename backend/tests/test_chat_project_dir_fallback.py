@@ -34,7 +34,7 @@ def test_send_uses_stored_session_project_dir_when_request_omits_it(monkeypatch,
     project_dir.mkdir(parents=True, exist_ok=True)
     expected_project_dir = chat_api.enforce_allowed_path(str(project_dir))
 
-    captured: dict[str, str] = {}
+    captured: dict[str, object] = {}
 
     async def fake_mark_session_activity(session_id: str):
         return {"last_active_at": "now"}

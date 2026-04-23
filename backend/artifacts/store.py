@@ -69,7 +69,7 @@ class ArtifactStore:
             await f.write(json.dumps(payload, ensure_ascii=True, indent=2))
         tmp.replace(path)
 
-    async def list(self, session_id: str) -> list[dict[str, Any]]:
+    async def list_artifacts(self, session_id: str) -> list[dict[str, Any]]:
         async with self._lock(session_id):
             payload = await self._load(session_id)
         rows: list[dict[str, Any]] = []
