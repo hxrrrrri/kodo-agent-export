@@ -14,86 +14,13 @@ const REACT_CDN = 'https://unpkg.com/react@18.2.0/umd/react.development.js'
 const REACT_DOM_CDN = 'https://unpkg.com/react-dom@18.2.0/umd/react-dom.development.js'
 const BABEL_CDN = 'https://unpkg.com/@babel/standalone@7.24.7/babel.min.js'
 
-const IMPORT_ALLOWLIST = new Set([
-  'react',
-  'react-dom',
-  'react-dom/client',
-  'lucide-react',
-  'framer-motion',
-  'clsx',
-  'zustand',
-])
-
-function esmRewrite(source: string, allowAllImports: boolean): string {
-  // Rewrite `from "x"` / `from 'x'` to `from "https://esm.sh/x"` for allowlisted deps.
-  return source.replace(/from\s+['"]([^'"]+)['"]/g, (match, pkg) => {
-    if (pkg.startsWith('http://') || pkg.startsWith('https://') || pkg.startsWith('./') || pkg.startsWith('../') || pkg.startsWith('/')) {
-      return match
-    }
-    if (allowAllImports || IMPORT_ALLOWLIST.has(pkg)) {
-      return `from "https://esm.sh/${pkg}?bundle"`
-    }
-    return `from "https://esm.sh/${pkg}?bundle"`
-  })
-}
-
-function buildReactSrcDoc(artifact: ArtifactV2Type, allowAllImports: boolean): string {
+function buildReactSrcDoc(artifact: ArtifactV2Type): string {
   const entry = artifact.files.find((f) => f.path === artifact.entrypoint) || artifact.files[0]
   const sourceRaw = entry?.content || ''
-  const usesModules = /^\s*import\s+/m.test(sourceRaw) || /\bexport\s+default\b/.test(sourceRaw)
 
-  // Transform with Babel standalone inside iframe. Provide React + ReactDOM globals.
-  const rewritten = esmRewrite(sourceRaw, allowAllImports)
-
-  if (usesModules) {
-    // Use esm.sh for everything; skip Babel. Inject an import map so `react` resolves.
-    return `<!DOCTYPE html>
-<html>
-<head>
-<meta charset="utf-8">
-<script type="importmap">
-{
-  "imports": {
-    "react": "https://esm.sh/react@18.2.0",
-    "react-dom": "https://esm.sh/react-dom@18.2.0",
-    "react-dom/client": "https://esm.sh/react-dom@18.2.0/client"
-  }
-}
-</script>
-<style>body{margin:0;font-family:system-ui,sans-serif} #root{min-height:100vh}</style>
-<script>
-window.addEventListener('error', function(e) {
-  try { parent.postMessage({ __kodo: 'artifact-error', message: String(e.message || e.error) }, '*'); } catch (_) {}
-});
-window.addEventListener('unhandledrejection', function(e) {
-  try { parent.postMessage({ __kodo: 'artifact-error', message: 'Unhandled: ' + String(e.reason || '') }, '*'); } catch (_) {}
-});
-</script>
-</head>
-<body>
-<div id="root"></div>
-<script type="module">
-import React from "react";
-import { createRoot } from "react-dom/client";
-window.React = React;
-${rewritten}
-try {
-  const root = createRoot(document.getElementById('root'));
-  const candidate = (typeof App !== 'undefined' && App) || (typeof default_1 !== 'undefined' && default_1);
-  if (candidate) {
-    root.render(React.createElement(candidate));
-  } else {
-    document.body.insertAdjacentText('beforeend', 'Artifact did not export a default component.');
-  }
-} catch (err) {
-  parent.postMessage({ __kodo: 'artifact-error', message: String(err && err.message || err) }, '*');
-}
-</script>
-</body>
-</html>`
-  }
-
-  // Legacy JSX: use Babel standalone + UMD React.
+  // Always use Babel + UMD globals — no <script type="module"> needed.
+  // Avoids CORS/null-origin issues in sandboxed srcdoc iframes (especially Firefox).
+  // Babel transforms JSX + import/export to CommonJS; a require() shim handles react/react-dom.
   return `<!DOCTYPE html>
 <html>
 <head>
@@ -107,31 +34,72 @@ window.addEventListener('unhandledrejection', function(e) {
   try { parent.postMessage({ __kodo: 'artifact-error', message: 'Unhandled: ' + String(e.reason || '') }, '*'); } catch (_) {}
 });
 </script>
-<script src="${REACT_CDN}" crossorigin></script>
-<script src="${REACT_DOM_CDN}" crossorigin></script>
+<script src="${REACT_CDN}"></script>
+<script src="${REACT_DOM_CDN}"></script>
 <script src="${BABEL_CDN}"></script>
 </head>
 <body>
 <div id="root"></div>
-<script type="text/babel" data-presets="env,react">
-${rewritten}
-try {
-  const candidate = (typeof App !== 'undefined' && App) || null;
-  if (candidate) {
-    ReactDOM.createRoot(document.getElementById('root')).render(React.createElement(candidate));
-  } else {
-    document.body.insertAdjacentText('beforeend', 'Artifact did not define an App component.');
+<script>
+(function() {
+  // CommonJS shim: Babel preset-env transforms import → require(); this resolves them.
+  var _requireCache = {};
+  window.require = function(pkg) {
+    if (_requireCache[pkg]) return _requireCache[pkg];
+    if (pkg === 'react') return window.React;
+    if (pkg === 'react-dom') return window.ReactDOM;
+    if (pkg === 'react-dom/client') return window.ReactDOM;
+    // Named subpath: try splitting
+    var base = pkg.split('/')[0];
+    if (base === 'react') return window.React;
+    console.warn('[kodo] require("' + pkg + '") not resolved in sandbox');
+    return {};
+  };
+
+  var source = ${JSON.stringify(sourceRaw)};
+  var transformed;
+  try {
+    transformed = Babel.transform(source, {
+      presets: [['env', { modules: 'commonjs', targets: 'last 2 Chrome versions' }], 'react'],
+      filename: 'artifact.jsx',
+    }).code;
+  } catch (err) {
+    parent.postMessage({ __kodo: 'artifact-error', message: 'Syntax: ' + String(err && err.message || err) }, '*');
+    return;
   }
-} catch (err) {
-  parent.postMessage({ __kodo: 'artifact-error', message: String(err && err.message || err) }, '*');
-}
+
+  var _exports = {};
+  var _module = { exports: _exports };
+  try {
+    // Append fallback: if no explicit export, look for App/Component in local scope.
+    var body = transformed + '\\n;if(!exports.default){if(typeof App!=="undefined")exports.default=App;else if(typeof Component!=="undefined")exports.default=Component;}';
+    // eslint-disable-next-line no-new-func
+    new Function('module', 'exports', 'require', 'React', 'ReactDOM', body)(
+      _module, _exports, window.require, window.React, window.ReactDOM
+    );
+  } catch (err) {
+    parent.postMessage({ __kodo: 'artifact-error', message: 'Runtime: ' + String(err && err.message || err) }, '*');
+    return;
+  }
+
+  var Comp = _exports.default || _exports['default'];
+  if (!Comp || typeof Comp !== 'function') {
+    parent.postMessage({ __kodo: 'artifact-error', message: 'No default React component exported. Define "export default function App()" or "export default App".' }, '*');
+    return;
+  }
+  try {
+    ReactDOM.createRoot(document.getElementById('root')).render(React.createElement(Comp));
+  } catch (err) {
+    parent.postMessage({ __kodo: 'artifact-error', message: 'Render: ' + String(err && err.message || err) }, '*');
+  }
+})();
 </script>
 </body>
-</html>`
+</html>`;
 }
 
-export function ReactRuntime({ artifact, allowForms, allowPopups, allowAllImports }: Props) {
-  const html = useMemo(() => buildReactSrcDoc(artifact, Boolean(allowAllImports)), [artifact, allowAllImports])
+export function ReactRuntime({ artifact, allowForms, allowPopups }: Props) {
+  const html = useMemo(() => buildReactSrcDoc(artifact), [artifact])
   const synthetic: ArtifactV2 = useMemo(() => ({
     ...artifact,
     type: 'html',

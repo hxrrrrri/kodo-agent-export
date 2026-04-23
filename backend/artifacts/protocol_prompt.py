@@ -58,6 +58,8 @@ graph TD; A[Login] --> B{Valid?}; B -->|Yes| C[Home]; B -->|No| D[Error]
 - No partial artifacts — close the fence only when content is complete.
 - Inline snippets stay in plain code fences, not artifacts.
 - Updates always include the full file; UI replaces, never patches.
+- **HTML**: load libs via `<script src="https://cdn...">`, not `<script type="module">` (sandbox blocks module fetches). Canvas and requestAnimationFrame work fine.
+- **React**: `import`/`export default` OK — Babel compiles them. Only react + react-dom pre-loaded.
 """.strip()
 
 

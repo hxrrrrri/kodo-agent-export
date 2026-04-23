@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { ArtifactV2 } from '../../store/chatStore'
 import { SandboxIframe } from './SandboxIframe'
 
@@ -17,9 +17,10 @@ type Props = {
  */
 export function HtmlRuntime({ artifact, allowForms, allowPopups }: Props) {
   const [errors, setErrors] = useState<string[]>([])
+  const [reloadKey, setReloadKey] = useState(0)
   const iframeRef = useRef<HTMLIFrameElement | null>(null)
 
-  const srcDoc = useMemo(() => buildSrcDoc(artifact), [artifact])
+  const srcDoc = useMemo(() => buildSrcDoc(artifact, reloadKey), [artifact, reloadKey])
 
   useEffect(() => {
     setErrors([])
@@ -33,7 +34,12 @@ export function HtmlRuntime({ artifact, allowForms, allowPopups }: Props) {
     }
     window.addEventListener('message', handler)
     return () => window.removeEventListener('message', handler)
-  }, [artifact.id, artifact.version])
+  }, [artifact.id, artifact.version, reloadKey])
+
+  const handleReload = useCallback(() => {
+    setErrors([])
+    setReloadKey((k) => k + 1)
+  }, [])
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', width: '100%', height: '100%' }}>
@@ -51,13 +57,31 @@ export function HtmlRuntime({ artifact, allowForms, allowPopups }: Props) {
           fontFamily: 'var(--font-mono, monospace)',
           fontSize: 11,
           padding: '6px 10px',
-          maxHeight: 120,
+          maxHeight: 140,
           overflow: 'auto',
           borderTop: '1px solid var(--border, #333)',
+          flexShrink: 0,
         }}>
-          <div style={{ opacity: 0.6, marginBottom: 4 }}>ARTIFACT ERRORS</div>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
+            <span style={{ opacity: 0.6 }}>ARTIFACT ERRORS</span>
+            <button
+              type="button"
+              onClick={handleReload}
+              style={{
+                background: 'none',
+                border: '1px solid var(--border, #444)',
+                color: 'var(--text-2, #aaa)',
+                cursor: 'pointer',
+                fontSize: 10,
+                padding: '1px 6px',
+                borderRadius: 4,
+              }}
+            >
+              Reload
+            </button>
+          </div>
           {errors.map((err, i) => (
-            <div key={i}>{err}</div>
+            <div key={i} style={{ marginBottom: 2 }}>{err}</div>
           ))}
         </div>
       )}
@@ -84,14 +108,26 @@ window.addEventListener('unhandledrejection', function(e) {
 });
 </script>`
 
-function buildSrcDoc(artifact: ArtifactV2): string {
+function injectErrorBridge(html: string): string {
+  if (/<head[^>]*>/i.test(html)) return html.replace(/<head[^>]*>/i, (m) => m + ERROR_BRIDGE)
+  if (/<\/body>/i.test(html)) return html.replace(/<\/body>/i, ERROR_BRIDGE + '</body>')
+  if (/<\/html>/i.test(html)) return html.replace(/<\/html>/i, ERROR_BRIDGE + '</html>')
+  return html + ERROR_BRIDGE
+}
+
+function buildSrcDoc(artifact: ArtifactV2, reloadKey = 0): string {
   if (artifact.files.length <= 1) {
     const file = artifact.files[0]
     const body = file?.content || ''
+    let result: string
     if (/<!DOCTYPE|<html[\s>]/i.test(body)) {
-      return body.replace(/<head[^>]*>/i, (m) => m + ERROR_BRIDGE)
+      result = injectErrorBridge(body)
+    } else {
+      result = `<!DOCTYPE html><html><head><meta charset="utf-8">${ERROR_BRIDGE}</head><body>${body}</body></html>`
     }
-    return `<!DOCTYPE html><html><head><meta charset="utf-8">${ERROR_BRIDGE}</head><body>${body}</body></html>`
+    // Append reload marker so iframe key changes force a real reload.
+    if (reloadKey > 0) result += `<!-- kodo-reload:${reloadKey} -->`
+    return result
   }
 
   // Multi-file bundle: inline the entrypoint and replace sibling references
@@ -129,10 +165,14 @@ function buildSrcDoc(artifact: ArtifactV2): string {
 </script>`
 
   const body = entrypoint.content
+  let result: string
   if (/<head[^>]*>/i.test(body)) {
-    return body.replace(/<head[^>]*>/i, (m) => m + ERROR_BRIDGE + rewriteScript)
+    result = body.replace(/<head[^>]*>/i, (m) => m + ERROR_BRIDGE + rewriteScript)
+  } else {
+    result = `<!DOCTYPE html><html><head><meta charset="utf-8">${ERROR_BRIDGE}${rewriteScript}</head><body>${body}</body></html>`
   }
-  return `<!DOCTYPE html><html><head><meta charset="utf-8">${ERROR_BRIDGE}${rewriteScript}</head><body>${body}</body></html>`
+  if (reloadKey > 0) result += `<!-- kodo-reload:${reloadKey} -->`
+  return result
 }
 
 function mimeForPath(path: string): string {
