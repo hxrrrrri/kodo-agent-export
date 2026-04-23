@@ -2345,6 +2345,50 @@ async def delete_session(session_id: str, request: Request):
     return {"deleted": True}
 
 
+class ForkSessionRequest(BaseModel):
+    at_index: int = Field(ge=0, description="Fork after this message index (0 = fork before first message)")
+    title: str | None = Field(default=None, max_length=200)
+
+
+@router.post("/sessions/{session_id}/fork", response_model=NewSessionResponse)
+async def fork_session(session_id: str, body: ForkSessionRequest, request: Request):
+    """Fork a session at a given message index, creating a new session with the same messages up to that point."""
+    require_api_auth(request)
+    await enforce_rate_limit(request, SESSION_RATE_LIMITER, "fork_session")
+
+    payload = await memory_manager.load_session_payload(session_id)
+    if payload is None:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    messages = list(payload.get("messages", []))
+    forked_messages = messages[: body.at_index + 1]
+
+    new_id = str(uuid.uuid4())
+    parent_metadata = payload.get("metadata", {}) or {}
+    fork_metadata: dict[str, Any] = {
+        "mode": parent_metadata.get("mode", DEFAULT_MODE),
+        "title": body.title or f"Fork of {parent_metadata.get('title', session_id[:8])}",
+        "forked_from": session_id,
+        "forked_at_index": body.at_index,
+    }
+    if "project_dir" in parent_metadata:
+        fork_metadata["project_dir"] = parent_metadata["project_dir"]
+
+    await memory_manager.save_session(
+        session_id=new_id,
+        messages=forked_messages,
+        metadata=fork_metadata,
+    )
+    log_audit_event(
+        "fork_session",
+        request_id=getattr(request.state, "request_id", None),
+        session_id=session_id,
+        new_session_id=new_id,
+        at_index=body.at_index,
+    )
+    return NewSessionResponse(session_id=new_id)
+
+
 @router.post("/memory/append")
 async def append_memory(body: MemoryAppendRequest, request: Request):
     require_api_auth(request)

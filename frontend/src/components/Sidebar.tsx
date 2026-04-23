@@ -31,13 +31,14 @@ import { PromptLibraryPanel } from './PromptLibraryPanel'
 import { PromptCompressorPanel } from './PromptCompressorPanel'
 import { SkillBuilderPanel } from './SkillBuilderPanel'
 import { CodeReviewPanel } from './CodeReviewPanel'
+import { ArtifactGallery } from './ArtifactGallery'
 
 type SidebarProps = {
   collapsed: boolean
   onToggleCollapse: () => void
 }
 
-type SidebarView = 'sessions' | 'providers' | 'agents' | 'usage' | 'prompts' | 'compressor' | 'skills' | 'crg' | 'review' | 'settings' | 'design'
+type SidebarView = 'sessions' | 'providers' | 'agents' | 'usage' | 'prompts' | 'compressor' | 'skills' | 'crg' | 'review' | 'settings' | 'design' | 'gallery'
 
 type RuntimeTask = {
   task_id: string
@@ -1156,6 +1157,16 @@ export function Sidebar({ collapsed, onToggleCollapse }: SidebarProps) {
             if (collapsed) onToggleCollapse()
           }}
           active={activeView === 'crg'}
+        />
+
+        <RailButton
+          icon={<Maximize2 size={15} />}
+          label="Artifact Gallery"
+          onClick={() => {
+            setActiveView('gallery')
+            if (collapsed) onToggleCollapse()
+          }}
+          active={activeView === 'gallery'}
         />
 
         <RailButton
@@ -2285,6 +2296,10 @@ export function Sidebar({ collapsed, onToggleCollapse }: SidebarProps) {
 
           {activeView === 'review' && (
             <CodeReviewPanel sessionId={sessionId} projectDir={projectDir} />
+          )}
+
+          {activeView === 'gallery' && (
+            <ArtifactGallery />
           )}
 
           {activeView === 'settings' && (

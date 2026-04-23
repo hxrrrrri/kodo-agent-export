@@ -1,6 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState, KeyboardEvent, MouseEvent as ReactMouseEvent } from 'react'
 import { Send, Square, FolderOpen, Zap, ImagePlus, X, Search, Terminal as TerminalIcon, Paperclip, CircleAlert, BookOpen, Mic, Palette, Check, ChevronDown, ChevronUp, Download } from 'lucide-react'
 import { CommandPalette, exportConversationAsMarkdown } from './CommandPalette'
+import { ContextRing } from './ContextRing'
+import { extractVariables, PromptVariablesModal } from './PromptVariables'
+import { SmartSuggestions } from './SmartSuggestions'
 import { useChat } from '../hooks/useChat'
 import { MessageBubble } from './MessageBubble'
 import { CommandDefinition, THEME_OPTIONS, ThemeKey, TodoItem } from '../store/chatStore'
@@ -465,6 +468,7 @@ export function ChatWindow({ editorOpen, onToggleEditor }: ChatWindowProps) {
     restoreCheckpoint,
     newSession,
     runDream,
+    forkSession,
   } = useChat()
   const [input, setInput] = useState('')
   const [isEditingPrompt, setIsEditingPrompt] = useState(false)
@@ -478,6 +482,8 @@ export function ChatWindow({ editorOpen, onToggleEditor }: ChatWindowProps) {
   const [paletteQuery, setPaletteQuery] = useState('')
   const [paletteIndex, setPaletteIndex] = useState(0)
   const [actionPaletteOpen, setActionPaletteOpen] = useState(false)
+  const [varModalPrompt, setVarModalPrompt] = useState<string | null>(null)
+  const [varModalVars, setVarModalVars] = useState<string[]>([])
   const [pendingImage, setPendingImage] = useState<PendingImage | null>(null)
   const [pendingFiles, setPendingFiles] = useState<FileAttachment[]>([])
   const [attachmentError, setAttachmentError] = useState('')
@@ -997,6 +1003,16 @@ export function ChatWindow({ editorOpen, onToggleEditor }: ChatWindowProps) {
     }
     if (observerMode) return
     if ((!msg && !pendingImage && pendingFiles.length === 0) || isLoading || attachmentUploading) return
+
+    // Smart Prompt Variables: intercept if {{variable}} placeholders detected
+    if (msg) {
+      const vars = extractVariables(msg)
+      if (vars.length > 0) {
+        setVarModalPrompt(msg)
+        setVarModalVars(vars)
+        return
+      }
+    }
 
     const imagePayload = pendingImage
       ? {
@@ -1862,6 +1878,7 @@ export function ChatWindow({ editorOpen, onToggleEditor }: ChatWindowProps) {
               <span style={{ color: 'var(--green)' }}>● READY</span>
             )}
           </span>
+          <ContextRing messages={messages} budget={CONTEXT_TOKEN_BUDGET} />
         </div>
 
         <button
@@ -2792,14 +2809,18 @@ export function ChatWindow({ editorOpen, onToggleEditor }: ChatWindowProps) {
           </div>
         )}
 
-        {filteredMessages.map((msg) => (
+        {filteredMessages.map((msg, idx) => (
           <MessageBubble
             key={msg.id}
             message={msg}
+            messageIndex={idx}
             searchQuery={messageSearchQuery}
             onEditUserPrompt={handleEditUserPrompt}
             onRetryUserPrompt={handleRetryUserPrompt}
             disableUserRetry={observerMode || isLoading || attachmentUploading}
+            onFork={(!observerMode && !isLoading && sessionId) ? (index) => {
+              void forkSession(sessionId, index)
+            } : undefined}
           />
         ))}
 
@@ -2864,6 +2885,16 @@ export function ChatWindow({ editorOpen, onToggleEditor }: ChatWindowProps) {
       }}>
         {/* Floating todo panel — above composer */}
         <FloatingTodoPanel items={activeTodoItems} />
+
+        {/* Smart ambient suggestions */}
+        <SmartSuggestions
+          messages={messages}
+          isLoading={isLoading}
+          onSelect={(prompt) => {
+            setInput(prompt)
+            setTimeout(() => textareaRef.current?.focus(), 50)
+          }}
+        />
 
         <div ref={composerRef} style={{ position: 'relative' }}>
           {showCommandSuggestions && (
@@ -3403,6 +3434,32 @@ export function ChatWindow({ editorOpen, onToggleEditor }: ChatWindowProps) {
             </div>
           </div>
         </div>
+      )}
+
+      {/* Prompt Variables fill-in modal */}
+      {varModalPrompt && (
+        <PromptVariablesModal
+          prompt={varModalPrompt}
+          variables={varModalVars}
+          onApply={(resolved) => {
+            setVarModalPrompt(null)
+            setVarModalVars([])
+            setInput(resolved)
+            // Immediately send after a tick so input state is updated
+            setTimeout(() => {
+              void (async () => {
+                if (!observerMode && !isLoading) {
+                  sendMessage(resolved, undefined, [], getSendStreamHandlers())
+                  setInput('')
+                }
+              })()
+            }, 0)
+          }}
+          onCancel={() => {
+            setVarModalPrompt(null)
+            setVarModalVars([])
+          }}
+        />
       )}
 
       {/* Action palette — Cmd+Shift+K */}

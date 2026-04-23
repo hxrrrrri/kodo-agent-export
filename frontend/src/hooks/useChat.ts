@@ -977,6 +977,27 @@ export function useChat() {
     }
   }, [store])
 
+  const forkSession = useCallback(async (sessionId: string, atIndex: number) => {
+    try {
+      const res = await fetch(`${API}/sessions/${encodeURIComponent(sessionId)}/fork`, {
+        method: 'POST',
+        headers: buildApiHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify({ at_index: atIndex }),
+      })
+      if (!res.ok) throw new Error(await parseApiError(res))
+      const data = await res.json()
+      const newId = String(data.session_id || '')
+      if (!newId) throw new Error('No session id returned')
+      await loadSessions()
+      await loadSession(newId)
+      return newId
+    } catch (e) {
+      console.error('Failed to fork session', e)
+      store.setError(String(e))
+      return null
+    }
+  }, [loadSession, loadSessions, store])
+
   const deleteSession = useCallback(async (sessionId: string) => {
     try {
       const res = await fetch(`${API}/sessions/${sessionId}`, {
@@ -1399,6 +1420,7 @@ export function useChat() {
     setSessionMode,
     newSession,
     deleteSession,
+    forkSession,
     loadUsage,
     loadPendingPermissions,
     respondPermission,

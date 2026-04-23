@@ -565,17 +565,21 @@ function ThinkingBlock({ text }: { text: string }) {
 
 type MessageBubbleProps = {
   message: Message
+  messageIndex?: number
   searchQuery?: string
   onEditUserPrompt?: (content: string) => void
   onRetryUserPrompt?: (content: string) => void
+  onFork?: (index: number) => void
   disableUserRetry?: boolean
 }
 
 export function MessageBubble({
   message,
+  messageIndex,
   searchQuery,
   onEditUserPrompt,
   onRetryUserPrompt,
+  onFork,
   disableUserRetry = false,
 }: MessageBubbleProps) {
   const [copiedIndex, setCopiedIndex] = useState<number | null>(null)
@@ -1070,6 +1074,8 @@ export function MessageBubble({
             marginTop: 10,
             display: 'flex',
             justifyContent: 'flex-start',
+            gap: 6,
+            alignItems: 'center',
           }}
         >
           <button
@@ -1090,6 +1096,37 @@ export function MessageBubble({
           >
             <Copy size={12} />
           </button>
+
+          {onFork && messageIndex !== undefined && (
+            <button
+              type="button"
+              onClick={() => onFork(messageIndex)}
+              title="Fork conversation from this message — start a new branch"
+              style={{
+                border: '1px solid var(--border)',
+                background: 'var(--bg-2)',
+                color: 'var(--text-2)',
+                borderRadius: 6,
+                cursor: 'pointer',
+                padding: '5px 9px',
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: 4,
+                fontSize: 10,
+                fontFamily: 'var(--font-mono)',
+              }}
+              onMouseEnter={(e) => {
+                ;(e.currentTarget as HTMLElement).style.borderColor = 'var(--border-bright)'
+                ;(e.currentTarget as HTMLElement).style.color = 'var(--accent)'
+              }}
+              onMouseLeave={(e) => {
+                ;(e.currentTarget as HTMLElement).style.borderColor = 'var(--border)'
+                ;(e.currentTarget as HTMLElement).style.color = 'var(--text-2)'
+              }}
+            >
+              ⑂ FORK
+            </button>
+          )}
         </div>
       )}
 
