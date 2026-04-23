@@ -1,7 +1,10 @@
 import { useEffect, useRef, useState } from 'react'
-import { Copy, Pencil, RotateCcw, Volume2, Square, ExternalLink, X, Maximize2 } from 'lucide-react'
+import { ChevronDown, ChevronRight, Copy, Pencil, RotateCcw, Volume2, Square, ExternalLink, X, Maximize2 } from 'lucide-react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
+import remarkMath from 'remark-math'
+import rehypeKatex from 'rehype-katex'
+import 'katex/dist/katex.min.css'
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter'
 import { vscDarkPlus } from 'react-syntax-highlighter/dist/esm/styles/prism'
 import { AdvisorReview, ArtifactItem, ArtifactRef, Message, PreviewItem, useChatStore } from '../store/chatStore'
@@ -501,6 +504,65 @@ function PreviewPanel({ previews }: { previews: PreviewItem[] }) {
   )
 }
 
+/** Strip <thinking>...</thinking> blocks from content and return them separately. */
+function extractThinkingBlocks(content: string): { thinking: string[]; body: string } {
+  const blocks: string[] = []
+  const body = content.replace(/<thinking>([\s\S]*?)<\/thinking>/gi, (_, inner) => {
+    blocks.push(inner.trim())
+    return ''
+  })
+  return { thinking: blocks, body: body.trimStart() }
+}
+
+function ThinkingBlock({ text }: { text: string }) {
+  const [open, setOpen] = useState(false)
+  return (
+    <div style={{
+      margin: '0 0 10px 0',
+      border: '1px solid var(--border)',
+      borderRadius: 'var(--radius)',
+      overflow: 'hidden',
+      background: 'var(--bg-2)',
+    }}>
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        style={{
+          width: '100%',
+          display: 'flex',
+          alignItems: 'center',
+          gap: 6,
+          padding: '6px 10px',
+          background: 'none',
+          border: 'none',
+          cursor: 'pointer',
+          color: 'var(--text-2)',
+          fontSize: 11,
+          fontFamily: 'var(--font-mono)',
+          letterSpacing: '0.08em',
+        }}
+      >
+        {open ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+        THINKING
+      </button>
+      {open && (
+        <div style={{
+          padding: '8px 12px',
+          fontSize: 12,
+          color: 'var(--text-2)',
+          lineHeight: 1.6,
+          borderTop: '1px solid var(--border)',
+          whiteSpace: 'pre-wrap',
+          wordBreak: 'break-word',
+          fontStyle: 'italic',
+        }}>
+          {text}
+        </div>
+      )}
+    </div>
+  )
+}
+
 type MessageBubbleProps = {
   message: Message
   searchQuery?: string
@@ -526,8 +588,14 @@ export function MessageBubble({
   const isUser = message.role === 'user'
   const normalizedSearch = (searchQuery || '').trim()
   const hasSearch = normalizedSearch.length > 0
-  const contentMatch = hasSearch && message.content.toLowerCase().includes(normalizedSearch.toLowerCase())
-  const generatedImageUrl = !isUser ? extractGeneratedImageUrl(message.content) : null
+
+  // Parse out <thinking> blocks so they render separately
+  const { thinking: thinkingBlocks, body: displayContent } = isUser
+    ? { thinking: [], body: message.content }
+    : extractThinkingBlocks(message.content)
+
+  const contentMatch = hasSearch && displayContent.toLowerCase().includes(normalizedSearch.toLowerCase())
+  const generatedImageUrl = !isUser ? extractGeneratedImageUrl(displayContent) : null
   let codeBlockIndex = -1
   const imageSrc = (() => {
     if (!message.imageAttachment) return ''
@@ -637,7 +705,7 @@ export function MessageBubble({
   }
 
   const handleCopyAssistantResponse = async () => {
-    const text = String(message.content || '')
+    const text = String(message.content || '').replace(/<thinking>[\s\S]*?<\/thinking>/gi, '').trimStart()
     if (!text.trim()) return
     const copied = await copyTextToClipboard(text)
     if (!copied) return
@@ -791,6 +859,11 @@ export function MessageBubble({
 
       {/* Thinking animation handled by FloatingTodoPanel / ChatWindow KodoThinkingIndicator */}
 
+      {/* Thinking blocks (extracted from <thinking> tags) */}
+      {thinkingBlocks.map((t, i) => (
+        <ThinkingBlock key={i} text={t} />
+      ))}
+
       {/* Advisor review */}
       {message.advisorReview && <AdvisorReviewCard review={message.advisorReview} />}
 
@@ -823,7 +896,7 @@ export function MessageBubble({
         </div>
       )}
 
-      {message.content && (
+      {displayContent && (
         <div style={{
           fontSize: 14,
           lineHeight: 1.7,
@@ -833,11 +906,12 @@ export function MessageBubble({
         }}>
           {hasSearch ? (
             <div style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
-              {renderHighlightedText(message.content, normalizedSearch)}
+              {renderHighlightedText(displayContent, normalizedSearch)}
             </div>
           ) : (
             <ReactMarkdown
-              remarkPlugins={[remarkGfm]}
+              remarkPlugins={[remarkGfm, remarkMath]}
+              rehypePlugins={[rehypeKatex]}
               components={{
                 code({ node, inline, className, children, ...props }: any) {
                   const match = /language-([\w-]+)/.exec(className || '')
@@ -983,14 +1057,14 @@ export function MessageBubble({
                 },
               }}
             >
-              {message.content}
+              {displayContent}
             </ReactMarkdown>
           )}
           {message.isStreaming && <CursorBlink />}
         </div>
       )}
 
-      {message.content.trim() && (
+      {displayContent.trim() && (
         <div
           style={{
             marginTop: 10,

@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useState } from 'react'
-import { Code, Copy, Download, Eye, FileArchive, Link2, Monitor, Share2, Smartphone, SplitSquareHorizontal, Tablet, X } from 'lucide-react'
+import React, { useEffect, useMemo, useState } from 'react'
+import { Code, Copy, Download, Eye, FileArchive, Link2, Maximize2, Minimize2, Monitor, Share2, Smartphone, SplitSquareHorizontal, Tablet, X } from 'lucide-react'
 import { ArtifactV2, useChatStore } from '../../store/chatStore'
 import { ArtifactRuntime, canLivePreview } from './ArtifactRuntime'
 import { CodeRuntime } from './CodeRuntime'
@@ -37,6 +37,7 @@ export function ArtifactSidePanelV2({ artifactId, onClose }: Props) {
   const [shareStatus, setShareStatus] = useState<string>('')
   const [allowForms, setAllowForms] = useState(false)
   const [allowPopups, setAllowPopups] = useState(false)
+  const [fullscreen, setFullscreen] = useState(false)
 
   useEffect(() => {
     // When the artifact gets a new version, jump to it.
@@ -113,15 +114,28 @@ export function ArtifactSidePanelV2({ artifactId, onClose }: Props) {
     }
   }
 
+  const panelStyle: React.CSSProperties = fullscreen
+    ? {
+        position: 'fixed',
+        inset: 0,
+        zIndex: 9998,
+        display: 'flex',
+        flexDirection: 'column',
+        height: '100%',
+        background: 'var(--bg-1)',
+        overflow: 'hidden',
+      }
+    : {
+        display: 'flex',
+        flexDirection: 'column',
+        height: '100%',
+        background: 'var(--bg-1)',
+        borderLeft: '1px solid var(--border)',
+        overflow: 'hidden',
+      }
+
   return (
-    <div style={{
-      display: 'flex',
-      flexDirection: 'column',
-      height: '100%',
-      background: 'var(--bg-1)',
-      borderLeft: '1px solid var(--border)',
-      overflow: 'hidden',
-    }}>
+    <div style={panelStyle}>
       {/* Header */}
       <div style={{
         display: 'flex',
@@ -173,6 +187,14 @@ export function ArtifactSidePanelV2({ artifactId, onClose }: Props) {
         <button type="button" onClick={share} style={iconBtn()} title="Share link">
           {shareStatus ? <Link2 size={13} /> : <Share2 size={13} />}
           {shareStatus && <span style={{ fontSize: 9, color: 'var(--text-2)' }}>{shareStatus}</span>}
+        </button>
+        <button
+          type="button"
+          onClick={() => setFullscreen((v) => !v)}
+          style={iconBtn()}
+          title={fullscreen ? 'Exit fullscreen' : 'Fullscreen preview'}
+        >
+          {fullscreen ? <Minimize2 size={13} /> : <Maximize2 size={13} />}
         </button>
         <button type="button" onClick={onClose} style={iconBtn()} title="Close panel">
           <X size={14} />

@@ -13,6 +13,7 @@ import {
   RotateCcw,
   Search,
   Settings,
+  Star,
   Sun,
   Trash2,
   X,
@@ -342,8 +343,10 @@ export function Sidebar({ collapsed, onToggleCollapse }: SidebarProps) {
     theme,
     setTheme,
   } = useChat()
+  const toggleSessionStar = useChatStore((s) => s.toggleSessionStar)
 
   const [activeView, setActiveView] = useState<SidebarView>('sessions')
+  const [showStarredOnly, setShowStarredOnly] = useState(false)
   const [agentNodes, setAgentNodes] = useState<AgentNode[]>([])
   const [agentGraphError, setAgentGraphError] = useState<string | null>(null)
   const [agentGraphLastUpdatedAt, setAgentGraphLastUpdatedAt] = useState<string>('')
@@ -616,14 +619,16 @@ export function Sidebar({ collapsed, onToggleCollapse }: SidebarProps) {
       .split(/\s+/)
       .filter(Boolean)
 
-    if (tokens.length === 0) return sessions
+    let filtered = sessions
+    if (showStarredOnly) filtered = filtered.filter((s) => s.starred)
+    if (tokens.length === 0) return filtered
 
-    return sessions.filter((session) => {
+    return filtered.filter((session) => {
       const title = (session.title || '').toLowerCase()
       const sessionKey = session.session_id.toLowerCase()
       return tokens.every((token) => title.includes(token) || sessionKey.includes(token))
     })
-  }, [searchQuery, sessions])
+  }, [searchQuery, sessions, showStarredOnly])
 
   const agentSnapshot = useMemo(() => {
     const sessionsCount = agentNodes.filter((node) => node.type === 'session').length
@@ -1363,7 +1368,30 @@ export function Sidebar({ collapsed, onToggleCollapse }: SidebarProps) {
           {activeView === 'sessions' && (
             <div style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
               <div style={{ padding: '6px 14px 8px' }}>
-                <div style={{ fontSize: 12, color: 'var(--text-2)', marginBottom: 8 }}>Search chats</div>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
+                  <span style={{ fontSize: 12, color: 'var(--text-2)' }}>Search chats</span>
+                  <button
+                    type="button"
+                    onClick={() => setShowStarredOnly((v) => !v)}
+                    title={showStarredOnly ? 'Show all sessions' : 'Show starred only'}
+                    style={{
+                      background: showStarredOnly ? 'var(--accent-dim)' : 'transparent',
+                      border: `1px solid ${showStarredOnly ? 'var(--accent)' : 'var(--border)'}`,
+                      color: showStarredOnly ? 'var(--yellow, #f1c40f)' : 'var(--text-2)',
+                      borderRadius: 6,
+                      padding: '2px 7px',
+                      cursor: 'pointer',
+                      fontSize: 10,
+                      fontFamily: 'var(--font-mono)',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: 4,
+                    }}
+                  >
+                    <Star size={10} fill={showStarredOnly ? 'currentColor' : 'none'} />
+                    STARRED
+                  </button>
+                </div>
                 <input
                   ref={searchInputRef}
                   type="text"
@@ -1407,6 +1435,7 @@ export function Sidebar({ collapsed, onToggleCollapse }: SidebarProps) {
                       onSelect={() => loadSession(session.session_id)}
                       onReplay={() => setReplaySessionId(session.session_id)}
                       onDelete={() => deleteSession(session.session_id)}
+                      onStar={() => toggleSessionStar(session.session_id)}
                     />
                   ))
                 )}
@@ -2847,6 +2876,7 @@ function SessionRow({
   onSelect,
   onReplay,
   onDelete,
+  onStar,
 }: {
   session: Session
   active: boolean
@@ -2854,6 +2884,7 @@ function SessionRow({
   onSelect: () => void
   onReplay: () => void
   onDelete: () => void
+  onStar: () => void
 }) {
   const normalizedSearch = searchQuery.trim()
   const hasSearch = normalizedSearch.length > 0
@@ -2889,6 +2920,29 @@ function SessionRow({
           {formatDate(session.updated_at)}
         </div>
       </div>
+      <button
+        type="button"
+        onClick={(event) => {
+          event.stopPropagation()
+          onStar()
+        }}
+        title={session.starred ? 'Unstar session' : 'Star session'}
+        aria-label={session.starred ? 'Unstar' : 'Star'}
+        style={{
+          border: 'none',
+          background: 'transparent',
+          color: session.starred ? 'var(--yellow, #f1c40f)' : 'var(--text-2)',
+          width: 20,
+          height: 20,
+          borderRadius: 4,
+          cursor: 'pointer',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+        }}
+      >
+        <Star size={12} fill={session.starred ? 'currentColor' : 'none'} />
+      </button>
       <button
         type="button"
         onClick={(event) => {

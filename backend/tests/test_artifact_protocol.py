@@ -19,9 +19,8 @@ def test_build_artifact_system_block_enabled_returns_protocol():
 
 
 def test_artifact_protocol_prompt_is_compact():
-    # Hard budget: under ~1800 characters keeps it under ~400 tokens even for
-    # BPE tokenizers with poor chunking.
-    assert len(ARTIFACT_PROTOCOL_PROMPT) < 2400
+    # Budget: under ~600 tokens even for BPE tokenizers with poor chunking.
+    assert len(ARTIFACT_PROTOCOL_PROMPT) < 2600
 
 
 @pytest.mark.asyncio

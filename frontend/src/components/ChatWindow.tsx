@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, KeyboardEvent, MouseEvent as ReactMouseEvent } from 'react'
-import { Send, Square, FolderOpen, Zap, ImagePlus, X, Search, Terminal as TerminalIcon, Paperclip, CircleAlert, BookOpen, Mic, Palette, Check, ChevronDown, ChevronUp } from 'lucide-react'
+import { Send, Square, FolderOpen, Zap, ImagePlus, X, Search, Terminal as TerminalIcon, Paperclip, CircleAlert, BookOpen, Mic, Palette, Check, ChevronDown, ChevronUp, Download } from 'lucide-react'
+import { CommandPalette, exportConversationAsMarkdown } from './CommandPalette'
 import { useChat } from '../hooks/useChat'
 import { MessageBubble } from './MessageBubble'
 import { CommandDefinition, THEME_OPTIONS, ThemeKey, TodoItem } from '../store/chatStore'
@@ -476,6 +477,7 @@ export function ChatWindow({ editorOpen, onToggleEditor }: ChatWindowProps) {
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false)
   const [paletteQuery, setPaletteQuery] = useState('')
   const [paletteIndex, setPaletteIndex] = useState(0)
+  const [actionPaletteOpen, setActionPaletteOpen] = useState(false)
   const [pendingImage, setPendingImage] = useState<PendingImage | null>(null)
   const [pendingFiles, setPendingFiles] = useState<FileAttachment[]>([])
   const [attachmentError, setAttachmentError] = useState('')
@@ -1313,6 +1315,20 @@ export function ChatWindow({ editorOpen, onToggleEditor }: ChatWindowProps) {
         return
       }
 
+      // Ctrl/Cmd+Shift+K - Open action palette
+      if (isMeta && event.shiftKey && event.key.toLowerCase() === 'k') {
+        event.preventDefault()
+        setActionPaletteOpen((prev) => !prev)
+        return
+      }
+
+      // Ctrl/Cmd+Shift+E - Export conversation
+      if (isMeta && event.shiftKey && event.key.toLowerCase() === 'e') {
+        event.preventDefault()
+        exportConversationAsMarkdown(messages, sessionId)
+        return
+      }
+
       if (event.key === 'Escape' && commandPaletteOpen) {
         event.preventDefault()
         setCommandPaletteOpen(false)
@@ -1347,6 +1363,7 @@ export function ChatWindow({ editorOpen, onToggleEditor }: ChatWindowProps) {
     handleSend,
     input,
     isLoading,
+    messages,
     newSession,
     observerMode,
     restoreCheckpoint,
@@ -2152,6 +2169,41 @@ export function ChatWindow({ editorOpen, onToggleEditor }: ChatWindowProps) {
           })}
         >
           SHORTCUTS
+        </button>
+
+        <button
+          type="button"
+          onClick={() => exportConversationAsMarkdown(messages, sessionId)}
+          title="Export conversation as Markdown (⇧⌘E)"
+          disabled={messages.length === 0}
+          style={{
+            background: 'none',
+            border: '1px solid var(--border)',
+            color: 'var(--text-2)',
+            padding: '4px 10px',
+            borderRadius: 'var(--radius)',
+            cursor: messages.length === 0 ? 'not-allowed' : 'pointer',
+            fontSize: 11,
+            fontFamily: 'var(--font-mono)',
+            display: 'flex',
+            alignItems: 'center',
+            gap: 5,
+            opacity: messages.length === 0 ? 0.4 : 1,
+            transition: 'all 0.15s',
+          }}
+          onMouseEnter={(e) => {
+            if (messages.length > 0) {
+              ;(e.currentTarget as HTMLElement).style.borderColor = 'var(--border-bright)'
+              ;(e.currentTarget as HTMLElement).style.color = 'var(--text-0)'
+            }
+          }}
+          onMouseLeave={(e) => {
+            ;(e.currentTarget as HTMLElement).style.borderColor = 'var(--border)'
+            ;(e.currentTarget as HTMLElement).style.color = 'var(--text-2)'
+          }}
+        >
+          <Download size={11} />
+          EXPORT
         </button>
 
         <div ref={themeMenuRef} style={{ position: 'relative' }}>
@@ -3352,6 +3404,12 @@ export function ChatWindow({ editorOpen, onToggleEditor }: ChatWindowProps) {
           </div>
         </div>
       )}
+
+      {/* Action palette — Cmd+Shift+K */}
+      <CommandPalette
+        open={actionPaletteOpen}
+        onClose={() => setActionPaletteOpen(false)}
+      />
     </div>
   )
 }

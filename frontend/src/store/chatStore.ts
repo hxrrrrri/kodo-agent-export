@@ -131,6 +131,7 @@ export interface Session {
   updated_at: string
   message_count: number
   mode?: string
+  starred?: boolean
 }
 
 export interface UsageSummary {
@@ -237,6 +238,7 @@ interface ChatState {
   upsertSessionArtifact: (artifact: ArtifactV2) => void
   clearSessionArtifacts: () => void
   setSelectedArtifactV2: (ref: { id: string; version: number } | null) => void
+  toggleSessionStar: (sessionId: string) => void
 }
 
 export const useChatStore = create<ChatState>((set) => ({
@@ -317,4 +319,10 @@ export const useChatStore = create<ChatState>((set) => ({
     }),
   clearSessionArtifacts: () => set({ sessionArtifacts: {}, selectedArtifactV2: null }),
   setSelectedArtifactV2: (ref) => set({ selectedArtifactV2: ref }),
+  toggleSessionStar: (sessionId) =>
+    set((s) => ({
+      sessions: s.sessions.map((sess) =>
+        sess.session_id === sessionId ? { ...sess, starred: !sess.starred } : sess
+      ),
+    })),
 }))

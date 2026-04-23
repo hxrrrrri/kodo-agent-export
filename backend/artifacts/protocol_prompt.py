@@ -58,8 +58,8 @@ graph TD; A[Login] --> B{Valid?}; B -->|Yes| C[Home]; B -->|No| D[Error]
 - No partial artifacts — close the fence only when content is complete.
 - Inline snippets stay in plain code fences, not artifacts.
 - Updates always include the full file; UI replaces, never patches.
-- **HTML**: load libs via `<script src="https://cdn...">`, not `<script type="module">` (sandbox blocks module fetches). Canvas and requestAnimationFrame work fine.
-- **React**: `import`/`export default` OK — Babel compiles them. Only react + react-dom pre-loaded.
+- **HTML**: use `<script src="https://cdn...">` for libs (no `<script type="module">`). Canvas + rAF work. Tailwind: add `<script src="https://cdn.tailwindcss.com"></script>`.
+- **React**: any npm package works (`lucide-react`, `framer-motion`, `recharts`, `zustand`…). Tailwind auto-included. Use `export default function App()`.
 """.strip()
 
 
