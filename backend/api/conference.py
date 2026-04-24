@@ -28,6 +28,7 @@ from pydantic import BaseModel, Field
 
 from api.security import require_api_auth
 from providers.openai_compat import openai_compat_chat
+from providers.ollama_provider import list_ollama_models
 from providers.smart_router import SmartRouter, build_default_providers
 
 logger = logging.getLogger(__name__)
@@ -336,3 +337,27 @@ async def list_conference_providers(request: Request):
             for p in sr.providers
         ]
     }
+
+
+@router.get("/models")
+async def list_conference_models(request: Request):
+    """Return available models per provider. Ollama models are fetched live."""
+    require_api_auth(request)
+    sr = _get_router()
+    if not sr._initialized:
+        await sr.initialize()
+
+    result: dict[str, list[str]] = {}
+    for p in sr.providers:
+        if not p.is_configured:
+            continue
+        if p.name in ("ollama", "atomic-chat"):
+            # Fetch live models from Ollama
+            models = await list_ollama_models()
+            result[p.name] = models if models else [p.big_model]
+        else:
+            # Use configured big + small model (deduplicated)
+            models_list = list(dict.fromkeys([p.big_model, p.small_model]))
+            result[p.name] = [m for m in models_list if m]
+
+    return {"models": result}

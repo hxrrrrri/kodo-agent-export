@@ -621,9 +621,15 @@ export function ChatWindow({ editorOpen, onToggleEditor }: ChatWindowProps) {
   const [briefOpen, setBriefOpen] = useState(false)
   const [conferenceMode, setConferenceMode] = useState(false)
   const [conferenceProviders, setConferenceProviders] = useState<Array<{name: string; big_model: string}>>([])
-  const [conferenceSelected, setConferenceSelected] = useState<string[]>([])
+  const [conferenceModels, setConferenceModels] = useState<Record<string, string[]>>({})
+  // Each slot: { provider, model, name }
+  const [conferenceSlots, setConferenceSlots] = useState<Array<{provider: string; model: string; name: string}>>([])
+  // Keep conferenceSelected for backward compat (array of provider names for display)
+  const conferenceSelected = conferenceSlots.map((s) => s.provider)
   const [conferenceThread, setConferenceThread] = useState<ConferenceThreadData | null>(null)
   const conferenceAbortRef = useRef<AbortController | null>(null)
+  const [headerCollapsed, setHeaderCollapsed] = useState(false)
+  const [searchVisible, setSearchVisible] = useState(false)
   const promptHistoryRef = useRef<string[]>([])
   const historyIndexRef = useRef<number>(-1)
   const draftBeforeHistoryRef = useRef<string>('')
@@ -702,23 +708,33 @@ export function ChatWindow({ editorOpen, onToggleEditor }: ChatWindowProps) {
     bottomRef.current?.scrollIntoView({ behavior: isLoading ? 'auto' : 'smooth' })
   }, [messages, isLoading])
 
-  // Load conference providers
+  // Load conference providers + models (including live Ollama)
   useEffect(() => {
-    fetch('/api/conference/providers', { headers: buildApiHeaders() })
-      .then((r) => r.ok ? r.json() : null)
-      .then((d) => {
-        if (d?.providers) {
-          const configured = d.providers.filter((p: any) => p.configured)
+    const loadProviders = async () => {
+      try {
+        const [provRes, modRes] = await Promise.all([
+          fetch('/api/conference/providers', { headers: buildApiHeaders() }),
+          fetch('/api/conference/models', { headers: buildApiHeaders() }),
+        ])
+        const provData = provRes.ok ? await provRes.json() : null
+        const modData = modRes.ok ? await modRes.json() : null
+
+        if (provData?.providers) {
+          const configured = provData.providers.filter((p: any) => p.configured)
           setConferenceProviders(configured)
-          // Default select first 2
-          if (configured.length >= 2) {
-            setConferenceSelected([configured[0].name, configured[1].name])
-          } else if (configured.length === 1) {
-            setConferenceSelected([configured[0].name])
-          }
+          if (modData?.models) setConferenceModels(modData.models)
+
+          // Default: first 2 configured providers, each with their big_model
+          const slots = configured.slice(0, 2).map((p: any) => ({
+            provider: p.name,
+            model: (modData?.models?.[p.name]?.[0]) || p.big_model || '',
+            name: `${p.name}/${(modData?.models?.[p.name]?.[0]) || p.big_model || ''}`,
+          }))
+          setConferenceSlots(slots)
         }
-      })
-      .catch(() => {})
+      } catch { /* ignore */ }
+    }
+    void loadProviders()
   }, [])
 
   // Draft auto-save: persist unsent input to localStorage
@@ -1183,13 +1199,13 @@ export function ChatWindow({ editorOpen, onToggleEditor }: ChatWindowProps) {
   }
 
   const runConference = useCallback(async (prompt: string) => {
-    if (conferenceSelected.length < 2) return
+    if (conferenceSlots.length < 2) return
 
-    const initialResults: ConferenceResult[] = conferenceSelected.map((prov, i) => ({
+    const initialResults: ConferenceResult[] = conferenceSlots.map((slot, i) => ({
       participantId: i,
-      name: conferenceProviders.find((p) => p.name === prov)?.name || prov,
-      provider: prov,
-      color: CONFERENCE_COLORS[prov] || '#888',
+      name: slot.model ? `${slot.provider}/${slot.model.split(':')[0]}` : slot.provider,
+      provider: slot.provider,
+      color: CONFERENCE_COLORS[slot.provider] || '#888',
       text: '',
       done: false,
       error: null,
@@ -1211,8 +1227,9 @@ export function ChatWindow({ editorOpen, onToggleEditor }: ChatWindowProps) {
     try {
       const body = {
         prompt,
-        participants: conferenceSelected.map((prov, i) => ({
-          provider: prov,
+        participants: conferenceSlots.map((slot, i) => ({
+          provider: slot.provider,
+          model: slot.model || undefined,
           name: initialResults[i].name,
         })),
         synthesize: true,
@@ -1288,7 +1305,7 @@ export function ChatWindow({ editorOpen, onToggleEditor }: ChatWindowProps) {
         setConferenceThread((prev) => prev ? { ...prev, running: false } : prev)
       }
     }
-  }, [conferenceSelected, conferenceProviders])
+  }, [conferenceSlots])
 
   const handleSend = useCallback(async () => {
     const msg = input.trim()
@@ -1311,7 +1328,7 @@ export function ChatWindow({ editorOpen, onToggleEditor }: ChatWindowProps) {
     }
 
     // Conference mode: route to multi-model debate
-    if (conferenceMode && msg && conferenceSelected.length >= 2) {
+    if (conferenceMode && msg && conferenceSlots.length >= 2) {
       setInput('')
       setConferenceThread(null)
       setTimeout(() => void runConference(msg), 50)
@@ -1389,7 +1406,7 @@ export function ChatWindow({ editorOpen, onToggleEditor }: ChatWindowProps) {
     } finally {
       setAttachmentUploading(false)
     }
-  }, [attachmentUploading, conferenceMode, conferenceSelected, depthMode, getSendStreamHandlers, input, isLoading, observerMode, pendingFiles, pendingImage, projectDir, runConference, sendMessage, stopGeneration, uploadZipAttachment])
+  }, [attachmentUploading, conferenceMode, conferenceSlots, depthMode, getSendStreamHandlers, input, isLoading, observerMode, pendingFiles, pendingImage, projectDir, runConference, sendMessage, stopGeneration, uploadZipAttachment])
 
   const runTerminalCommand = useCallback(async (command: string): Promise<{ cwd?: string }> => {
     const trimmed = command.trim()
@@ -2245,28 +2262,48 @@ export function ChatWindow({ editorOpen, onToggleEditor }: ChatWindowProps) {
       onDragLeave={handleChatDragLeave}
       onDrop={handleChatDrop}
     >
-      {/* Header */}
+      {/* Header — collapsible */}
       <div style={{
-        padding: '12px 24px',
+        padding: headerCollapsed ? '6px 16px' : '12px 24px',
         borderBottom: '1px solid var(--border)',
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'space-between',
         background: 'var(--bg-1)',
         gap: 10,
-        flexWrap: 'wrap',
+        flexWrap: headerCollapsed ? 'nowrap' : 'wrap',
         flexShrink: 0,
+        transition: 'padding 0.2s ease',
+        overflow: headerCollapsed ? 'hidden' : 'visible',
       }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
           <Zap size={14} color="var(--accent)" />
           <span style={{ fontSize: 12, color: 'var(--text-1)', letterSpacing: '0.05em' }}>
             {isLoading ? (
-              <span style={{ color: 'var(--yellow)' }}>● AGENT RUNNING</span>
+              <span style={{ color: 'var(--yellow)' }}>● RUNNING</span>
             ) : (
               <span style={{ color: 'var(--green)' }}>● READY</span>
             )}
           </span>
+          {/* Search toggle */}
+          <button
+            type="button"
+            onClick={() => setSearchVisible((v) => !v)}
+            title="Toggle message search"
+            style={{
+              background: searchVisible ? 'var(--bg-3)' : 'none',
+              border: `1px solid ${searchVisible ? 'var(--border-bright)' : 'var(--border)'}`,
+              color: searchVisible ? 'var(--text-0)' : 'var(--text-2)',
+              borderRadius: 6, padding: '3px 7px', cursor: 'pointer',
+              display: 'flex', alignItems: 'center',
+            }}
+          >
+            <Search size={11} />
+          </button>
         </div>
+
+        {/* All other header buttons — hidden when collapsed via display:none wrapper */}
+        <div style={{ display: headerCollapsed ? 'none' : 'contents' }}>
 
         <button
           onClick={() => {
@@ -2786,7 +2823,66 @@ export function ChatWindow({ editorOpen, onToggleEditor }: ChatWindowProps) {
             INSTALL APP
           </button>
         )}
+
+        </div>{/* end collapsible buttons wrapper */}
+
+        {/* Collapse header toggle — always visible */}
+        <button
+          type="button"
+          onClick={() => setHeaderCollapsed((v) => !v)}
+          title={headerCollapsed ? 'Expand header' : 'Collapse header for more space'}
+          style={{
+            marginLeft: 'auto',
+            background: 'none',
+            border: '1px solid var(--border)',
+            color: 'var(--text-2)',
+            padding: '4px 8px',
+            borderRadius: 'var(--radius)',
+            cursor: 'pointer',
+            fontSize: 11,
+            display: 'flex',
+            alignItems: 'center',
+            gap: 4,
+            flexShrink: 0,
+          }}
+        >
+          {headerCollapsed ? <ChevronDown size={12} /> : <ChevronUp size={12} />}
+        </button>
       </div>
+
+      {/* Search bar — collapsible, toggled by the search icon in header */}
+      {searchVisible && (
+        <div style={{
+          padding: '8px 24px',
+          borderBottom: '1px solid var(--border)',
+          background: 'var(--bg-1)',
+          display: 'flex',
+          alignItems: 'center',
+          gap: 8,
+          flexShrink: 0,
+        }}>
+          <Search size={13} color="var(--text-2)" />
+          <input
+            autoFocus
+            type="text"
+            placeholder="Search messages..."
+            value={messageSearchQuery}
+            onChange={(e) => setMessageSearchQuery(e.target.value)}
+            style={{
+              flex: 1, background: 'transparent', border: 'none',
+              outline: 'none', color: 'var(--text-0)', fontFamily: 'var(--font-mono)', fontSize: 12,
+            }}
+          />
+          {messageSearchQuery.trim() && (
+            <button type="button" onClick={() => setMessageSearchQuery('')} style={{ background: 'none', border: 'none', color: 'var(--text-2)', cursor: 'pointer', padding: 0 }}>
+              <X size={13} />
+            </button>
+          )}
+          <button type="button" onClick={() => { setSearchVisible(false); setMessageSearchQuery('') }} style={{ background: 'none', border: 'none', color: 'var(--text-2)', cursor: 'pointer', padding: 2 }}>
+            <X size={13} />
+          </button>
+        </div>
+      )}
 
       {dragOverlayVisible && !observerMode && (
         <div
@@ -2942,64 +3038,10 @@ export function ChatWindow({ editorOpen, onToggleEditor }: ChatWindowProps) {
         </div>
       )}
 
-      {messages.length > 0 && (
-        <div style={{
-          padding: '10px 24px',
-          borderBottom: '1px solid var(--border)',
-          background: 'var(--bg-1)',
-          display: 'grid',
-          gap: 6,
-        }}>
-          <div style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: 8,
-            border: '1px solid var(--border)',
-            borderRadius: 'var(--radius)',
-            background: 'var(--bg-2)',
-            padding: '6px 8px',
-          }}>
-            <Search size={13} color="var(--text-2)" />
-            <input
-              type="text"
-              placeholder="Search messages..."
-              value={messageSearchQuery}
-              onChange={(event) => setMessageSearchQuery(event.target.value)}
-              style={{
-                flex: 1,
-                background: 'transparent',
-                border: 'none',
-                outline: 'none',
-                color: 'var(--text-0)',
-                fontFamily: 'var(--font-mono)',
-                fontSize: 12,
-              }}
-            />
-            {messageSearchQuery.trim() && (
-              <button
-                type="button"
-                onClick={() => setMessageSearchQuery('')}
-                style={{
-                  border: 'none',
-                  background: 'transparent',
-                  color: 'var(--text-2)',
-                  cursor: 'pointer',
-                  fontSize: 14,
-                  lineHeight: 1,
-                  padding: 0,
-                }}
-                aria-label="Clear message search"
-              >
-                ×
-              </button>
-            )}
-          </div>
-
-          {isMessageFilteringActive && (
-            <div style={{ fontSize: 11, color: 'var(--text-2)' }}>
-              {filteredMessages.length} of {messages.length} messages match
-            </div>
-          )}
+      {/* Match count for collapsible search */}
+      {searchVisible && isMessageFilteringActive && (
+        <div style={{ padding: '4px 24px', background: 'var(--bg-1)', fontSize: 11, color: 'var(--text-2)' }}>
+          {filteredMessages.length} of {messages.length} messages match
         </div>
       )}
 
@@ -3133,10 +3175,10 @@ export function ChatWindow({ editorOpen, onToggleEditor }: ChatWindowProps) {
       {/* Project Brief */}
       <ProjectBrief open={briefOpen} onToggle={() => setBriefOpen((v) => !v)} />
 
-      {/* Conference participant selector */}
+      {/* Conference participant selector — slot-based with per-model dropdowns */}
       {conferenceMode && (
         <div style={{
-          padding: '8px 24px',
+          padding: '8px 16px',
           borderBottom: '1px solid var(--border)',
           background: 'var(--accent-dim)',
           display: 'flex',
@@ -3147,43 +3189,93 @@ export function ChatWindow({ editorOpen, onToggleEditor }: ChatWindowProps) {
         }}>
           <GitCompare size={11} color="var(--accent)" />
           <span style={{ fontSize: 10, fontFamily: 'var(--font-mono)', color: 'var(--accent)', letterSpacing: '0.08em', whiteSpace: 'nowrap' }}>
-            SELECT MODELS TO DEBATE:
+            DEBATE:
           </span>
-          {conferenceProviders.map((prov) => {
-            const selected = conferenceSelected.includes(prov.name)
+
+          {/* Slot cards */}
+          {conferenceSlots.map((slot, idx) => {
+            const COLORS: Record<string, string> = {
+              openai: '#10a37f', gemini: '#4285f4', groq: '#f55036',
+              deepseek: '#0066cc', ollama: '#9333ea', openrouter: '#7c3aed',
+              'atomic-chat': '#0ea5e9', 'github-models': '#24292f', codex: '#3b82f6',
+            }
+            const color = COLORS[slot.provider] || '#888'
+            const availableModels = conferenceModels[slot.provider] || []
             return (
-              <button
-                key={prov.name}
-                type="button"
-                onClick={() => {
-                  setConferenceSelected((prev) => {
-                    if (selected) return prev.filter((p) => p !== prov.name)
-                    if (prev.length >= 4) return prev
-                    return [...prev, prov.name]
-                  })
-                }}
-                style={{
-                  background: selected ? 'var(--bg-1)' : 'transparent',
-                  border: `1px solid ${selected ? 'var(--accent)' : 'var(--border)'}`,
-                  color: selected ? 'var(--text-0)' : 'var(--text-2)',
-                  borderRadius: 20,
-                  padding: '3px 10px',
-                  fontSize: 10,
-                  fontFamily: 'var(--font-mono)',
-                  cursor: 'pointer',
-                  display: 'flex', alignItems: 'center', gap: 5,
-                }}
-              >
-                {selected && <span style={{ width: 6, height: 6, borderRadius: '50%', background: 'var(--accent)' }} />}
-                {prov.name}
-              </button>
+              <div key={idx} style={{
+                display: 'flex', alignItems: 'center', gap: 3,
+                border: `1px solid ${color}66`,
+                borderRadius: 8, padding: '2px 4px 2px 8px',
+                background: 'var(--bg-1)',
+              }}>
+                <div style={{ width: 6, height: 6, borderRadius: '50%', background: color, flexShrink: 0 }} />
+                {/* Provider */}
+                <select
+                  value={slot.provider}
+                  onChange={(e) => {
+                    const prov = e.target.value
+                    const firstModel = conferenceModels[prov]?.[0] || conferenceProviders.find((p) => p.name === prov)?.big_model || ''
+                    setConferenceSlots((prev) => prev.map((s, i) => i === idx ? { ...s, provider: prov, model: firstModel, name: `${prov}/${firstModel}` } : s))
+                  }}
+                  style={{ background: 'none', border: 'none', color: 'var(--text-0)', fontSize: 10, fontFamily: 'var(--font-mono)', cursor: 'pointer', outline: 'none' }}
+                >
+                  {conferenceProviders.map((p) => (
+                    <option key={p.name} value={p.name}>{p.name}</option>
+                  ))}
+                </select>
+                {/* Model */}
+                {availableModels.length > 1 && (
+                  <>
+                    <span style={{ color: 'var(--text-2)', fontSize: 9 }}>/</span>
+                    <select
+                      value={slot.model}
+                      onChange={(e) => {
+                        const m = e.target.value
+                        setConferenceSlots((prev) => prev.map((s, i) => i === idx ? { ...s, model: m, name: `${s.provider}/${m.split(':')[0]}` } : s))
+                      }}
+                      style={{ background: 'none', border: 'none', color: 'var(--text-1)', fontSize: 10, fontFamily: 'var(--font-mono)', cursor: 'pointer', outline: 'none', maxWidth: 140 }}
+                    >
+                      {availableModels.map((m) => (
+                        <option key={m} value={m}>{m}</option>
+                      ))}
+                    </select>
+                  </>
+                )}
+                {conferenceSlots.length > 2 && (
+                  <button type="button" onClick={() => setConferenceSlots((prev) => prev.filter((_, i) => i !== idx))}
+                    style={{ background: 'none', border: 'none', color: 'var(--text-2)', cursor: 'pointer', padding: '0 2px', fontSize: 11, lineHeight: 1 }}>
+                    ×
+                  </button>
+                )}
+              </div>
             )
           })}
-          {conferenceSelected.length < 2 && (
-            <span style={{ fontSize: 10, color: 'var(--yellow)', fontFamily: 'var(--font-mono)' }}>
-              Select at least 2 models
-            </span>
+
+          {/* Add slot */}
+          {conferenceSlots.length < 6 && (
+            <button
+              type="button"
+              onClick={() => {
+                const firstProv = conferenceProviders[0]
+                if (!firstProv) return
+                const firstModel = conferenceModels[firstProv.name]?.[0] || firstProv.big_model || ''
+                setConferenceSlots((prev) => [...prev, { provider: firstProv.name, model: firstModel, name: `${firstProv.name}/${firstModel}` }])
+              }}
+              style={{
+                background: 'var(--bg-2)', border: '1px dashed var(--border)',
+                borderRadius: 8, padding: '3px 10px', cursor: 'pointer',
+                color: 'var(--text-2)', fontSize: 10, fontFamily: 'var(--font-mono)',
+                display: 'flex', alignItems: 'center', gap: 3,
+              }}
+            >
+              + ADD
+            </button>
           )}
+
+          {conferenceSlots.length < 2 && (
+            <span style={{ fontSize: 9, color: 'var(--yellow)', fontFamily: 'var(--font-mono)' }}>Need 2+</span>
+          )}
+
           <button
             type="button"
             onClick={() => { setConferenceMode(false); setConferenceThread(null) }}

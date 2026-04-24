@@ -3,8 +3,8 @@
  * Shown as a horizontal row of model cards (streaming), followed by a
  * synthesis conclusion card with a gradient border.
  */
-import { useEffect, useRef } from 'react'
-import { CheckCircle2, Loader } from 'lucide-react'
+import { useEffect, useRef, useState } from 'react'
+import { CheckCircle2, Loader, Maximize2, X } from 'lucide-react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 
@@ -28,11 +28,100 @@ export interface ConferenceThreadData {
   running: boolean
 }
 
+function FullResponseModal({ result, onClose }: { result: ConferenceResult; onClose: () => void }) {
+  useEffect(() => {
+    const fn = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose() }
+    window.addEventListener('keydown', fn)
+    return () => window.removeEventListener('keydown', fn)
+  }, [onClose])
+
+  return (
+    <div
+      style={{
+        position: 'fixed', inset: 0, zIndex: 99999,
+        background: 'rgba(0,0,0,0.7)', backdropFilter: 'blur(6px)',
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+        padding: 32,
+      }}
+      onClick={onClose}
+    >
+      <div
+        style={{
+          background: 'var(--bg-1)',
+          border: `2px solid ${result.color}66`,
+          borderRadius: 16,
+          width: '100%', maxWidth: 760,
+          maxHeight: '85vh',
+          display: 'flex', flexDirection: 'column',
+          boxShadow: `0 32px 80px rgba(0,0,0,0.6), 0 0 0 1px ${result.color}33`,
+          overflow: 'hidden',
+        }}
+        onClick={(e) => e.stopPropagation()}
+      >
+        {/* Modal header */}
+        <div style={{
+          padding: '12px 16px', background: 'var(--bg-2)',
+          borderBottom: '1px solid var(--border)',
+          display: 'flex', alignItems: 'center', gap: 10, flexShrink: 0,
+        }}>
+          <div style={{ width: 10, height: 10, borderRadius: '50%', background: result.color }} />
+          <span style={{ fontFamily: 'var(--font-mono)', fontSize: 13, fontWeight: 700, color: 'var(--text-0)', flex: 1 }}>
+            {result.name}
+          </span>
+          <span style={{ fontSize: 10, fontFamily: 'var(--font-mono)', color: 'var(--text-2)' }}>
+            {result.text.split(/\s+/).filter(Boolean).length} words
+          </span>
+          <button type="button" onClick={onClose}
+            style={{ background: 'none', border: 'none', color: 'var(--text-2)', cursor: 'pointer', display: 'flex' }}>
+            <X size={16} />
+          </button>
+        </div>
+
+        {/* Content */}
+        <div style={{ flex: 1, overflowY: 'auto', padding: '20px 24px', fontSize: 14, lineHeight: 1.8, color: 'var(--text-0)' }}>
+          <ReactMarkdown remarkPlugins={[remarkGfm]} components={{
+            code({ children, className, ...props }: any) {
+              const isBlock = className?.includes('language-')
+              if (isBlock) {
+                return (
+                  <pre style={{
+                    background: '#0f0f13', borderRadius: 8, padding: '12px 16px',
+                    margin: '12px 0', overflow: 'auto', fontSize: 12, fontFamily: 'var(--font-mono)',
+                    border: '1px solid var(--border)',
+                  }}>
+                    <code style={{ color: '#e0e0e8' }} {...props}>{children}</code>
+                  </pre>
+                )
+              }
+              return (
+                <code style={{
+                  background: 'var(--bg-3)', borderRadius: 4, padding: '2px 6px',
+                  fontSize: '0.9em', fontFamily: 'var(--font-mono)', color: 'var(--green)',
+                }} {...props}>{children}</code>
+              )
+            },
+            p({ children }) { return <p style={{ marginBottom: 12 }}>{children}</p> },
+            ul({ children }) { return <ul style={{ marginLeft: 22, marginBottom: 10 }}>{children}</ul> },
+            ol({ children }) { return <ol style={{ marginLeft: 22, marginBottom: 10 }}>{children}</ol> },
+            li({ children }) { return <li style={{ marginBottom: 5 }}>{children}</li> },
+            h2({ children }) { return <h2 style={{ fontSize: 17, fontWeight: 700, marginBottom: 10, color: 'var(--text-0)' }}>{children}</h2> },
+            h3({ children }) { return <h3 style={{ fontSize: 14, fontWeight: 600, marginBottom: 8 }}>{children}</h3> },
+            strong({ children }) { return <strong style={{ fontWeight: 700, color: 'var(--text-0)' }}>{children}</strong> },
+            blockquote({ children }) { return <blockquote style={{ borderLeft: '3px solid var(--accent)', paddingLeft: 12, margin: '10px 0', color: 'var(--text-1)', fontStyle: 'italic' }}>{children}</blockquote> },
+          }}>
+            {result.text}
+          </ReactMarkdown>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 type Props = {
   data: ConferenceThreadData
 }
 
-function ModelCard({ result }: { result: ConferenceResult }) {
+function ModelCard({ result, onExpand }: { result: ConferenceResult; onExpand?: () => void }) {
   const endRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
@@ -76,6 +165,16 @@ function ModelCard({ result }: { result: ConferenceResult }) {
         )}
         {!result.started && (
           <span style={{ fontSize: 9, color: 'var(--text-2)', fontFamily: 'var(--font-mono)' }}>WAITING</span>
+        )}
+        {result.done && result.text && onExpand && (
+          <button
+            type="button"
+            onClick={onExpand}
+            title="Expand full response in modal"
+            style={{ background: 'none', border: 'none', color: 'var(--text-2)', cursor: 'pointer', padding: 2, display: 'flex', flexShrink: 0 }}
+          >
+            <Maximize2 size={11} />
+          </button>
         )}
       </div>
 
@@ -140,6 +239,7 @@ function ModelCard({ result }: { result: ConferenceResult }) {
 }
 
 export function ConferenceThread({ data }: Props) {
+  const [expandedCard, setExpandedCard] = useState<number | null>(null)
   const synthEndRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
@@ -176,6 +276,14 @@ export function ConferenceThread({ data }: Props) {
         }} />
       </div>
 
+      {/* Full response modal */}
+      {expandedCard !== null && data.results[expandedCard] && (
+        <FullResponseModal
+          result={data.results[expandedCard]}
+          onClose={() => setExpandedCard(null)}
+        />
+      )}
+
       {/* Model cards grid */}
       <div style={{
         display: 'flex',
@@ -183,7 +291,11 @@ export function ConferenceThread({ data }: Props) {
         marginBottom: data.synthesisStarted ? 12 : 0,
       }}>
         {data.results.map((result) => (
-          <ModelCard key={result.participantId} result={result} />
+          <ModelCard
+            key={result.participantId}
+            result={result}
+            onExpand={() => setExpandedCard(result.participantId)}
+          />
         ))}
       </div>
 
