@@ -224,6 +224,19 @@ export function ProviderPanel() {
     return mergedModelCatalog[key] || []
   }, [effectiveSwitchProvider, mergedModelCatalog])
 
+  const switchModelOptions = useMemo(() => {
+    const current = String(switchDraft.model || '').trim()
+    if (!current || modelOptions.includes(current)) return modelOptions
+    return [current, ...modelOptions]
+  }, [modelOptions, switchDraft.model])
+
+  const ollamaModelOptions = useMemo(() => {
+    const models = Array.isArray(ollamaSetup?.models) ? ollamaSetup.models : []
+    const current = String(ollamaModel || '').trim()
+    if (!current || models.includes(current)) return models
+    return [current, ...models]
+  }, [ollamaModel, ollamaSetup])
+
   const webhookUrl = useMemo(() => {
     if (typeof window === 'undefined') return '/api/webhooks/trigger'
     return `${window.location.origin}/api/webhooks/trigger`
@@ -302,6 +315,10 @@ export function ProviderPanel() {
       const models = Array.isArray(payload.models) ? payload.models : []
       const preferred = payload.active_model || payload.recommended_model || models[0] || ''
       setOllamaModel(String(preferred || ''))
+      setModelCatalog((prev) => ({
+        ...prev,
+        ollama: Array.from(new Set([...models, String(preferred || '')].map((item) => item.trim()).filter(Boolean))),
+      }))
     } catch (e) {
       setError(String(e))
     } finally {
@@ -705,7 +722,7 @@ export function ProviderPanel() {
           </select>
 
           <select
-            value={modelOptions.includes(switchDraft.model) ? switchDraft.model : (modelOptions[0] || switchDraft.model)}
+            value={switchDraft.model}
             onChange={(event) => setSwitchDraft((prev) => ({ ...prev, model: event.target.value }))}
             style={{
               width: '100%',
@@ -718,10 +735,13 @@ export function ProviderPanel() {
               fontFamily: 'var(--font-mono)',
             }}
           >
-            {modelOptions.length === 0 && (
+            {!switchDraft.model && switchModelOptions.length > 0 && (
+              <option value="">Choose a model...</option>
+            )}
+            {switchModelOptions.length === 0 && (
               <option value="">(no discovered models)</option>
             )}
-            {modelOptions.map((model) => (
+            {switchModelOptions.map((model) => (
               <option key={model} value={model}>{model}</option>
             ))}
           </select>
@@ -813,10 +833,10 @@ export function ProviderPanel() {
               fontFamily: 'var(--font-mono)',
             }}
           >
-            {(ollamaSetup?.models || []).length === 0 && (
+            {ollamaModelOptions.length === 0 && (
               <option value="">(no models discovered)</option>
             )}
-            {(ollamaSetup?.models || []).map((model) => (
+            {ollamaModelOptions.map((model) => (
               <option key={model} value={model}>{model}</option>
             ))}
           </select>

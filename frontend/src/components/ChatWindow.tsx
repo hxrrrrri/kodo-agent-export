@@ -579,11 +579,14 @@ export function ChatWindow({ editorOpen, onToggleEditor }: ChatWindowProps) {
     commands,
     loadCommands,
     loadSession,
+    loadSessions,
+    loadUsage,
     sendMessage,
     stopGeneration,
     projectDir,
     setProjectDir,
     sessionId,
+    setSessionId,
     sessionMode,
     availableModes,
     setSessionMode,
@@ -622,6 +625,7 @@ export function ChatWindow({ editorOpen, onToggleEditor }: ChatWindowProps) {
   const [conferenceMode, setConferenceMode] = useState(false)
   const [conferenceProviders, setConferenceProviders] = useState<Array<{name: string; big_model: string}>>([])
   const [conferenceModels, setConferenceModels] = useState<Record<string, string[]>>({})
+  const [conferenceRunMode, setConferenceRunMode] = useState<'synthesis' | 'debate'>('synthesis')
   // Each slot: { provider, model, name }
   const [conferenceSlots, setConferenceSlots] = useState<Array<{provider: string; model: string; name: string}>>([])
   // Keep conferenceSelected for backward compat (array of provider names for display)
@@ -1200,6 +1204,19 @@ export function ChatWindow({ editorOpen, onToggleEditor }: ChatWindowProps) {
 
   const runConference = useCallback(async (prompt: string) => {
     if (conferenceSlots.length < 2) return
+    let activeSessionId = sessionId
+    if (!activeSessionId) {
+      const sessionRes = await fetch('/api/chat/new-session', {
+        method: 'POST',
+        headers: buildApiHeaders(),
+      })
+      if (!sessionRes.ok) throw new Error(await parseApiError(sessionRes))
+      const sessionPayload = await sessionRes.json()
+      activeSessionId = String(sessionPayload.session_id || '').trim()
+      if (activeSessionId) {
+        setSessionId(activeSessionId)
+      }
+    }
 
     const initialResults: ConferenceResult[] = conferenceSlots.map((slot, i) => ({
       participantId: i,
@@ -1214,7 +1231,9 @@ export function ChatWindow({ editorOpen, onToggleEditor }: ChatWindowProps) {
 
     setConferenceThread({
       prompt,
+      mode: conferenceRunMode,
       results: initialResults,
+      debateTurns: [],
       synthesis: '',
       synthesisStarted: false,
       synthesisDone: false,
@@ -1227,12 +1246,15 @@ export function ChatWindow({ editorOpen, onToggleEditor }: ChatWindowProps) {
     try {
       const body = {
         prompt,
+        session_id: activeSessionId || undefined,
         participants: conferenceSlots.map((slot, i) => ({
           provider: slot.provider,
           model: slot.model || undefined,
           name: initialResults[i].name,
         })),
+        mode: conferenceRunMode,
         synthesize: true,
+        debate_rounds: 2,
         max_tokens: 2048,
       }
 
@@ -1287,6 +1309,38 @@ export function ChatWindow({ editorOpen, onToggleEditor }: ChatWindowProps) {
                 return { ...prev, results }
               }
             }
+            if (type === 'debate_turn_start') {
+              const round = Number(ev.round || 1)
+              const name = String(ev.name || results[pid]?.name || `round-${round}`)
+              const provider = String(ev.provider || results[pid]?.provider || '')
+              const turn: ConferenceResult = {
+                participantId: prev.debateTurns?.length || 0,
+                name: `R${round} ${name}`,
+                provider,
+                color: CONFERENCE_COLORS[provider] || '#888',
+                text: '',
+                done: false,
+                error: null,
+                started: true,
+              }
+              return { ...prev, debateTurns: [...(prev.debateTurns || []), turn] }
+            }
+            if (type === 'debate_turn_text') {
+              const turns = [...(prev.debateTurns || [])]
+              if (turns.length > 0) {
+                const idx = turns.length - 1
+                turns[idx] = { ...turns[idx], text: turns[idx].text + (ev.content as string || '') }
+              }
+              return { ...prev, debateTurns: turns }
+            }
+            if (type === 'debate_turn_done') {
+              const turns = [...(prev.debateTurns || [])]
+              if (turns.length > 0) {
+                const idx = turns.length - 1
+                turns[idx] = { ...turns[idx], done: true }
+              }
+              return { ...prev, debateTurns: turns }
+            }
             if (type === 'synthesis_start') {
               return { ...prev, synthesisStarted: true }
             }
@@ -1294,6 +1348,8 @@ export function ChatWindow({ editorOpen, onToggleEditor }: ChatWindowProps) {
               return { ...prev, synthesis: prev.synthesis + (ev.content as string || '') }
             }
             if (type === 'conference_done') {
+              void loadSessions()
+              void loadUsage()
               return { ...prev, synthesisDone: true, running: false }
             }
             return prev
@@ -1305,7 +1361,7 @@ export function ChatWindow({ editorOpen, onToggleEditor }: ChatWindowProps) {
         setConferenceThread((prev) => prev ? { ...prev, running: false } : prev)
       }
     }
-  }, [conferenceSlots])
+  }, [conferenceRunMode, conferenceSlots, loadSessions, loadUsage, sessionId, setSessionId])
 
   const handleSend = useCallback(async () => {
     const msg = input.trim()
@@ -3189,8 +3245,39 @@ export function ChatWindow({ editorOpen, onToggleEditor }: ChatWindowProps) {
         }}>
           <GitCompare size={11} color="var(--accent)" />
           <span style={{ fontSize: 10, fontFamily: 'var(--font-mono)', color: 'var(--accent)', letterSpacing: '0.08em', whiteSpace: 'nowrap' }}>
-            DEBATE:
+            MULTI-MODEL:
           </span>
+
+          <div style={{
+            display: 'inline-flex',
+            border: '1px solid var(--border)',
+            borderRadius: 8,
+            background: 'var(--bg-1)',
+            overflow: 'hidden',
+          }}>
+            {[
+              ['synthesis', 'SUMMARIZE'] as const,
+              ['debate', 'DEBATE'] as const,
+            ].map(([mode, label]) => (
+              <button
+                key={mode}
+                type="button"
+                onClick={() => setConferenceRunMode(mode)}
+                style={{
+                  border: 'none',
+                  borderRight: mode === 'synthesis' ? '1px solid var(--border)' : 'none',
+                  background: conferenceRunMode === mode ? 'var(--accent-dim)' : 'transparent',
+                  color: conferenceRunMode === mode ? 'var(--accent)' : 'var(--text-2)',
+                  fontSize: 10,
+                  fontFamily: 'var(--font-mono)',
+                  padding: '4px 8px',
+                  cursor: 'pointer',
+                }}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
 
           {/* Slot cards */}
           {conferenceSlots.map((slot, idx) => {
@@ -3298,8 +3385,8 @@ export function ChatWindow({ editorOpen, onToggleEditor }: ChatWindowProps) {
         role="log"
         onScroll={handleMessagesScroll}
       >
-        {/* Centered content wrapper — max-width for readability like Claude */}
-        <div style={{ maxWidth: 720, margin: '0 auto', padding: '0 24px' }}>
+        {/* Centered content wrapper */}
+        <div style={{ maxWidth: 980, margin: '0 auto', padding: '0 28px' }}>
         {isEmpty && (
           <div style={{
             display: 'flex',

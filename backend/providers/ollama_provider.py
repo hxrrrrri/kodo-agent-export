@@ -5,13 +5,51 @@ import logging
 import os
 from typing import Any, AsyncIterator
 
-from privacy import build_httpx_async_client
+from privacy import build_httpx_async_client, feature_enabled
 
 logger = logging.getLogger(__name__)
+
+OLLAMA_CLOUD_MODEL_FALLBACKS = [
+    "gpt-oss:120b-cloud",
+    "gpt-oss:20b-cloud",
+    "deepseek-v3.1:671b-cloud",
+    "qwen3-coder:480b-cloud",
+    "qwen3-vl:235b-cloud",
+    "minimax-m2:cloud",
+    "glm-4.6:cloud",
+]
 
 
 def _base_url() -> str:
     return os.getenv("OLLAMA_BASE_URL", "http://localhost:11434").rstrip("/")
+
+
+def _dedupe_models(models: list[str]) -> list[str]:
+    seen: set[str] = set()
+    result: list[str] = []
+    for model in models:
+        name = str(model or "").strip()
+        if not name or name in seen:
+            continue
+        seen.add(name)
+        result.append(name)
+    return result
+
+
+def _model_names_from_tags_payload(data: Any) -> list[str]:
+    if not isinstance(data, dict):
+        return []
+    models = data.get("models", [])
+    if not isinstance(models, list):
+        return []
+    names: list[str] = []
+    for model in models:
+        if not isinstance(model, dict):
+            continue
+        name = str(model.get("name") or model.get("model") or "").strip()
+        if name:
+            names.append(name)
+    return names
 
 
 async def check_ollama_running() -> bool:
@@ -24,15 +62,33 @@ async def check_ollama_running() -> bool:
 
 
 async def list_ollama_models() -> list[str]:
+    models: list[str] = []
     try:
         async with build_httpx_async_client(timeout=5.0) as client:
             resp = await client.get(f"{_base_url()}/api/tags")
             resp.raise_for_status()
-            data = resp.json()
-            return [str(model.get("name", "")) for model in data.get("models", []) if model.get("name")]
+            models.extend(_model_names_from_tags_payload(resp.json()))
     except Exception as exc:
         logger.warning("Could not list Ollama models: %s", exc)
-        return []
+
+    if feature_enabled("OLLAMA_CLOUD_MODELS"):
+        cloud_base_url = os.getenv("OLLAMA_CLOUD_BASE_URL", "https://ollama.com").rstrip("/")
+        headers: dict[str, str] = {}
+        cloud_api_key = os.getenv("OLLAMA_API_KEY", "").strip()
+        if cloud_api_key:
+            headers["Authorization"] = f"Bearer {cloud_api_key}"
+        try:
+            async with build_httpx_async_client(timeout=5.0, headers=headers) as client:
+                resp = await client.get(f"{cloud_base_url}/api/tags")
+                resp.raise_for_status()
+                cloud_models = _model_names_from_tags_payload(resp.json())
+                cloud_models = [name for name in cloud_models if "cloud" in name.lower()]
+                models.extend(cloud_models or OLLAMA_CLOUD_MODEL_FALLBACKS)
+        except Exception as exc:
+            logger.warning("Could not list Ollama cloud models: %s", exc)
+            models.extend(OLLAMA_CLOUD_MODEL_FALLBACKS)
+
+    return _dedupe_models(models)
 
 
 def normalize_ollama_model(model_name: str) -> str:

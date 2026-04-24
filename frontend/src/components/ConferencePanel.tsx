@@ -9,10 +9,11 @@
  * Gemini answer the same question side-by-side, then get a synthesis.
  */
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { CheckCircle2, Loader, Pause, Plus, Send, X, Zap } from 'lucide-react'
+import { CheckCircle2, ChevronDown, ChevronRight, Loader, Pause, Plus, Send, X, Zap } from 'lucide-react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { buildApiHeaders } from '../lib/api'
+import { useChatStore } from '../store/chatStore'
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -29,6 +30,13 @@ interface ParticipantState {
   done: boolean
   error: string | null
   started: boolean
+}
+
+interface DebateTurnState extends ParticipantState {
+  id: string
+  name: string
+  provider: string
+  color: string
 }
 
 const PROVIDER_COLORS: Record<string, string> = {
@@ -49,6 +57,7 @@ const DEFAULT_PARTICIPANTS: Participant[] = [
 ]
 
 type KnownProvider = { name: string; big_model: string; configured: boolean; healthy: boolean }
+type ConferenceModelsResponse = { models: Record<string, string[]> }
 
 // ── ParticipantColumn ──────────────────────────────────────────────────────────
 
@@ -151,15 +160,20 @@ function ParticipantColumn({
 // ── Main Component ─────────────────────────────────────────────────────────────
 
 export function ConferencePanel() {
+  const sessionId = useChatStore((state) => state.sessionId)
   const [participants, setParticipants] = useState<Participant[]>(DEFAULT_PARTICIPANTS)
   const [prompt, setPrompt] = useState('')
   const [running, setRunning] = useState(false)
   const [participantStates, setParticipantStates] = useState<Record<string, ParticipantState>>({})
+  const [debateTurns, setDebateTurns] = useState<DebateTurnState[]>([])
+  const [debateExpanded, setDebateExpanded] = useState(false)
   const [synthesis, setSynthesis] = useState('')
   const [synthesisRunning, setSynthesisRunning] = useState(false)
   const [synthesisStarted, setSynthesisStarted] = useState(false)
   const [knownProviders, setKnownProviders] = useState<KnownProvider[]>([])
+  const [modelsByProvider, setModelsByProvider] = useState<Record<string, string[]>>({})
   const [synthesize, setSynthesize] = useState(true)
+  const [runMode, setRunMode] = useState<'synthesis' | 'debate'>('synthesis')
   const [error, setError] = useState<string | null>(null)
   const abortRef = useRef<AbortController | null>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
@@ -169,6 +183,18 @@ export function ConferencePanel() {
     fetch('/api/conference/providers', { headers: buildApiHeaders() })
       .then((r) => r.ok ? r.json() : null)
       .then((d) => { if (d?.providers) setKnownProviders(d.providers) })
+      .catch(() => {})
+    fetch('/api/conference/models', { headers: buildApiHeaders() })
+      .then((r) => r.ok ? r.json() : null)
+      .then((d: ConferenceModelsResponse | null) => {
+        if (d?.models) {
+          const next: Record<string, string[]> = {}
+          for (const [provider, models] of Object.entries(d.models)) {
+            next[provider] = Array.from(new Set((models || []).map((item) => String(item || '').trim()).filter(Boolean)))
+          }
+          setModelsByProvider(next)
+        }
+      })
       .catch(() => {})
   }, [])
 
@@ -198,6 +224,10 @@ export function ConferencePanel() {
       if (patch.provider) {
         next.color = PROVIDER_COLORS[patch.provider] || '#888'
         next.name = patch.provider
+        next.model = modelsByProvider[patch.provider]?.[0] || ''
+      }
+      if (Object.prototype.hasOwnProperty.call(patch, 'model')) {
+        next.name = patch.model || next.provider
       }
       return next
     }))
@@ -213,6 +243,8 @@ export function ConferencePanel() {
     if (!prompt.trim() || participants.length < 2) return
     setError(null)
     setSynthesis('')
+    setDebateTurns([])
+    setDebateExpanded(false)
     setSynthesisStarted(false)
     setSynthesisRunning(false)
 
@@ -230,12 +262,15 @@ export function ConferencePanel() {
     try {
       const body = {
         prompt: prompt.trim(),
+        session_id: sessionId || undefined,
         participants: participants.map((p) => ({
           provider: p.provider,
           model: p.model || undefined,
           name: p.name,
         })),
-        synthesize,
+        mode: runMode,
+        synthesize: runMode === 'synthesis' ? synthesize : true,
+        debate_rounds: 2,
         max_tokens: 2048,
       }
 
@@ -290,6 +325,39 @@ export function ConferencePanel() {
             if (kodoId) {
               setParticipantStates((s) => ({ ...s, [kodoId]: { ...s[kodoId], done: true, error: event.message as string } }))
             }
+          } else if (type === 'debate_turn_start') {
+            const round = Number(event.round || 1)
+            const provider = String(event.provider || '')
+            const name = String(event.name || provider || 'model')
+            const id = String(event.turn_id || `${Date.now()}-${Math.random()}`)
+            setDebateTurns((turns) => [...turns, {
+              id,
+              name: `R${round} ${name}`,
+              provider,
+              color: PROVIDER_COLORS[provider] || '#888',
+              text: '',
+              done: false,
+              error: null,
+              started: true,
+            }])
+          } else if (type === 'debate_turn_text') {
+            setDebateTurns((turns) => {
+              const next = [...turns]
+              if (next.length > 0) {
+                const idx = next.length - 1
+                next[idx] = { ...next[idx], text: next[idx].text + (event.content as string || '') }
+              }
+              return next
+            })
+          } else if (type === 'debate_turn_done') {
+            setDebateTurns((turns) => {
+              const next = [...turns]
+              if (next.length > 0) {
+                const idx = next.length - 1
+                next[idx] = { ...next[idx], done: true }
+              }
+              return next
+            })
           } else if (type === 'synthesis_start') {
             setSynthesisStarted(true)
             setSynthesisRunning(true)
@@ -309,9 +377,16 @@ export function ConferencePanel() {
       setRunning(false)
       setSynthesisRunning(false)
     }
-  }, [prompt, participants, synthesize])
+  }, [prompt, participants, runMode, sessionId, synthesize])
 
   const configuredProviderNames = knownProviders.filter((p) => p.configured).map((p) => p.name)
+
+  function participantModelOptions(participant: Participant): string[] {
+    const models = modelsByProvider[participant.provider] || []
+    const current = String(participant.model || '').trim()
+    if (!current || models.includes(current)) return models
+    return [current, ...models]
+  }
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>
@@ -323,8 +398,34 @@ export function ConferencePanel() {
             MULTI-MODEL CONFERENCE
           </span>
           <span style={{ fontSize: 10, color: 'var(--text-2)', fontFamily: 'var(--font-mono)' }}>
-            {participants.length} models · {synthesize ? 'with synthesis' : 'raw debate'}
+            {participants.length} models - {runMode === 'debate' ? 'debate' : 'summarize'}
           </span>
+        </div>
+
+        <div style={{ display: 'inline-flex', border: '1px solid var(--border)', borderRadius: 8, background: 'var(--bg-2)', overflow: 'hidden', marginBottom: 8 }}>
+          {[
+            ['synthesis', 'SUMMARIZE'] as const,
+            ['debate', 'DEBATE'] as const,
+          ].map(([mode, label]) => (
+            <button
+              key={mode}
+              type="button"
+              onClick={() => setRunMode(mode)}
+              disabled={running}
+              style={{
+                border: 'none',
+                borderRight: mode === 'synthesis' ? '1px solid var(--border)' : 'none',
+                background: runMode === mode ? 'var(--accent-dim)' : 'transparent',
+                color: runMode === mode ? 'var(--accent)' : 'var(--text-2)',
+                fontSize: 10,
+                fontFamily: 'var(--font-mono)',
+                padding: '5px 9px',
+                cursor: running ? 'not-allowed' : 'pointer',
+              }}
+            >
+              {label}
+            </button>
+          ))}
         </div>
 
         {/* Participant selector row */}
@@ -349,6 +450,22 @@ export function ConferencePanel() {
                   <option key={kp.name} value={kp.name}>{kp.name}</option>
                 ))}
                 {configuredProviderNames.length === 0 && <option value={p.provider}>{p.provider}</option>}
+              </select>
+              <select
+                value={p.model}
+                onChange={(e) => updateParticipant(p.id, { model: e.target.value })}
+                disabled={running}
+                style={{
+                  maxWidth: 190,
+                  background: 'none', border: 'none', color: 'var(--text-0)',
+                  fontSize: 10, fontFamily: 'var(--font-mono)', cursor: 'pointer', outline: 'none',
+                }}
+              >
+                {!p.model && participantModelOptions(p).length > 0 && <option value="">default</option>}
+                {participantModelOptions(p).length === 0 && <option value="">default</option>}
+                {participantModelOptions(p).map((model) => (
+                  <option key={model} value={model}>{model}</option>
+                ))}
               </select>
               {participants.length > 2 && (
                 <button type="button" onClick={() => removeParticipant(p.id)} disabled={running}
@@ -406,10 +523,10 @@ export function ConferencePanel() {
             >
               {running ? <><Pause size={12} /> STOP</> : <><Send size={12} /> DEBATE</>}
             </button>
-            <label style={{ display: 'flex', alignItems: 'center', gap: 4, cursor: 'pointer', fontSize: 10, fontFamily: 'var(--font-mono)', color: 'var(--text-2)' }}>
+            {runMode === 'synthesis' && <label style={{ display: 'flex', alignItems: 'center', gap: 4, cursor: 'pointer', fontSize: 10, fontFamily: 'var(--font-mono)', color: 'var(--text-2)' }}>
               <input type="checkbox" checked={synthesize} onChange={(e) => setSynthesize(e.target.checked)} disabled={running} style={{ accentColor: 'var(--accent)' }} />
               SYNTHESIZE
-            </label>
+            </label>}
           </div>
         </div>
 
@@ -424,7 +541,7 @@ export function ConferencePanel() {
       {Object.keys(participantStates).length > 0 ? (
         <div style={{ flex: 1, overflow: 'auto', padding: 10 }}>
           {/* Participant columns */}
-          <div style={{ display: 'flex', gap: 10, marginBottom: 10, minHeight: 200 }}>
+          {runMode === 'synthesis' && <div style={{ display: 'flex', gap: 10, marginBottom: 10, minHeight: 200 }}>
             {participants.map((p) => (
               <ParticipantColumn
                 key={p.id}
@@ -433,10 +550,10 @@ export function ConferencePanel() {
                 onRemove={() => removeParticipant(p.id)}
               />
             ))}
-          </div>
+          </div>}
 
           {/* Synthesis section */}
-          {synthesize && synthesisStarted && (
+          {synthesisStarted && (
             <div style={{
               border: `1px solid ${synthesisRunning ? 'var(--accent)' : 'var(--green)'}`,
               borderRadius: 12, overflow: 'hidden',
@@ -468,6 +585,32 @@ export function ConferencePanel() {
                   <span style={{ display: 'inline-block', width: 8, height: 14, background: 'var(--accent)', animation: 'blink 1s step-end infinite', marginLeft: 2, verticalAlign: 'middle' }} />
                 )}
               </div>
+            </div>
+          )}
+
+          {runMode === 'debate' && debateTurns.length > 0 && (
+            <div style={{ marginTop: 10, border: '1px solid var(--border)', borderRadius: 12, background: 'var(--bg-1)', overflow: 'hidden' }}>
+              <button
+                type="button"
+                onClick={() => setDebateExpanded((value) => !value)}
+                style={{ width: '100%', border: 'none', background: 'var(--bg-2)', color: 'var(--text-0)', padding: '8px 12px', display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', fontSize: 11, fontFamily: 'var(--font-mono)' }}
+              >
+                {debateExpanded ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
+                LIVE DEBATE TRANSCRIPT
+                <span style={{ marginLeft: 'auto', color: 'var(--text-2)', fontSize: 10 }}>{debateTurns.length} turns</span>
+              </button>
+              {debateExpanded && (
+                <div style={{ display: 'grid', gap: 10, padding: 10 }}>
+                  {debateTurns.map((turn) => (
+                    <ParticipantColumn
+                      key={turn.id}
+                      participant={{ id: turn.id, provider: turn.provider, model: '', name: turn.name, color: turn.color }}
+                      state={turn}
+                      onRemove={() => {}}
+                    />
+                  ))}
+                </div>
+              )}
             </div>
           )}
         </div>

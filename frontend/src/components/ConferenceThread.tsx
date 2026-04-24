@@ -4,7 +4,7 @@
  * synthesis conclusion card with a gradient border.
  */
 import { useEffect, useRef, useState } from 'react'
-import { CheckCircle2, Loader, Maximize2, X } from 'lucide-react'
+import { CheckCircle2, ChevronDown, ChevronRight, Loader, Maximize2, X } from 'lucide-react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 
@@ -21,7 +21,9 @@ export interface ConferenceResult {
 
 export interface ConferenceThreadData {
   prompt: string
+  mode?: 'synthesis' | 'debate'
   results: ConferenceResult[]
+  debateTurns?: ConferenceResult[]
   synthesis: string
   synthesisStarted: boolean
   synthesisDone: boolean
@@ -240,7 +242,15 @@ function ModelCard({ result, onExpand }: { result: ConferenceResult; onExpand?: 
 
 export function ConferenceThread({ data }: Props) {
   const [expandedCard, setExpandedCard] = useState<number | null>(null)
+  const [debateExpanded, setDebateExpanded] = useState(false)
   const synthEndRef = useRef<HTMLDivElement>(null)
+  const isDebateMode = data.mode === 'debate'
+  const debateTurns = data.debateTurns || []
+  const expandedResult = expandedCard === null
+    ? null
+    : expandedCard < data.results.length
+      ? data.results[expandedCard]
+      : debateTurns[expandedCard - data.results.length]
 
   useEffect(() => {
     if (data.synthesisStarted && !data.synthesisDone) {
@@ -277,27 +287,28 @@ export function ConferenceThread({ data }: Props) {
       </div>
 
       {/* Full response modal */}
-      {expandedCard !== null && data.results[expandedCard] && (
+      {expandedResult && (
         <FullResponseModal
-          result={data.results[expandedCard]}
+          result={expandedResult}
           onClose={() => setExpandedCard(null)}
         />
       )}
 
-      {/* Model cards grid */}
-      <div style={{
-        display: 'flex',
-        gap: 10,
-        marginBottom: data.synthesisStarted ? 12 : 0,
-      }}>
-        {data.results.map((result) => (
-          <ModelCard
-            key={result.participantId}
-            result={result}
-            onExpand={() => setExpandedCard(result.participantId)}
-          />
-        ))}
-      </div>
+      {!isDebateMode && (
+        <div style={{
+          display: 'flex',
+          gap: 10,
+          marginBottom: data.synthesisStarted ? 12 : 0,
+        }}>
+          {data.results.map((result) => (
+            <ModelCard
+              key={result.participantId}
+              result={result}
+              onExpand={() => setExpandedCard(result.participantId)}
+            />
+          ))}
+        </div>
+      )}
 
       {/* Synthesis conclusion */}
       {data.synthesisStarted && (
@@ -387,6 +398,53 @@ export function ConferenceThread({ data }: Props) {
             )}
             <div ref={synthEndRef} />
           </div>
+        </div>
+      )}
+
+      {isDebateMode && debateTurns.length > 0 && (
+        <div style={{
+          marginTop: 12,
+          border: '1px solid var(--border)',
+          borderRadius: 12,
+          background: 'var(--bg-1)',
+          overflow: 'hidden',
+        }}>
+          <button
+            type="button"
+            onClick={() => setDebateExpanded((value) => !value)}
+            style={{
+              width: '100%',
+              border: 'none',
+              background: 'var(--bg-2)',
+              color: 'var(--text-0)',
+              padding: '9px 12px',
+              display: 'flex',
+              alignItems: 'center',
+              gap: 8,
+              cursor: 'pointer',
+              fontFamily: 'var(--font-mono)',
+              fontSize: 11,
+              borderBottom: debateExpanded ? '1px solid var(--border)' : 'none',
+            }}
+          >
+            {debateExpanded ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
+            LIVE DEBATE TRANSCRIPT
+            <span style={{ marginLeft: 'auto', color: 'var(--text-2)', fontSize: 10 }}>
+              {debateTurns.length} turns
+            </span>
+          </button>
+
+          {debateExpanded && (
+            <div style={{ display: 'grid', gap: 10, padding: 12 }}>
+              {debateTurns.map((turn, idx) => (
+                <ModelCard
+                  key={`${turn.participantId}-${idx}`}
+                  result={turn}
+                  onExpand={() => setExpandedCard(data.results.length + idx)}
+                />
+              ))}
+            </div>
+          )}
         </div>
       )}
     </div>
