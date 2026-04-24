@@ -17,7 +17,7 @@ interface Species {
 const SPECIES: Species[] = [
   {
     name: 'Duck',
-    emoji: '🦆',
+    emoji: '[D]',
     rarity: 'common',
     color: '#f5c842',
     frames: {
@@ -31,7 +31,7 @@ const SPECIES: Species[] = [
   },
   {
     name: 'Dragon',
-    emoji: '🐉',
+    emoji: '[DRG]',
     rarity: 'rare',
     color: '#a855f7',
     frames: {
@@ -45,7 +45,7 @@ const SPECIES: Species[] = [
   },
   {
     name: 'Axolotl',
-    emoji: '🦎',
+    emoji: '[AXL]',
     rarity: 'rare',
     color: '#f472b6',
     frames: {
@@ -59,7 +59,7 @@ const SPECIES: Species[] = [
   },
   {
     name: 'Ghost',
-    emoji: '👻',
+    emoji: '[GHO]',
     rarity: 'legendary',
     color: '#94a3b8',
     frames: {
@@ -76,10 +76,10 @@ const SPECIES: Species[] = [
 const HATS: Record<string, string> = {
   none:    '',
   cap:     '^',
-  crown:   '♛',
-  wizard:  '⌂',
-  party:   '彡',
-  santa:   'υ',
+  crown:   'o',
+  wizard:  'w',
+  party:   'p',
+  santa:   's',
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

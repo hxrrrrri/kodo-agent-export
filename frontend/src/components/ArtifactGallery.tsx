@@ -11,9 +11,9 @@ type GalleryItem = {
 }
 
 const TYPE_ICONS: Record<string, string> = {
-  html: '🌐', react: '⚛️', svg: '🎨', mermaid: '📊',
-  markdown: '📝', code: '💻', dot: '🕸️',
-  'html-multi': '🌐', 'react-multi': '⚛️',
+  html: 'HTML', react: 'JSX', svg: 'SVG', mermaid: 'MMD',
+  markdown: 'MD', code: 'CODE', dot: 'DOT',
+  'html-multi': 'HTML', 'react-multi': 'JSX',
 }
 
 const TYPE_COLOR: Record<string, string> = {
@@ -204,9 +204,17 @@ export function ArtifactGallery() {
                   ;(e.currentTarget as HTMLElement).style.transform = 'none'
                 }}
               >
-                {/* Type badge + icon */}
+                {/* Type badge */}
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                  <span style={{ fontSize: 18, lineHeight: 1 }}>{TYPE_ICONS[item.artifact.type] || '📄'}</span>
+                  <span style={{
+                    fontFamily: 'var(--font-mono)',
+                    fontSize: 10,
+                    fontWeight: 700,
+                    color: TYPE_COLOR[item.artifact.type] || 'var(--text-2)',
+                    letterSpacing: '0.06em',
+                  }}>
+                    {TYPE_ICONS[item.artifact.type] || 'FILE'}
+                  </span>
                   <span style={{
                     fontSize: 8,
                     fontFamily: 'var(--font-mono)',
@@ -215,9 +223,9 @@ export function ArtifactGallery() {
                     border: `1px solid ${TYPE_COLOR[item.artifact.type] || 'var(--border)'}`,
                     borderRadius: 4,
                     padding: '1px 4px',
-                    opacity: 0.9,
+                    opacity: 0.7,
                   }}>
-                    {item.artifact.type.replace('-multi', 'M')}
+                    v{item.artifact.version}
                   </span>
                 </div>
 

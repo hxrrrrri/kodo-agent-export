@@ -494,13 +494,13 @@ const LANG_EXT: Record<string, string> = {
 const KNOWN_FENCE_LANGS = new Set<string>(Object.keys(LANG_EXT))
 
 const FILE_ICONS: Record<string, string> = {
-  html: '🌐', css: '🎨', js: '⚡', ts: '🔷', jsx: '⚛', tsx: '⚛',
-  json: '{}', svg: '🖼', md: '📝', py: '🐍', sh: '⚙',
+  html: 'HTML', css: 'CSS', js: 'JS', ts: 'TS', jsx: 'JSX', tsx: 'TSX',
+  json: 'JSON', svg: 'SVG', md: 'MD', py: 'PY', sh: 'SH',
 }
 
 function getFileIcon(name: string): string {
   const ext = name.split('.').pop()?.toLowerCase() || ''
-  return FILE_ICONS[ext] || '📄'
+  return FILE_ICONS[ext] || 'FILE'
 }
 
 export function extractFiles(content: string): DesignFile[] {
@@ -755,12 +755,12 @@ function applyToolStartEventToDesignFiles(
 
 
 const STARTERS = [
-  { icon: '🌐', label: 'Landing page', prompt: 'Build a stunning SaaS landing page with hero, features grid, pricing, and CTA — modern dark theme' },
-  { icon: '📊', label: 'Dashboard', prompt: 'Create a responsive admin dashboard with sidebar nav, KPI cards, charts (use SVG), and dark mode' },
-  { icon: '🛍', label: 'Product grid', prompt: 'Design a product card grid with hover animations, filters, and cart — e-commerce style' },
-  { icon: '💼', label: 'Portfolio', prompt: 'Build a developer portfolio page with glassmorphism, animated hero, project cards, and contact form' },
-  { icon: '💳', label: 'Pricing table', prompt: 'Create an animated pricing table with 3 tiers, feature comparison, toggle, highlighted plan' },
-  { icon: '📝', label: 'Blog', prompt: 'Design a minimal blog layout with header, article cards, sidebar, and dark/light mode toggle' },
+  { icon: 'LAND', label: 'Landing page', prompt: 'Build a stunning SaaS landing page with hero, features grid, pricing, and CTA — modern dark theme' },
+  { icon: 'DASH', label: 'Dashboard', prompt: 'Create a responsive admin dashboard with sidebar nav, KPI cards, charts (use SVG), and dark mode' },
+  { icon: 'GRID', label: 'Product grid', prompt: 'Design a product card grid with hover animations, filters, and cart — e-commerce style' },
+  { icon: 'PORT', label: 'Portfolio', prompt: 'Build a developer portfolio page with glassmorphism, animated hero, project cards, and contact form' },
+  { icon: 'PRICE', label: 'Pricing table', prompt: 'Create an animated pricing table with 3 tiers, feature comparison, toggle, highlighted plan' },
+  { icon: 'BLOG', label: 'Blog', prompt: 'Design a minimal blog layout with header, article cards, sidebar, and dark/light mode toggle' },
 ]
 
 // ─── Project Storage ─────────────────────────────────────────────────────────
@@ -2925,7 +2925,27 @@ RULES:
               onKeyDown={(e: KeyboardEvent<HTMLTextAreaElement>) => {
                 if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); void sendMessage(input) }
               }}
-              placeholder="Describe your design or request changes…"
+              onPaste={(e: React.ClipboardEvent<HTMLTextAreaElement>) => {
+                const items = e.clipboardData?.items
+                if (!items) return
+                const files: File[] = []
+                for (let i = 0; i < items.length; i++) {
+                  if (items[i].kind === 'file') {
+                    const f = items[i].getAsFile()
+                    if (f) {
+                      const name = f.name && f.name !== 'image.png' ? f.name : `screenshot-${Date.now()}.png`
+                      files.push(new File([f], name, { type: f.type }))
+                    }
+                  }
+                }
+                if (files.length > 0) {
+                  e.preventDefault()
+                  const dt = new DataTransfer()
+                  files.forEach(f => dt.items.add(f))
+                  void handleAssetUpload(dt.files)
+                }
+              }}
+              placeholder="Describe your design or request changes — paste screenshots directly"
               rows={3}
               style={{
                 width: '100%', resize: 'none', background: 'var(--bg-2)',

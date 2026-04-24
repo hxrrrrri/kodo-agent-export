@@ -1,9 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState, KeyboardEvent, MouseEvent as ReactMouseEvent } from 'react'
-import { Send, Square, FolderOpen, Zap, ImagePlus, X, Search, Terminal as TerminalIcon, Paperclip, CircleAlert, BookOpen, Mic, Palette, Check, ChevronDown, ChevronUp, Download } from 'lucide-react'
+import { Send, Square, FolderOpen, Zap, ImagePlus, X, Search, Terminal as TerminalIcon, Paperclip, CircleAlert, BookOpen, Mic, Palette, Check, ChevronDown, ChevronUp, Download, GitCompare } from 'lucide-react'
 import { CommandPalette, exportConversationAsMarkdown } from './CommandPalette'
-import { ContextRing } from './ContextRing'
 import { extractVariables, PromptVariablesModal } from './PromptVariables'
 import { SmartSuggestions } from './SmartSuggestions'
+import { StatusBar } from './StatusBar'
+import { DepthSelector, DepthMode, applyDepth } from './DepthSelector'
+import { ThemeStudio as ThemeStudioChat } from './ThemeStudio'
+import { ProjectBrief, applyProjectBrief } from './ProjectBrief'
+import { ConferenceThread, ConferenceThreadData, ConferenceResult } from './ConferenceThread'
 import { useChat } from '../hooks/useChat'
 import { MessageBubble } from './MessageBubble'
 import { CommandDefinition, THEME_OPTIONS, ThemeKey, TodoItem } from '../store/chatStore'
@@ -309,130 +313,257 @@ function decodeBase64ToText(data: string): string {
   }
 }
 
+const TAB_COMPLETIONS: Array<[string, string]> = [
+  ['write a func', 'Write a function that '],
+  ['write a test', 'Write unit tests for '],
+  ['fix the', 'Fix the bug in '],
+  ['explain', 'Explain how '],
+  ['create a react', 'Create a React component that '],
+  ['create a', 'Create a '],
+  ['refactor', 'Refactor the following code to '],
+  ['how do i', 'How do I '],
+  ['what is', 'What is '],
+  ['add', 'Add '],
+  ['update', 'Update '],
+  ['review', 'Review the following code:\n\n'],
+  ['debug', 'Debug the following issue:\n\n'],
+  ['optimize', 'Optimize the following code for '],
+]
+
+function getTabSuggestion(current: string): string | null {
+  const lower = current.toLowerCase()
+  for (const [prefix, full] of TAB_COMPLETIONS) {
+    if (prefix.startsWith(lower) && full.toLowerCase() !== lower && full.toLowerCase() !== lower + ' ') {
+      return full
+    }
+  }
+  return null
+}
+
 function decodeBase64ToBytes(data: string): Uint8Array {
   const binary = atob(data)
   return Uint8Array.from(binary, (char) => char.charCodeAt(0))
 }
 
 // ─── Floating Todo Panel ──────────────────────────────────────────────────────
+const CATEGORY_META: Record<string, { label: string; color: string }> = {
+  analysis: { label: 'ANALYSIS', color: 'var(--blue)' },
+  code:     { label: 'CODE',     color: 'var(--accent)' },
+  fix:      { label: 'FIX',      color: 'var(--red)' },
+  test:     { label: 'TEST',     color: 'var(--yellow)' },
+  docs:     { label: 'DOCS',     color: 'var(--text-2)' },
+  deploy:   { label: 'DEPLOY',   color: 'var(--green)' },
+  design:   { label: 'DESIGN',   color: '#b388ff' },
+  review:   { label: 'REVIEW',   color: '#80cbc4' },
+  plan:     { label: 'PLAN',     color: '#ffab91' },
+}
+
+function TaskCheckIcon({ status }: { status: TodoItem['status'] }) {
+  if (status === 'completed') {
+    return (
+      <div style={{
+        width: 18, height: 18, borderRadius: '50%',
+        background: 'var(--green)', border: '2px solid var(--green)',
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+        flexShrink: 0,
+      }}>
+        <svg width="9" height="9" viewBox="0 0 10 10" fill="none">
+          <polyline points="1.5,5.5 4,8 8.5,2" stroke="#000" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+        </svg>
+      </div>
+    )
+  }
+  if (status === 'in_progress') {
+    return (
+      <div style={{
+        width: 18, height: 18, borderRadius: '50%',
+        border: '2px solid var(--accent)',
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+        flexShrink: 0,
+        animation: 'pulse-accent 1.6s ease-in-out infinite',
+      }}>
+        <div style={{ width: 6, height: 6, borderRadius: '50%', background: 'var(--accent)' }} />
+      </div>
+    )
+  }
+  return (
+    <div style={{
+      width: 18, height: 18, borderRadius: '50%',
+      border: '2px solid var(--border-bright)',
+      display: 'flex', alignItems: 'center', justifyContent: 'center',
+      flexShrink: 0, opacity: 0.5,
+    }} />
+  )
+}
+
 function FloatingTodoPanel({ items }: { items: TodoItem[] }) {
   const [collapsed, setCollapsed] = useState(false)
   const allDone = items.length > 0 && items.every((i) => i.status === 'completed')
   const doneCount = items.filter((i) => i.status === 'completed').length
+  const inProgressIdx = items.findIndex((i) => i.status === 'in_progress')
+  const pct = items.length > 0 ? Math.round((doneCount / items.length) * 100) : 0
 
   if (items.length === 0) return null
 
   return (
     <div style={{
-      marginBottom: 8,
+      marginBottom: 10,
       background: 'var(--bg-1)',
-      border: '1px solid var(--border)',
-      borderRadius: 'var(--radius)',
+      border: `1px solid ${allDone ? 'var(--green)' : 'var(--border)'}`,
+      borderRadius: 10,
       overflow: 'hidden',
-      animation: 'fadeIn 0.18s ease',
+      animation: 'fadeIn 0.2s ease',
+      transition: 'border-color 0.4s ease',
     }}>
-      {/* Header row */}
+      {/* Header */}
       <button
         type="button"
         onClick={() => setCollapsed((v) => !v)}
         style={{
-          width: '100%',
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'space-between',
-          padding: '6px 10px',
-          background: 'none',
-          border: 'none',
-          cursor: 'pointer',
-          gap: 8,
+          width: '100%', display: 'flex', alignItems: 'center',
+          padding: '9px 12px', background: 'none', border: 'none',
+          cursor: 'pointer', gap: 10,
         }}
       >
-        <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
-          {/* Status dot */}
-          {allDone ? (
-            <svg width="11" height="11" viewBox="0 0 12 12" fill="none" style={{ display: 'block', flexShrink: 0 }}>
-              <polyline points="2,6.5 5,9.5 10,3" stroke="var(--green)" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" />
+        {/* Icon */}
+        {allDone ? (
+          <div style={{ width: 20, height: 20, borderRadius: '50%', background: 'var(--green)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+            <svg width="10" height="10" viewBox="0 0 10 10" fill="none">
+              <polyline points="1.5,5.5 4,8 8.5,2" stroke="#000" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
             </svg>
-          ) : (
-            <span style={{
-              display: 'inline-block', width: 7, height: 7, borderRadius: '50%',
-              background: 'var(--accent)',
-              animation: 'pulse-accent 1.8s ease-in-out infinite',
-              flexShrink: 0,
-            }} />
+          </div>
+        ) : (
+          <div style={{
+            width: 20, height: 20, borderRadius: '50%',
+            background: 'conic-gradient(var(--accent) 0% ' + pct + '%, var(--bg-3) ' + pct + '% 100%)',
+            display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
+          }}>
+            <div style={{ width: 12, height: 12, borderRadius: '50%', background: 'var(--bg-1)' }} />
+          </div>
+        )}
+
+        {/* Title + count */}
+        <div style={{ flex: 1, textAlign: 'left' }}>
+          <div style={{ display: 'flex', alignItems: 'baseline', gap: 8 }}>
+            <span style={{ fontFamily: 'var(--font-mono)', fontSize: 11, letterSpacing: '0.1em', color: allDone ? 'var(--green)' : 'var(--text-0)', fontWeight: 700 }}>
+              {allDone ? 'ALL TASKS COMPLETE' : 'TASK PLAN'}
+            </span>
+            <span style={{ fontFamily: 'var(--font-mono)', fontSize: 10, color: 'var(--text-2)' }}>
+              {doneCount} / {items.length}
+            </span>
+          </div>
+          {/* Progress bar */}
+          {!allDone && (
+            <div style={{ marginTop: 4, height: 2, background: 'var(--bg-3)', borderRadius: 2, overflow: 'hidden' }}>
+              <div style={{
+                height: '100%', width: pct + '%',
+                background: 'linear-gradient(90deg, var(--accent), var(--green))',
+                borderRadius: 2,
+                transition: 'width 0.5s ease',
+              }} />
+            </div>
           )}
-          <span style={{
-            fontFamily: 'var(--font-mono)',
-            fontSize: 11,
-            letterSpacing: '0.06em',
-            color: allDone ? 'var(--green)' : 'var(--text-1)',
-            textTransform: 'uppercase',
-          }}>
-            Todo
-          </span>
-          <span style={{
-            fontFamily: 'var(--font-mono)',
-            fontSize: 10,
-            color: 'var(--text-2)',
-            letterSpacing: '0.02em',
-          }}>
-            {doneCount}/{items.length}
-          </span>
         </div>
-        <span style={{ color: 'var(--text-2)', display: 'flex', alignItems: 'center' }}>
-          {collapsed ? <ChevronDown size={12} /> : <ChevronUp size={12} />}
+
+        <span style={{ color: 'var(--text-2)', display: 'flex', alignItems: 'center', flexShrink: 0 }}>
+          {collapsed ? <ChevronDown size={13} /> : <ChevronUp size={13} />}
         </span>
       </button>
 
-      {/* Task rows */}
+      {/* Task list */}
       {!collapsed && (
-        <div style={{ padding: '2px 10px 8px', display: 'flex', flexDirection: 'column', gap: 2 }}>
-          {items.map((item) => {
+        <div style={{ borderTop: '1px solid var(--border)', padding: '4px 0' }}>
+          {items.map((item, idx) => {
             const isCompleted = item.status === 'completed'
-            const isActive    = item.status === 'in_progress'
-            const isPending   = item.status === 'pending'
+            const isActive = item.status === 'in_progress'
+            const catMeta = item.category ? CATEGORY_META[item.category] : null
             return (
               <div
                 key={item.id}
                 style={{
-                  display: 'flex', alignItems: 'center', gap: 8,
-                  padding: '2px 0',
-                  opacity: isCompleted ? 0.5 : 1,
-                  transition: 'opacity 0.2s ease',
+                  display: 'flex', alignItems: 'flex-start', gap: 10,
+                  padding: '7px 12px',
+                  background: isActive ? 'rgba(255,77,33,0.04)' : 'transparent',
+                  borderLeft: isActive ? '2px solid var(--accent)' : '2px solid transparent',
+                  transition: 'background 0.2s ease',
                 }}
               >
-                {/* Glyph */}
-                <span style={{ flexShrink: 0, width: 14, display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}>
-                  {isCompleted && (
-                    <svg width="11" height="11" viewBox="0 0 12 12" fill="none" style={{ display: 'block' }}>
-                      <polyline points="2,6.5 5,9.5 10,3" stroke="var(--green)" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" />
-                    </svg>
-                  )}
-                  {isActive && (
+                {/* Step number + check */}
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0, marginTop: 1 }}>
+                  <span style={{ fontFamily: 'var(--font-mono)', fontSize: 9, color: 'var(--text-2)', width: 14, textAlign: 'right', lineHeight: 1 }}>
+                    {String(idx + 1).padStart(2, '0')}
+                  </span>
+                  <TaskCheckIcon status={item.status} />
+                </div>
+
+                {/* Content */}
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
                     <span style={{
-                      display: 'inline-block', width: 7, height: 7, borderRadius: '50%',
-                      background: 'var(--accent)',
-                      animation: 'pulse-accent 1.8s ease-in-out infinite',
-                    }} />
+                      fontSize: 12, lineHeight: 1.5,
+                      color: isCompleted ? 'var(--text-2)' : isActive ? 'var(--text-0)' : 'var(--text-1)',
+                      textDecoration: isCompleted ? 'line-through' : 'none',
+                      textDecorationColor: 'var(--border-bright)',
+                      fontWeight: isActive ? 600 : 400,
+                      transition: 'all 0.3s ease',
+                    }}>
+                      {item.title}
+                    </span>
+                    {catMeta && (
+                      <span style={{
+                        fontFamily: 'var(--font-mono)', fontSize: 8,
+                        color: catMeta.color, border: `1px solid ${catMeta.color}`,
+                        borderRadius: 3, padding: '1px 4px', letterSpacing: '0.08em', opacity: 0.8,
+                        flexShrink: 0,
+                      }}>
+                        {catMeta.label}
+                      </span>
+                    )}
+                  </div>
+
+                  {/* Detail */}
+                  {item.detail && (
+                    <div style={{ marginTop: 2, fontSize: 11, color: 'var(--text-2)', lineHeight: 1.5 }}>
+                      {item.detail}
+                    </div>
                   )}
-                  {isPending && (
-                    <span style={{
-                      display: 'inline-block', width: 8, height: 8,
-                      borderRadius: '50%', border: '1.5px solid var(--border-bright)', opacity: 0.45,
-                    }} />
+
+                  {/* Active tool indicator */}
+                  {isActive && item.tool && (
+                    <div style={{ marginTop: 3, display: 'flex', alignItems: 'center', gap: 4 }}>
+                      <span style={{ width: 5, height: 5, borderRadius: '50%', background: 'var(--accent)', display: 'inline-block', animation: 'pulse-accent 1.4s ease infinite', flexShrink: 0 }} />
+                      <span style={{ fontSize: 9, fontFamily: 'var(--font-mono)', color: 'var(--accent)', letterSpacing: '0.06em' }}>
+                        {item.tool}
+                      </span>
+                    </div>
                   )}
-                </span>
-                {/* Label */}
-                <span style={{
-                  fontFamily: 'var(--font-mono)', fontSize: 11,
-                  color: isActive ? 'var(--text-0)' : 'var(--text-2)',
-                  lineHeight: 1.5, letterSpacing: '0.01em',
-                }}>
-                  {item.title}
-                </span>
+                  {isActive && !item.tool && (
+                    <div style={{ marginTop: 3, display: 'flex', alignItems: 'center', gap: 4 }}>
+                      <span style={{ width: 5, height: 5, borderRadius: '50%', background: 'var(--accent)', display: 'inline-block', animation: 'pulse-accent 1.4s ease infinite' }} />
+                      <span style={{ fontSize: 9, fontFamily: 'var(--font-mono)', color: 'var(--accent)', letterSpacing: '0.06em' }}>
+                        IN PROGRESS
+                      </span>
+                    </div>
+                  )}
+                </div>
               </div>
             )
           })}
+
+          {/* Footer summary */}
+          {inProgressIdx >= 0 && (
+            <div style={{
+              margin: '4px 12px 8px',
+              padding: '6px 10px',
+              background: 'var(--bg-2)',
+              borderRadius: 6,
+              fontSize: 10, color: 'var(--text-2)', fontFamily: 'var(--font-mono)',
+              display: 'flex', justifyContent: 'space-between',
+            }}>
+              <span>STEP {inProgressIdx + 1}/{items.length}</span>
+              <span>{items.length - doneCount} remaining · {pct}% complete</span>
+            </div>
+          )}
         </div>
       )}
     </div>
@@ -484,6 +615,18 @@ export function ChatWindow({ editorOpen, onToggleEditor }: ChatWindowProps) {
   const [actionPaletteOpen, setActionPaletteOpen] = useState(false)
   const [varModalPrompt, setVarModalPrompt] = useState<string | null>(null)
   const [varModalVars, setVarModalVars] = useState<string[]>([])
+  const [isFocusMode, setIsFocusMode] = useState(false)
+  const [depthMode, setDepthMode] = useState<DepthMode>('balanced')
+  const [themeStudioOpenChat, setThemeStudioOpenChat] = useState(false)
+  const [briefOpen, setBriefOpen] = useState(false)
+  const [conferenceMode, setConferenceMode] = useState(false)
+  const [conferenceProviders, setConferenceProviders] = useState<Array<{name: string; big_model: string}>>([])
+  const [conferenceSelected, setConferenceSelected] = useState<string[]>([])
+  const [conferenceThread, setConferenceThread] = useState<ConferenceThreadData | null>(null)
+  const conferenceAbortRef = useRef<AbortController | null>(null)
+  const promptHistoryRef = useRef<string[]>([])
+  const historyIndexRef = useRef<number>(-1)
+  const draftBeforeHistoryRef = useRef<string>('')
   const [pendingImage, setPendingImage] = useState<PendingImage | null>(null)
   const [pendingFiles, setPendingFiles] = useState<FileAttachment[]>([])
   const [attachmentError, setAttachmentError] = useState('')
@@ -558,6 +701,45 @@ export function ChatWindow({ editorOpen, onToggleEditor }: ChatWindowProps) {
     if (!shouldAutoScrollRef.current) return
     bottomRef.current?.scrollIntoView({ behavior: isLoading ? 'auto' : 'smooth' })
   }, [messages, isLoading])
+
+  // Load conference providers
+  useEffect(() => {
+    fetch('/api/conference/providers', { headers: buildApiHeaders() })
+      .then((r) => r.ok ? r.json() : null)
+      .then((d) => {
+        if (d?.providers) {
+          const configured = d.providers.filter((p: any) => p.configured)
+          setConferenceProviders(configured)
+          // Default select first 2
+          if (configured.length >= 2) {
+            setConferenceSelected([configured[0].name, configured[1].name])
+          } else if (configured.length === 1) {
+            setConferenceSelected([configured[0].name])
+          }
+        }
+      })
+      .catch(() => {})
+  }, [])
+
+  // Draft auto-save: persist unsent input to localStorage
+  useEffect(() => {
+    const key = `kodo-draft-${sessionId || 'default'}`
+    if (input.trim()) {
+      localStorage.setItem(key, input)
+    } else {
+      localStorage.removeItem(key)
+    }
+  }, [input, sessionId])
+
+  // Restore draft on session change
+  useEffect(() => {
+    const key = `kodo-draft-${sessionId || 'default'}`
+    const saved = localStorage.getItem(key)
+    if (saved && !input) {
+      setInput(saved)
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sessionId])
 
   useEffect(() => {
     if (commandsRequestedRef.current) return
@@ -994,6 +1176,120 @@ export function ChatWindow({ editorOpen, onToggleEditor }: ChatWindowProps) {
     sendMessage(text, undefined, [], getSendStreamHandlers())
   }, [attachmentUploading, getSendStreamHandlers, isLoading, observerMode, sendMessage])
 
+  const CONFERENCE_COLORS: Record<string, string> = {
+    openai: '#10a37f', gemini: '#4285f4', groq: '#f55036',
+    deepseek: '#0066cc', ollama: '#9333ea', openrouter: '#7c3aed',
+    'atomic-chat': '#0ea5e9', 'github-models': '#24292f', codex: '#3b82f6',
+  }
+
+  const runConference = useCallback(async (prompt: string) => {
+    if (conferenceSelected.length < 2) return
+
+    const initialResults: ConferenceResult[] = conferenceSelected.map((prov, i) => ({
+      participantId: i,
+      name: conferenceProviders.find((p) => p.name === prov)?.name || prov,
+      provider: prov,
+      color: CONFERENCE_COLORS[prov] || '#888',
+      text: '',
+      done: false,
+      error: null,
+      started: false,
+    }))
+
+    setConferenceThread({
+      prompt,
+      results: initialResults,
+      synthesis: '',
+      synthesisStarted: false,
+      synthesisDone: false,
+      running: true,
+    })
+
+    const ctrl = new AbortController()
+    conferenceAbortRef.current = ctrl
+
+    try {
+      const body = {
+        prompt,
+        participants: conferenceSelected.map((prov, i) => ({
+          provider: prov,
+          name: initialResults[i].name,
+        })),
+        synthesize: true,
+        max_tokens: 2048,
+      }
+
+      const res = await fetch('/api/conference/debate', {
+        method: 'POST',
+        headers: buildApiHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify(body),
+        signal: ctrl.signal,
+      })
+
+      if (!res.ok) throw new Error(`Conference failed: ${res.status}`)
+      const reader = res.body?.getReader()
+      if (!reader) throw new Error('No stream')
+
+      const decoder = new TextDecoder()
+      let buf = ''
+
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
+        buf += decoder.decode(value, { stream: true })
+        const lines = buf.split('\n')
+        buf = lines.pop() || ''
+
+        for (const line of lines) {
+          if (!line.startsWith('data: ')) continue
+          let ev: Record<string, unknown>
+          try { ev = JSON.parse(line.slice(6)) } catch { continue }
+
+          const type = ev.type as string
+          const pid = ev.participant_id as number
+
+          setConferenceThread((prev) => {
+            if (!prev) return prev
+            const results = [...prev.results]
+
+            if (type === 'participant_start' && pid >= 0 && pid < results.length) {
+              results[pid] = { ...results[pid], started: true }
+              return { ...prev, results }
+            }
+            if (type === 'participant_text' && pid >= 0 && pid < results.length) {
+              results[pid] = { ...results[pid], text: results[pid].text + (ev.content as string || '') }
+              return { ...prev, results }
+            }
+            if (type === 'participant_done' && pid >= 0 && pid < results.length) {
+              results[pid] = { ...results[pid], done: true }
+              return { ...prev, results }
+            }
+            if (type === 'conference_error') {
+              if (pid >= 0 && pid < results.length) {
+                results[pid] = { ...results[pid], done: true, error: ev.message as string }
+                return { ...prev, results }
+              }
+            }
+            if (type === 'synthesis_start') {
+              return { ...prev, synthesisStarted: true }
+            }
+            if (type === 'synthesis_text') {
+              return { ...prev, synthesis: prev.synthesis + (ev.content as string || '') }
+            }
+            if (type === 'conference_done') {
+              return { ...prev, synthesisDone: true, running: false }
+            }
+            return prev
+          })
+        }
+      }
+    } catch (e) {
+      if ((e as Error).name !== 'AbortError') {
+        setConferenceThread((prev) => prev ? { ...prev, running: false } : prev)
+      }
+    }
+  }, [conferenceSelected, conferenceProviders])
+
   const handleSend = useCallback(async () => {
     const msg = input.trim()
     if (msg === '/stop') {
@@ -1013,6 +1309,18 @@ export function ChatWindow({ editorOpen, onToggleEditor }: ChatWindowProps) {
         return
       }
     }
+
+    // Conference mode: route to multi-model debate
+    if (conferenceMode && msg && conferenceSelected.length >= 2) {
+      setInput('')
+      setConferenceThread(null)
+      setTimeout(() => void runConference(msg), 50)
+      return
+    }
+
+    // Apply response depth + project brief
+    const withDepth = msg ? applyDepth(msg, depthMode) : msg
+    const finalMsg = withDepth ? applyProjectBrief(withDepth) : withDepth
 
     const imagePayload = pendingImage
       ? {
@@ -1068,13 +1376,20 @@ export function ChatWindow({ editorOpen, onToggleEditor }: ChatWindowProps) {
       setPendingFiles([])
       if (textareaRef.current) textareaRef.current.style.height = 'auto'
 
-      sendMessage(msg, imagePayload, attachmentBlocks, getSendStreamHandlers())
+      // Save to prompt history (deduplicate, max 100)
+      if (msg) {
+        promptHistoryRef.current = [msg, ...promptHistoryRef.current.filter((h) => h !== msg)].slice(0, 100)
+        historyIndexRef.current = -1
+        draftBeforeHistoryRef.current = ''
+      }
+
+      sendMessage(finalMsg, imagePayload, attachmentBlocks, getSendStreamHandlers())
     } catch (error) {
       setAttachmentError(String(error))
     } finally {
       setAttachmentUploading(false)
     }
-  }, [attachmentUploading, getSendStreamHandlers, input, isLoading, observerMode, pendingFiles, pendingImage, projectDir, sendMessage, stopGeneration, uploadZipAttachment])
+  }, [attachmentUploading, conferenceMode, conferenceSelected, depthMode, getSendStreamHandlers, input, isLoading, observerMode, pendingFiles, pendingImage, projectDir, runConference, sendMessage, stopGeneration, uploadZipAttachment])
 
   const runTerminalCommand = useCallback(async (command: string): Promise<{ cwd?: string }> => {
     const trimmed = command.trim()
@@ -1338,6 +1653,13 @@ export function ChatWindow({ editorOpen, onToggleEditor }: ChatWindowProps) {
         return
       }
 
+      // Ctrl/Cmd+Shift+F - Toggle focus mode
+      if (isMeta && event.shiftKey && event.key.toLowerCase() === 'f') {
+        event.preventDefault()
+        setIsFocusMode((prev) => !prev)
+        return
+      }
+
       // Ctrl/Cmd+Shift+E - Export conversation
       if (isMeta && event.shiftKey && event.key.toLowerCase() === 'e') {
         event.preventDefault()
@@ -1559,6 +1881,48 @@ export function ChatWindow({ editorOpen, onToggleEditor }: ChatWindowProps) {
       return
     }
 
+    // Prompt history navigation: Up/Down when at single-line with no command suggestions
+    if (!showCommandSuggestions && (e.key === 'ArrowUp' || e.key === 'ArrowDown')) {
+      const ta = e.currentTarget
+      const atTop = ta.selectionStart === 0 || !ta.value.includes('\n')
+      const atBottom = ta.selectionEnd === ta.value.length || !ta.value.includes('\n')
+      const history = promptHistoryRef.current
+      if (history.length === 0) return
+
+      if (e.key === 'ArrowUp' && atTop) {
+        e.preventDefault()
+        if (historyIndexRef.current === -1) draftBeforeHistoryRef.current = input
+        const nextIdx = Math.min(historyIndexRef.current + 1, history.length - 1)
+        historyIndexRef.current = nextIdx
+        setInput(history[nextIdx])
+        return
+      }
+      if (e.key === 'ArrowDown' && atBottom && historyIndexRef.current >= 0) {
+        e.preventDefault()
+        const nextIdx = historyIndexRef.current - 1
+        historyIndexRef.current = nextIdx
+        setInput(nextIdx < 0 ? draftBeforeHistoryRef.current : history[nextIdx])
+        return
+      }
+    }
+
+    // Tab smart autocomplete — complete common prompt starters
+    if (e.key === 'Tab' && !showCommandSuggestions && input.trim()) {
+      const suggestion = getTabSuggestion(input)
+      if (suggestion) {
+        e.preventDefault()
+        setInput(suggestion)
+        requestAnimationFrame(() => {
+          if (textareaRef.current) {
+            textareaRef.current.style.height = 'auto'
+            textareaRef.current.style.height = Math.min(textareaRef.current.scrollHeight, 200) + 'px'
+            textareaRef.current.selectionStart = textareaRef.current.selectionEnd = suggestion.length
+          }
+        })
+        return
+      }
+    }
+
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault()
       if (observerMode) return
@@ -1659,6 +2023,28 @@ export function ChatWindow({ editorOpen, onToggleEditor }: ChatWindowProps) {
       setAttachmentError('Failed to read one or more attachments')
     }
   }, [attachmentTotalBytes, pendingImage])
+
+  const handleClipboardPaste = useCallback((e: React.ClipboardEvent<HTMLTextAreaElement>) => {
+    const items = e.clipboardData?.items
+    if (!items) return
+    const fileItems: File[] = []
+    for (let i = 0; i < items.length; i++) {
+      const item = items[i]
+      if (item.kind === 'file') {
+        const file = item.getAsFile()
+        if (file) {
+          const name = file.name && file.name !== 'image.png'
+            ? file.name
+            : `screenshot-${Date.now()}.png`
+          fileItems.push(new File([file], name, { type: file.type }))
+        }
+      }
+    }
+    if (fileItems.length > 0) {
+      e.preventDefault()
+      void processPickedFiles(fileItems)
+    }
+  }, [processPickedFiles])
 
   const handleFilePick = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(e.target.files || [])
@@ -1850,7 +2236,9 @@ export function ChatWindow({ editorOpen, onToggleEditor }: ChatWindowProps) {
         height: '100%',
         overflow: 'hidden',
         background: 'var(--bg-0)',
-        position: 'relative',
+        position: isFocusMode ? 'fixed' : 'relative',
+        inset: isFocusMode ? 0 : undefined,
+        zIndex: isFocusMode ? 9990 : undefined,
       }}
       onDragEnter={handleChatDragEnter}
       onDragOver={handleChatDragOver}
@@ -1878,7 +2266,6 @@ export function ChatWindow({ editorOpen, onToggleEditor }: ChatWindowProps) {
               <span style={{ color: 'var(--green)' }}>● READY</span>
             )}
           </span>
-          <ContextRing messages={messages} budget={CONTEXT_TOKEN_BUDGET} />
         </div>
 
         <button
@@ -1970,6 +2357,31 @@ export function ChatWindow({ editorOpen, onToggleEditor }: ChatWindowProps) {
             </option>
           ))}
         </select>
+
+        {/* Multi-Model Conference toggle */}
+        <button
+          type="button"
+          onClick={() => {
+            setConferenceMode((v) => !v)
+            setConferenceThread(null)
+          }}
+          title={conferenceMode ? 'Exit Multi-Model mode' : 'Multi-Model Conference — debate across models'}
+          style={{
+            background: conferenceMode ? 'var(--accent-dim)' : 'none',
+            border: `1px solid ${conferenceMode ? 'var(--accent)' : 'var(--border)'}`,
+            color: conferenceMode ? 'var(--accent)' : 'var(--text-2)',
+            padding: '4px 10px',
+            borderRadius: 'var(--radius)',
+            cursor: 'pointer',
+            fontSize: 11,
+            fontFamily: 'var(--font-mono)',
+            display: 'flex', alignItems: 'center', gap: 5,
+            transition: 'all 0.15s',
+          }}
+        >
+          <GitCompare size={11} />
+          MULTI-MODEL
+        </button>
 
         <button
           type="button"
@@ -2188,40 +2600,49 @@ export function ChatWindow({ editorOpen, onToggleEditor }: ChatWindowProps) {
           SHORTCUTS
         </button>
 
-        <button
-          type="button"
-          onClick={() => exportConversationAsMarkdown(messages, sessionId)}
-          title="Export conversation as Markdown (⇧⌘E)"
-          disabled={messages.length === 0}
-          style={{
-            background: 'none',
-            border: '1px solid var(--border)',
-            color: 'var(--text-2)',
-            padding: '4px 10px',
-            borderRadius: 'var(--radius)',
-            cursor: messages.length === 0 ? 'not-allowed' : 'pointer',
-            fontSize: 11,
-            fontFamily: 'var(--font-mono)',
-            display: 'flex',
-            alignItems: 'center',
-            gap: 5,
-            opacity: messages.length === 0 ? 0.4 : 1,
-            transition: 'all 0.15s',
-          }}
-          onMouseEnter={(e) => {
-            if (messages.length > 0) {
-              ;(e.currentTarget as HTMLElement).style.borderColor = 'var(--border-bright)'
-              ;(e.currentTarget as HTMLElement).style.color = 'var(--text-0)'
-            }
-          }}
-          onMouseLeave={(e) => {
-            ;(e.currentTarget as HTMLElement).style.borderColor = 'var(--border)'
-            ;(e.currentTarget as HTMLElement).style.color = 'var(--text-2)'
-          }}
-        >
-          <Download size={11} />
-          EXPORT
-        </button>
+        {/* Export dropdown */}
+        <div style={{ position: 'relative' }}>
+          <button
+            type="button"
+            onClick={() => exportConversationAsMarkdown(messages, sessionId)}
+            onContextMenu={(e) => {
+              e.preventDefault()
+              void import('../lib/snapshotExport').then(({ exportAsSnapshotHtml }) => {
+                exportAsSnapshotHtml(messages, sessionId, sessionMode)
+              })
+            }}
+            title="Left-click: Export as Markdown | Right-click: Export as HTML snapshot"
+            disabled={messages.length === 0}
+            style={{
+              background: 'none',
+              border: '1px solid var(--border)',
+              color: 'var(--text-2)',
+              padding: '4px 10px',
+              borderRadius: 'var(--radius)',
+              cursor: messages.length === 0 ? 'not-allowed' : 'pointer',
+              fontSize: 11,
+              fontFamily: 'var(--font-mono)',
+              display: 'flex',
+              alignItems: 'center',
+              gap: 5,
+              opacity: messages.length === 0 ? 0.4 : 1,
+              transition: 'all 0.15s',
+            }}
+            onMouseEnter={(e) => {
+              if (messages.length > 0) {
+                ;(e.currentTarget as HTMLElement).style.borderColor = 'var(--border-bright)'
+                ;(e.currentTarget as HTMLElement).style.color = 'var(--text-0)'
+              }
+            }}
+            onMouseLeave={(e) => {
+              ;(e.currentTarget as HTMLElement).style.borderColor = 'var(--border)'
+              ;(e.currentTarget as HTMLElement).style.color = 'var(--text-2)'
+            }}
+          >
+            <Download size={11} />
+            EXPORT
+          </button>
+        </div>
 
         <div ref={themeMenuRef} style={{ position: 'relative' }}>
           <button
@@ -2709,11 +3130,75 @@ export function ChatWindow({ editorOpen, onToggleEditor }: ChatWindowProps) {
         </div>
       )}
 
+      {/* Project Brief */}
+      <ProjectBrief open={briefOpen} onToggle={() => setBriefOpen((v) => !v)} />
+
+      {/* Conference participant selector */}
+      {conferenceMode && (
+        <div style={{
+          padding: '8px 24px',
+          borderBottom: '1px solid var(--border)',
+          background: 'var(--accent-dim)',
+          display: 'flex',
+          alignItems: 'center',
+          gap: 8,
+          flexShrink: 0,
+          flexWrap: 'wrap',
+        }}>
+          <GitCompare size={11} color="var(--accent)" />
+          <span style={{ fontSize: 10, fontFamily: 'var(--font-mono)', color: 'var(--accent)', letterSpacing: '0.08em', whiteSpace: 'nowrap' }}>
+            SELECT MODELS TO DEBATE:
+          </span>
+          {conferenceProviders.map((prov) => {
+            const selected = conferenceSelected.includes(prov.name)
+            return (
+              <button
+                key={prov.name}
+                type="button"
+                onClick={() => {
+                  setConferenceSelected((prev) => {
+                    if (selected) return prev.filter((p) => p !== prov.name)
+                    if (prev.length >= 4) return prev
+                    return [...prev, prov.name]
+                  })
+                }}
+                style={{
+                  background: selected ? 'var(--bg-1)' : 'transparent',
+                  border: `1px solid ${selected ? 'var(--accent)' : 'var(--border)'}`,
+                  color: selected ? 'var(--text-0)' : 'var(--text-2)',
+                  borderRadius: 20,
+                  padding: '3px 10px',
+                  fontSize: 10,
+                  fontFamily: 'var(--font-mono)',
+                  cursor: 'pointer',
+                  display: 'flex', alignItems: 'center', gap: 5,
+                }}
+              >
+                {selected && <span style={{ width: 6, height: 6, borderRadius: '50%', background: 'var(--accent)' }} />}
+                {prov.name}
+              </button>
+            )
+          })}
+          {conferenceSelected.length < 2 && (
+            <span style={{ fontSize: 10, color: 'var(--yellow)', fontFamily: 'var(--font-mono)' }}>
+              Select at least 2 models
+            </span>
+          )}
+          <button
+            type="button"
+            onClick={() => { setConferenceMode(false); setConferenceThread(null) }}
+            style={{ marginLeft: 'auto', background: 'none', border: 'none', color: 'var(--text-2)', cursor: 'pointer', padding: 2 }}
+          >
+            <X size={12} />
+          </button>
+        </div>
+      )}
+
       {/* Messages area */}
       <div style={{
         flex: 1,
         overflowY: 'auto',
-        padding: '24px 32px',
+        padding: '24px 0',
       }}
         ref={messageListRef}
         aria-live="polite"
@@ -2721,6 +3206,8 @@ export function ChatWindow({ editorOpen, onToggleEditor }: ChatWindowProps) {
         role="log"
         onScroll={handleMessagesScroll}
       >
+        {/* Centered content wrapper — max-width for readability like Claude */}
+        <div style={{ maxWidth: 720, margin: '0 auto', padding: '0 24px' }}>
         {isEmpty && (
           <div style={{
             display: 'flex',
@@ -2821,6 +3308,11 @@ export function ChatWindow({ editorOpen, onToggleEditor }: ChatWindowProps) {
             onFork={(!observerMode && !isLoading && sessionId) ? (index) => {
               void forkSession(sessionId, index)
             } : undefined}
+            onRunCode={!observerMode ? (code, lang) => {
+              setShowTerminal(true)
+              const prefix = ['python', 'py'].includes(lang) ? 'python3 -c ' : ''
+              void runTerminalCommand(prefix ? `${prefix}${JSON.stringify(code)}` : code)
+            } : undefined}
           />
         ))}
 
@@ -2847,8 +3339,13 @@ export function ChatWindow({ editorOpen, onToggleEditor }: ChatWindowProps) {
             color: 'var(--red)',
             marginBottom: 16,
           }}>
-            ⚠ {error}
+            <CircleAlert size={12} style={{ flexShrink: 0 }} /> {error}
           </div>
+        )}
+
+        {/* Conference thread — rendered after messages */}
+        {conferenceThread && (
+          <ConferenceThread data={conferenceThread} />
         )}
 
         {isLoading && (
@@ -2856,6 +3353,7 @@ export function ChatWindow({ editorOpen, onToggleEditor }: ChatWindowProps) {
         )}
 
         <div ref={bottomRef} />
+        </div>{/* end centered wrapper */}
       </div>
 
       {showTerminal && (
@@ -2876,26 +3374,37 @@ export function ChatWindow({ editorOpen, onToggleEditor }: ChatWindowProps) {
         />
       )}
 
-      {/* Input area */}
+      {/* Input area — floating centered card like Claude AI */}
       <div style={{
-        padding: '12px 24px 16px',
-        borderTop: '1px solid var(--border)',
-        background: 'var(--bg-1)',
+        padding: '8px 24px 16px',
+        background: 'var(--bg-0)',
         flexShrink: 0,
       }}>
-        {/* Floating todo panel — above composer */}
-        <FloatingTodoPanel items={activeTodoItems} />
+        {/* Centered wrapper */}
+        <div style={{ maxWidth: 720, margin: '0 auto' }}>
 
-        {/* Smart ambient suggestions */}
-        <SmartSuggestions
-          messages={messages}
-          isLoading={isLoading}
-          onSelect={(prompt) => {
-            setInput(prompt)
-            setTimeout(() => textareaRef.current?.focus(), 50)
-          }}
-        />
+          {/* Floating todo panel */}
+          {activeTodoItems.length > 0 && (
+            <div style={{ marginBottom: 8 }}>
+              <FloatingTodoPanel items={activeTodoItems} />
+            </div>
+          )}
 
+          {/* Smart suggestions */}
+          <div style={{ marginBottom: 4, padding: '0 0 0' }}>
+            <SmartSuggestions
+              messages={messages}
+              isLoading={isLoading}
+              onSelect={(prompt) => {
+                setInput(prompt)
+                setTimeout(() => textareaRef.current?.focus(), 50)
+              }}
+            />
+          </div>
+        </div>
+
+        {/* Floating composer card — centered, max-width */}
+        <div style={{ maxWidth: 720, margin: '0 auto' }}>
         <div ref={composerRef} style={{ position: 'relative' }}>
           {showCommandSuggestions && (
             <div style={{
@@ -2978,7 +3487,7 @@ export function ChatWindow({ editorOpen, onToggleEditor }: ChatWindowProps) {
                     style={{ width: 22, height: 22, borderRadius: 3, objectFit: 'cover' }}
                   />
                   <span className="truncate" style={{ maxWidth: 140, fontSize: 10, color: 'var(--text-1)' }}>
-                    📎 {pendingImage.name}
+                    {pendingImage.name}
                   </span>
                   <button
                     type="button"
@@ -3007,7 +3516,7 @@ export function ChatWindow({ editorOpen, onToggleEditor }: ChatWindowProps) {
                     <Paperclip size={12} color="var(--text-2)" />
                   )}
                   <span className="truncate" style={{ maxWidth: 150, fontSize: 10, color: 'var(--text-1)' }}>
-                    📎 {file.name}
+                    {file.name}
                   </span>
                   <button
                     type="button"
@@ -3092,18 +3601,33 @@ export function ChatWindow({ editorOpen, onToggleEditor }: ChatWindowProps) {
             </div>
           )}
 
-        <div style={{
-          display: 'flex',
-          gap: 10,
-          alignItems: 'flex-end',
-          background: 'var(--bg-2)',
-          border: '1px solid var(--border)',
-          borderRadius: 'var(--radius)',
-          padding: '8px 8px 8px 14px',
-          transition: 'border-color 0.15s',
-        }}
-          onFocusCapture={e => { (e.currentTarget as HTMLElement).style.borderColor = 'var(--accent)' }}
-          onBlurCapture={e => { (e.currentTarget as HTMLElement).style.borderColor = 'var(--border)' }}
+        <div
+          style={{
+            display: 'flex',
+            gap: 10,
+            alignItems: 'center',
+            background: 'var(--bg-2)',
+            border: `1px solid ${conferenceMode ? 'var(--accent)' : 'var(--border)'}`,
+            borderRadius: 14,
+            padding: '10px 8px 10px 14px',
+            transition: 'border-color 0.15s, box-shadow 0.15s',
+            cursor: 'text',
+            minHeight: 52,
+            boxShadow: '0 4px 20px rgba(0,0,0,0.18)',
+          }}
+          onFocusCapture={e => {
+            ;(e.currentTarget as HTMLElement).style.borderColor = 'var(--accent)'
+            ;(e.currentTarget as HTMLElement).style.boxShadow = '0 4px 24px rgba(0,0,0,0.28), 0 0 0 1px var(--accent-glow)'
+          }}
+          onBlurCapture={e => {
+            ;(e.currentTarget as HTMLElement).style.borderColor = conferenceMode ? 'var(--accent)' : 'var(--border)'
+            ;(e.currentTarget as HTMLElement).style.boxShadow = '0 4px 20px rgba(0,0,0,0.18)'
+          }}
+          onClick={(e) => {
+            if ((e.target as HTMLElement).tagName !== 'BUTTON' && (e.target as HTMLElement).tagName !== 'INPUT') {
+              textareaRef.current?.focus()
+            }
+          }}
         >
           <input
             ref={imageInputRef}
@@ -3163,6 +3687,11 @@ export function ChatWindow({ editorOpen, onToggleEditor }: ChatWindowProps) {
             <Mic size={14} />
           </button>
 
+          {/* Response depth selector */}
+          {!observerMode && (
+            <DepthSelector value={depthMode} onChange={setDepthMode} />
+          )}
+
           {/* ─── Buddy companion ─── */}
           <BuddyWidget
             isLoading={isLoading}
@@ -3178,6 +3707,7 @@ export function ChatWindow({ editorOpen, onToggleEditor }: ChatWindowProps) {
             value={input}
             onChange={handleTextareaChange}
             onKeyDown={handleKeyDown}
+            onPaste={handleClipboardPaste}
             placeholder="Ask KODO anything, attach files, or run /help"
             rows={1}
             disabled={observerMode}
@@ -3193,6 +3723,11 @@ export function ChatWindow({ editorOpen, onToggleEditor }: ChatWindowProps) {
               lineHeight: 1.6,
               maxHeight: 200,
               overflowY: 'auto',
+              padding: 0,
+              margin: 0,
+              display: 'block',
+              alignSelf: 'center',
+              width: '100%',
             }}
           />
           <button
@@ -3237,8 +3772,11 @@ export function ChatWindow({ editorOpen, onToggleEditor }: ChatWindowProps) {
         <div style={{ fontSize: 10, color: observerMode ? 'var(--yellow)' : 'var(--text-2)', marginTop: 6, textAlign: 'center' }}>
           {observerMode
             ? 'Observer mode is active. This shared session is read-only.'
-            : 'Enter send · Shift+Enter newline · Tab autocomplete · Ctrl/Cmd+K command palette · Esc stop generation'}
+            : conferenceMode
+              ? `Multi-Model Conference: ${conferenceSelected.join(' vs ')} — Cmd+Enter to debate`
+              : 'Enter send · Shift+Enter newline · Tab autocomplete · Ctrl/Cmd+K commands'}
         </div>
+        </div>{/* end centered wrapper */}
       </div>
 
       {activePermission && (
@@ -3462,11 +4000,24 @@ export function ChatWindow({ editorOpen, onToggleEditor }: ChatWindowProps) {
         />
       )}
 
+      {/* Status bar */}
+      <StatusBar
+        onOpenPalette={() => setActionPaletteOpen(true)}
+        onOpenTheme={() => setThemeStudioOpenChat(true)}
+        isFocusMode={isFocusMode}
+        onToggleFocus={() => setIsFocusMode((v) => !v)}
+      />
+
       {/* Action palette — Cmd+Shift+K */}
       <CommandPalette
         open={actionPaletteOpen}
         onClose={() => setActionPaletteOpen(false)}
       />
+
+      {/* Theme Studio from chat */}
+      {themeStudioOpenChat && (
+        <ThemeStudioChat onClose={() => setThemeStudioOpenChat(false)} />
+      )}
     </div>
   )
 }

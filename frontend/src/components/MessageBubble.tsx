@@ -570,6 +570,7 @@ type MessageBubbleProps = {
   onEditUserPrompt?: (content: string) => void
   onRetryUserPrompt?: (content: string) => void
   onFork?: (index: number) => void
+  onRunCode?: (code: string, lang: string) => void
   disableUserRetry?: boolean
 }
 
@@ -580,6 +581,7 @@ export function MessageBubble({
   onEditUserPrompt,
   onRetryUserPrompt,
   onFork,
+  onRunCode,
   disableUserRetry = false,
 }: MessageBubbleProps) {
   const [copiedIndex, setCopiedIndex] = useState<number | null>(null)
@@ -960,31 +962,52 @@ export function MessageBubble({
                         justifyContent: 'space-between',
                       }}>
                         <span>{language.toUpperCase()}</span>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            void copyTextToClipboard(rawCode).then((copied) => {
-                              if (!copied) return
-                              setCopiedIndex(blockIndex)
-                              window.setTimeout(() => {
-                                setCopiedIndex((prev) => (prev === blockIndex ? null : prev))
-                              }, 2000)
-                            })
-                          }}
-                          style={{
-                            border: '1px solid var(--border)',
-                            background: 'var(--bg-2)',
-                            color: copiedIndex === blockIndex ? 'var(--green)' : 'var(--text-1)',
-                            borderRadius: 3,
-                            cursor: 'pointer',
-                            fontSize: 9,
-                            fontFamily: 'var(--font-mono)',
-                            padding: '2px 6px',
-                            letterSpacing: '0.08em',
-                          }}
-                        >
-                          {copiedIndex === blockIndex ? 'COPIED' : 'COPY'}
-                        </button>
+                        <div style={{ display: 'flex', gap: 4 }}>
+                          {onRunCode && ['bash', 'sh', 'python', 'py', 'javascript', 'js', 'typescript', 'ts', 'node'].includes(language.toLowerCase()) && (
+                            <button
+                              type="button"
+                              onClick={() => onRunCode(rawCode, language)}
+                              style={{
+                                border: '1px solid var(--green)',
+                                background: 'var(--green-dim)',
+                                color: 'var(--green)',
+                                borderRadius: 3,
+                                cursor: 'pointer',
+                                fontSize: 9,
+                                fontFamily: 'var(--font-mono)',
+                                padding: '2px 6px',
+                                letterSpacing: '0.08em',
+                              }}
+                            >
+                              RUN
+                            </button>
+                          )}
+                          <button
+                            type="button"
+                            onClick={() => {
+                              void copyTextToClipboard(rawCode).then((copied) => {
+                                if (!copied) return
+                                setCopiedIndex(blockIndex)
+                                window.setTimeout(() => {
+                                  setCopiedIndex((prev) => (prev === blockIndex ? null : prev))
+                                }, 2000)
+                              })
+                            }}
+                            style={{
+                              border: '1px solid var(--border)',
+                              background: 'var(--bg-2)',
+                              color: copiedIndex === blockIndex ? 'var(--green)' : 'var(--text-1)',
+                              borderRadius: 3,
+                              cursor: 'pointer',
+                              fontSize: 9,
+                              fontFamily: 'var(--font-mono)',
+                              padding: '2px 6px',
+                              letterSpacing: '0.08em',
+                            }}
+                          >
+                            {copiedIndex === blockIndex ? 'COPIED' : 'COPY'}
+                          </button>
+                        </div>
                       </div>
                       <SyntaxHighlighter
                         style={vscDarkPlus}

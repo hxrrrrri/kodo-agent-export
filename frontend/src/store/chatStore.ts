@@ -88,6 +88,9 @@ export interface TodoItem {
   id: string
   title: string
   status: TodoStatus
+  detail?: string
+  tool?: string
+  category?: 'analysis' | 'code' | 'test' | 'docs' | 'deploy' | 'design' | 'review' | 'fix' | 'plan'
 }
 
 export interface ArtifactItem {

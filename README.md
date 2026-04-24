@@ -19,7 +19,7 @@
 ---
 
 **KODO** is a fully self-hosted autonomous coding agent.  
-FastAPI backend · React UI · Multi-provider AI · Real-time streaming · Session memory · Live artifacts with preview
+FastAPI backend · React UI · Multi-provider AI · Real-time streaming · Session memory · Live artifacts · Multi-model conference · Advanced UI customization
 
 [![Python](https://img.shields.io/badge/Python-3.11+-3776AB?style=flat-square&logo=python&logoColor=white)](https://python.org)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.110+-009688?style=flat-square&logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com)
@@ -45,6 +45,9 @@ FastAPI backend · React UI · Multi-provider AI · Real-time streaming · Sessi
 - [Agent Modes](#agent-modes)
 - [Artifacts v2](#artifacts-v2)
 - [Design Studio](#design-studio)
+- [Multi-Model Conference](#multi-model-conference)
+- [Theme Studio](#theme-studio)
+- [Power User Features](#power-user-features)
 - [Slash Commands](#slash-commands)
 - [Built-in Tools](#built-in-tools)
 - [Skills System](#skills-system)
@@ -69,13 +72,15 @@ FastAPI backend · React UI · Multi-provider AI · Real-time streaming · Sessi
 KODO is a **self-hosted AI coding agent** you run on your own machine or server. It gives you a full chat interface powered by any major AI provider — Anthropic Claude, OpenAI GPT, Gemini, DeepSeek, Groq, Ollama, and more — with a rich set of agent capabilities:
 
 - **Autonomous tool execution** — the agent reads files, runs bash/shell commands, searches the web, queries databases, and edits code end-to-end.
-- **Live artifacts** — Claude.ai-style artifact side panel with sandboxed React/HTML/SVG/Mermaid/Graphviz/Markdown preview, multi-file bundles, versioning with diff view, ZIP download, and public share links. Provider-neutral: works identically with Anthropic, OpenAI, Gemini, Ollama, and every other configured provider.
-- **Session memory** — every conversation is persisted locally under `~/.kodo`, with full checkpoint and restore support.
+- **Live artifacts** — Claude.ai-style artifact side panel with sandboxed React/HTML/SVG/Mermaid/Graphviz/Markdown preview, multi-file bundles, versioning with diff view, ZIP download, public share links, and fullscreen mode. Provider-neutral: works with any configured provider.
+- **Multi-model conference** — send the same prompt to 2-6 different AI models simultaneously, watch them respond in parallel columns, and get a synthesized best-of-all answer.
+- **Session memory** — every conversation is persisted locally under `~/.kodo`, with full checkpoint, fork/branch, and restore support.
 - **Multi-provider smart routing** — switch providers on the fly or let KODO automatically route to the fastest, cheapest, or highest-quality provider.
+- **Theme Studio** — full real-time UI customizer with canvas HSL color picker, gradient builder, custom CSS injection, and named theme persistence.
 - **Collaboration** — share a live read-only view of any session or individual artifact via a share link.
 - **Replay** — step through any past session like a video with autoplay and JSON export.
-- **Design Studio** — visual web editor with drag-drop, live theme extraction, and iframe harness for building pages without writing code.
-- **Prompt & skill library** — build, store, and reuse prompt templates and custom markdown skills.
+- **Design Studio** — visual web editor with drag-drop, live theme extraction, clipboard paste, and iframe harness for building pages without writing code.
+- **Prompt & skill library** — build, store, and reuse prompt templates (with `{{variable}}` fill-in UI) and custom markdown skills.
 - **Cron scheduler** — fire agent runs on simple intervals (`every_15_minutes`, `daily_09:00`, etc.).
 - **Marketplace packs** — export/import skills, prompts, and cron jobs as zip bundles.
 - **PWA support** — install as a desktop app with offline shell caching.
@@ -88,17 +93,22 @@ Everything runs locally. No cloud dependency beyond your chosen AI provider API 
 
 | Category | Features |
 |---|---|
-| **Chat & Streaming** | SSE streaming with real-time tool output, token-level deltas, auto-generated session titles |
-| **Agent Execution** | Autonomous bash/shell/PowerShell execution, file read/write/edit, git tool, glob, grep, REPL |
-| **Memory & Sessions** | Persistent sessions under `~/.kodo`, checkpoints, restore, usage telemetry |
+| **Chat & Streaming** | SSE streaming with real-time tool output, token-level deltas, auto-generated session titles, draft auto-save, prompt history (up/down), clipboard paste |
+| **Agent Execution** | Autonomous bash/shell/PowerShell execution, file read/write/edit, git tool, glob, grep, REPL, inline code runner |
+| **Memory & Sessions** | Persistent sessions under `~/.kodo`, checkpoints, restore, session branching (fork), conversation export (Markdown + HTML snapshot) |
 | **Multi-Provider** | Anthropic, OpenAI, Gemini, DeepSeek, Groq, OpenRouter, GitHub Models, Ollama, AtomicChat, Codex |
 | **Smart Router** | Health-checked auto-routing by latency, cost, quality, or balanced strategy |
-| **Agent Modes** | Execute, Plan, Debug, Review — each with distinct prompting behavior |
-| **Artifacts v2** | Live preview (HTML / React+JSX / SVG / Mermaid / Markdown / Graphviz), multi-file bundles, versioning + diff, ZIP download, public share links, provider-neutral text protocol |
-| **Design Studio** | Visual web editor with drag-drop, theme extraction, iframe harness, DOM tree view, undo/redo |
+| **Multi-Model Conference** | Debate the same prompt across 2-6 models simultaneously; synthesizer produces a composite best answer |
+| **Agent Modes** | Execute, Plan, Debug, Review, Coordinator, BugHunter, UltraPlan — each with distinct prompting behavior |
+| **Artifacts v2** | Live preview (HTML / React+JSX / SVG / Mermaid / Markdown / Graphviz), multi-file bundles, versioning + diff, ZIP download, public share links, fullscreen mode, provider-neutral text protocol |
+| **Artifact Gallery** | Browse all artifacts across all sessions in a searchable, filterable grid |
+| **Design Studio** | Visual web editor with drag-drop, theme extraction, iframe harness, DOM tree view, undo/redo, clipboard paste |
+| **Theme Studio** | Full CSS variable editor, canvas-based HSL color picker, gradient builder (linear/radial, unlimited stops), typography controls, custom CSS injection, named theme save/load/export |
+| **Session Insights** | Real-time analytics — message counts, token usage, cost, top tools, conversation topics, most-referenced files |
+| **Smart Suggestions** | Context-aware follow-up chips after each response — test/fix/optimize/summarize based on content |
 | **Collaboration** | Share links, observer read-only mode, live SSE viewer stream, shared artifact pages |
 | **Replay** | Step controls, autoplay, JSON export, message highlighting |
-| **Prompt Library** | CRUD API + UI, `{{variable}}` template rendering |
+| **Prompt Library** | CRUD API + UI, `{{variable}}` template rendering with fill-in modal |
 | **Custom Skills** | Markdown-based skill builder with upload/edit UI |
 | **Code Review** | Built-in AI code review panel (`/api/chat/code-review`) |
 | **Notebook** | Python/Node cell execution with per-cell outputs |
@@ -108,7 +118,7 @@ Everything runs locally. No cloud dependency beyond your chosen AI provider API 
 | **Screenshot** | URL screenshot capture with base64 PNG output (opt-in) |
 | **Database** | Read-only SQL via `SELECT` — SQLite, PostgreSQL, MySQL (opt-in) |
 | **Email** | SMTP dispatch via `send_email` tool (opt-in) |
-| **TTS** | OpenAI text-to-speech (opt-in) |
+| **TTS** | OpenAI text-to-speech with browser speech fallback (opt-in) |
 | **Image Gen** | DALL-E 3 image generation (opt-in) |
 | **Cron** | Agent runs on simple interval expressions, stored under `~/.kodo/cron.json` |
 | **Marketplace** | Export/import skills + prompts + cron as `.kodopack` zip bundles |
@@ -121,6 +131,10 @@ Everything runs locally. No cloud dependency beyond your chosen AI provider API 
 | **Rate Limiting** | Configurable per-endpoint limits |
 | **Auth** | Optional bearer token auth for the API |
 | **Doctor** | `/doctor` self-diagnostic tool with environment report |
+| **Status Bar** | VS Code-style bottom bar with live mode, model, context %, cost, shortcuts |
+| **Focus Mode** | Cmd+Shift+F full-screen distraction-free writing mode |
+| **Response Depth** | Per-send depth selector: Concise / Balanced / Thorough / Expert |
+| **Project Brief** | Persistent context notes injected silently into every message |
 
 ---
 
@@ -650,6 +664,108 @@ A visual web editor built on top of the artifact iframe harness. Open it with `/
 - DOM tree sidebar for navigating and selecting elements
 - Full undo / redo history
 - Export as HTML artifact when done
+
+---
+
+## Multi-Model Conference
+
+Send the same prompt to 2-6 different AI models simultaneously and watch them answer in parallel — then get a synthesized best-of-all-worlds answer.
+
+Open via the **lightning bolt icon** in the sidebar.
+
+### How it works
+
+1. Select 2-6 providers (OpenAI, Groq, Gemini, DeepSeek, Ollama, OpenRouter, etc.)
+2. Type your question and click **DEBATE**
+3. Each model's response streams in its own column simultaneously
+4. When all models finish, a synthesizer reads all responses and produces a single comprehensive answer that incorporates the best insights from each
+
+### API
+
+```http
+POST /api/conference/debate
+Content-Type: application/json
+
+{
+  "prompt": "What are the trade-offs of microservices vs monolith?",
+  "participants": [
+    {"provider": "openai", "name": "GPT-4o"},
+    {"provider": "groq", "name": "Llama 3"},
+    {"provider": "deepseek", "name": "DeepSeek"}
+  ],
+  "synthesize": true,
+  "max_tokens": 2048
+}
+```
+
+**SSE event types:** `participant_start`, `participant_text`, `participant_done`, `synthesis_start`, `synthesis_text`, `conference_done`, `conference_error`
+
+```http
+GET /api/conference/providers
+```
+Lists all configured providers available for conference mode.
+
+---
+
+## Theme Studio
+
+A full-featured UI customizer that applies CSS custom property overrides in real time. Open via the palette icon in the sidebar rail.
+
+### Features
+
+- **Canvas Color Picker** — HSL square + hue strip + hex input + RGB sliders + quick swatches
+- **Variable Groups** — edit Backgrounds (4 layers), Text (3 levels), Accent/Brand (3 vars), Semantic colors (success/warning/error/info), Borders
+- **Gradient Builder** — Builder / Presets / Manual CSS modes; Builder supports unlimited color stops, position sliders, linear angle or radial origin controls
+- **Layout Tab** — border radius presets (0–24px) + monospace font selector
+- **CSS Injection** — free-form custom CSS textarea, applied live and persisted across sessions
+- **Named Themes** — save, load, delete, export as JSON, import from JSON
+- **Reset** — one click restores the active theme defaults
+
+All changes apply instantly via `document.documentElement.style.setProperty()` and persist to `localStorage`.
+
+---
+
+## Power User Features
+
+### Focus Mode (`Cmd+Shift+F`)
+Full-screen takeover of the chat — hides sidebar, covers everything. Press again or use the status bar button to exit.
+
+### Response Depth Selector
+Pill in the composer bar: **C** Concise / **B** Balanced / **T** Thorough / **E** Expert. Transparently prepends a style instruction to every prompt.
+
+### Project Brief
+Collapsible panel above the message list. Write persistent context (tech stack, constraints, team rules). Content is silently prepended to every message as `[Project context — always keep in mind: ...]`.
+
+### Prompt History
+Up/Down arrows in the empty composer browse past sent prompts — terminal-style. Pressing Down at the first entry restores your unsaved draft.
+
+### Draft Auto-Save
+Every keystroke in the composer is saved to `localStorage[kodo-draft-{sessionId}]`. Restored automatically on refresh or session switch.
+
+### Clipboard Paste
+Press Ctrl+V anywhere in the composer (or DesignStudio input) to attach screenshots from the Snipping Tool, copied images, or any clipboard files.
+
+### Tab Smart Autocomplete
+Press Tab when a prompt matches a common starter (`fix the`, `write a func`, `explain`, `create a react`, etc.) to expand to a full template.
+
+### Inline Code Runner
+Click **RUN** on any `bash`, `python`, `js`, or `ts` code block in chat — opens the terminal and executes immediately.
+
+### Session Branching
+Click **FORK** on any assistant message to create a new parallel session starting from that point. Try different approaches non-destructively.
+
+### Status Bar
+VS Code-style 24px bar at the bottom showing live: mode, model, context window %, cost, RUNNING indicator, and keyboard hint row.
+
+### Conversation Export
+- Left-click **EXPORT** in the header: download as Markdown
+- Right-click **EXPORT**: download as self-contained HTML snapshot (beautiful dark-themed, shareable, no dependencies)
+
+### Artifact Gallery
+Browse all artifacts from all sessions in a filterable grid. Filter by type (HTML/React/SVG/Mermaid/etc.), search by title. Click any card to open it.
+
+### Session Insights
+Real-time analytics panel in the sidebar: message counts, token usage, cache hits, estimated cost, top tools used, conversation topics (auto-detected), most-referenced files (extracted from content + tool calls).
 
 ---
 
@@ -1211,6 +1327,6 @@ Use `/cost` or `/cost 7` (last 7 days) in the chat to see usage summaries.
 
 **KODO Agent** — Built for developers who want their AI to actually do the work.
 
-`{ autonomous }` `{ self-hosted }` `{ multi-provider }` `{ streaming }` `{ open }`
+`{ autonomous }` `{ self-hosted }` `{ multi-provider }` `{ multi-model-conference }` `{ streaming }` `{ fully-customizable }` `{ open }`
 
 </div>

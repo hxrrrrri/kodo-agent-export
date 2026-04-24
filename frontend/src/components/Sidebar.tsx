@@ -1,12 +1,14 @@
 import { MouseEvent as ReactMouseEvent, useEffect, useMemo, useRef, useState } from 'react'
 import {
   Activity,
+  BarChart2,
   Cpu,
   FileText,
   Hammer,
   Maximize2,
   MessageSquare,
   Moon,
+  Palette,
   PanelLeftClose,
   PanelLeftOpen,
   Plus,
@@ -32,13 +34,15 @@ import { PromptCompressorPanel } from './PromptCompressorPanel'
 import { SkillBuilderPanel } from './SkillBuilderPanel'
 import { CodeReviewPanel } from './CodeReviewPanel'
 import { ArtifactGallery } from './ArtifactGallery'
+import { ThemeStudio, applyVarsToDOM } from './ThemeStudio'
+import { SessionInsights } from './SessionInsights'
 
 type SidebarProps = {
   collapsed: boolean
   onToggleCollapse: () => void
 }
 
-type SidebarView = 'sessions' | 'providers' | 'agents' | 'usage' | 'prompts' | 'compressor' | 'skills' | 'crg' | 'review' | 'settings' | 'design' | 'gallery'
+type SidebarView = 'sessions' | 'providers' | 'agents' | 'usage' | 'prompts' | 'compressor' | 'skills' | 'crg' | 'review' | 'settings' | 'design' | 'gallery' | 'insights'
 
 type RuntimeTask = {
   task_id: string
@@ -348,6 +352,21 @@ export function Sidebar({ collapsed, onToggleCollapse }: SidebarProps) {
 
   const [activeView, setActiveView] = useState<SidebarView>('sessions')
   const [showStarredOnly, setShowStarredOnly] = useState(false)
+  const [themeStudioOpen, setThemeStudioOpen] = useState(false)
+
+  // Restore custom theme vars on mount
+  useEffect(() => {
+    try {
+      const saved = JSON.parse(localStorage.getItem('kodo-active-theme-vars-v1') || '{}')
+      if (Object.keys(saved).length > 0) applyVarsToDOM(saved)
+      const css = localStorage.getItem('kodo-custom-css-v1') || ''
+      if (css) {
+        let el = document.getElementById('kodo-custom-css')
+        if (!el) { el = document.createElement('style'); el.id = 'kodo-custom-css'; document.head.appendChild(el) }
+        el.textContent = css
+      }
+    } catch { /* ignore */ }
+  }, [])
   const [agentNodes, setAgentNodes] = useState<AgentNode[]>([])
   const [agentGraphError, setAgentGraphError] = useState<string | null>(null)
   const [agentGraphLastUpdatedAt, setAgentGraphLastUpdatedAt] = useState<string>('')
@@ -1168,6 +1187,15 @@ export function Sidebar({ collapsed, onToggleCollapse }: SidebarProps) {
           }}
           active={activeView === 'gallery'}
         />
+        <RailButton
+          icon={<BarChart2 size={15} />}
+          label="Session Insights"
+          onClick={() => {
+            setActiveView('insights')
+            if (collapsed) onToggleCollapse()
+          }}
+          active={activeView === 'insights'}
+        />
 
         <RailButton
           icon={<Wand2 size={15} />}
@@ -1185,7 +1213,18 @@ export function Sidebar({ collapsed, onToggleCollapse }: SidebarProps) {
           label="Toggle theme"
           onClick={toggleTheme}
         />
+        <RailButton
+          icon={<Palette size={15} />}
+          label="Theme Studio"
+          onClick={() => setThemeStudioOpen(true)}
+          active={themeStudioOpen}
+        />
       </div>
+
+      {/* Theme Studio overlay */}
+      {themeStudioOpen && (
+        <ThemeStudio onClose={() => setThemeStudioOpen(false)} />
+      )}
 
       <div
         style={{
@@ -2300,6 +2339,10 @@ export function Sidebar({ collapsed, onToggleCollapse }: SidebarProps) {
 
           {activeView === 'gallery' && (
             <ArtifactGallery />
+          )}
+
+          {activeView === 'insights' && (
+            <SessionInsights />
           )}
 
           {activeView === 'settings' && (

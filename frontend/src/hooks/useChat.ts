@@ -146,6 +146,25 @@ function normalizeUsage(value: unknown): Message['usage'] | undefined {
   return usage
 }
 
+const CATEGORY_KEYWORDS: Array<[TodoItem['category'], string[]]> = [
+  ['fix', ['fix', 'bug', 'patch', 'repair', 'resolve', 'correct']],
+  ['test', ['test', 'verify', 'validate', 'check', 'spec', 'assert', 'coverage']],
+  ['deploy', ['deploy', 'release', 'publish', 'ship', 'push', 'launch']],
+  ['docs', ['document', 'docs', 'readme', 'comment', 'annotate', 'write']],
+  ['design', ['design', 'architect', 'structure', 'plan', 'model', 'schema']],
+  ['review', ['review', 'audit', 'inspect', 'analyse', 'analyze', 'assess']],
+  ['analysis', ['analyse', 'analyze', 'investigate', 'explore', 'examine', 'understand', 'identify']],
+  ['code', ['implement', 'build', 'create', 'add', 'refactor', 'update', 'modify', 'generate', 'code']],
+]
+
+function detectCategory(title: string): TodoItem['category'] | undefined {
+  const lower = title.toLowerCase()
+  for (const [cat, words] of CATEGORY_KEYWORDS) {
+    if (words.some((w) => lower.includes(w))) return cat
+  }
+  return undefined
+}
+
 function normalizeTodoItems(value: unknown): TodoItem[] | undefined {
   if (!Array.isArray(value)) return undefined
 
@@ -162,7 +181,10 @@ function normalizeTodoItems(value: unknown): TodoItem[] | undefined {
       : statusRaw === 'in_progress'
         ? 'in_progress'
         : 'pending'
-    rows.push({ id, title, status })
+    const detail = raw.detail ? String(raw.detail).trim() : undefined
+    const tool = raw.tool ? String(raw.tool).trim() : undefined
+    const category = (raw.category as TodoItem['category']) || detectCategory(title)
+    rows.push({ id, title, status, detail, tool, category })
   }
 
   return rows.length > 0 ? rows : undefined
