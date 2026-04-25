@@ -4,6 +4,7 @@ import {
   BarChart2,
   BookOpen,
   Brain,
+  Globe,
   Clock,
   Cpu,
   FileText,
@@ -38,6 +39,7 @@ import { SkillBuilderPanel } from './SkillBuilderPanel'
 import { CodeReviewPanel } from './CodeReviewPanel'
 import { AntiVibePanel } from './AntiVibePanel'
 import { HermesPanel } from './HermesPanel'
+import { BrowserPanel } from './BrowserPanel'
 import { ArtifactGallery } from './ArtifactGallery'
 import { ThemeStudio, applyVarsToDOM } from './ThemeStudio'
 import { SessionInsights } from './SessionInsights'
@@ -48,7 +50,7 @@ type SidebarProps = {
   onToggleCollapse: () => void
 }
 
-type SidebarView = 'sessions' | 'providers' | 'agents' | 'usage' | 'prompts' | 'compressor' | 'skills' | 'crg' | 'review' | 'antivibe' | 'hermes' | 'settings' | 'design' | 'gallery' | 'insights' | 'scheduler'
+type SidebarView = 'sessions' | 'providers' | 'agents' | 'usage' | 'prompts' | 'compressor' | 'skills' | 'crg' | 'review' | 'antivibe' | 'hermes' | 'browser' | 'settings' | 'design' | 'gallery' | 'insights' | 'scheduler'
 
 type RuntimeTask = {
   task_id: string
@@ -874,6 +876,7 @@ export function Sidebar({ collapsed, onToggleCollapse }: SidebarProps) {
           kodo_enable_auto_title: toBool(settingsData.kodo_enable_auto_title),
           kodo_enable_caveman: toBool(settingsData.kodo_enable_caveman),
           kodo_enable_krawlx: toBool(settingsData.kodo_enable_krawlx),
+          kodo_enable_browser_harness: toBool(settingsData.kodo_enable_browser_harness),
         }),
       })
       if (!response.ok) {
@@ -1434,6 +1437,12 @@ export function Sidebar({ collapsed, onToggleCollapse }: SidebarProps) {
             label="Hermes"
             active={activeView === 'hermes'}
             onClick={() => setActiveView('hermes')}
+          />
+          <PanelNav
+            icon={<Globe size={15} />}
+            label="Browser"
+            active={activeView === 'browser'}
+            onClick={() => setActiveView('browser')}
           />
           <PanelNav
             icon={<Clock size={15} />}
@@ -2386,6 +2395,10 @@ export function Sidebar({ collapsed, onToggleCollapse }: SidebarProps) {
             <HermesPanel />
           )}
 
+          {activeView === 'browser' && (
+            <BrowserPanel />
+          )}
+
           {activeView === 'scheduler' && (
             <SchedulerPanel />
           )}
@@ -2414,6 +2427,7 @@ export function Sidebar({ collapsed, onToggleCollapse }: SidebarProps) {
                   ['kodo_enable_auto_title', 'Auto title'],
                   ['kodo_enable_caveman', 'Caveman toolkit'],
                   ['kodo_enable_krawlx', 'KrawlX crawler'],
+                  ['kodo_enable_browser_harness', 'Browser Harness (Beta)'],
                   ['kodo_no_telemetry', 'Disable telemetry'],
                 ].map(([key, label]) => {
                   const value = String(settingsData[key] || '').toLowerCase()

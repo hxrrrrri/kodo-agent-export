@@ -39,6 +39,8 @@ from .crg_get_architecture import CRGGetArchitectureTool
 from .crg_list_flows import CRGListFlowsTool
 from .crg_refactor import CRGRefactorTool
 from .crg_get_review_context import CRGGetReviewContextTool
+from .browser_harness import BrowserHarnessTool
+from .browser_actions import BROWSER_ACTION_TOOLS
 from .base import BaseTool, ToolResult
 
 ALL_TOOLS: list[BaseTool] = [
@@ -83,6 +85,8 @@ ALL_TOOLS: list[BaseTool] = [
     CRGListFlowsTool(),
     CRGRefactorTool(),
     CRGGetReviewContextTool(),
+    BrowserHarnessTool(),
+    *BROWSER_ACTION_TOOLS,
 ]
 
 TOOL_MAP: dict[str, BaseTool] = {t.name: t for t in ALL_TOOLS}
