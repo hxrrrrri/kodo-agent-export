@@ -106,7 +106,7 @@ export function InlineArtifactCard({ artifact }: Props) {
       border: '1px solid var(--border)',
       borderRadius: 'var(--radius)',
       overflow: 'hidden',
-      background: 'var(--bg-0)',
+      background: 'var(--bg-1)',
       transition: 'border-color 0.18s ease',
     }}>
       {/* Header */}
@@ -114,9 +114,8 @@ export function InlineArtifactCard({ artifact }: Props) {
         display: 'flex',
         alignItems: 'center',
         gap: 8,
-        background: 'var(--bg-2)',
-        borderBottom: '1px solid var(--border)',
-        padding: '6px 10px',
+        background: 'transparent',
+        padding: '8px 12px 6px 12px',
         flexWrap: 'wrap',
       }}>
         <span style={{ fontSize: 9, letterSpacing: '0.12em', color: 'var(--accent)', fontFamily: 'var(--font-mono)', fontWeight: 700 }}>
@@ -220,7 +219,7 @@ export function InlineArtifactCard({ artifact }: Props) {
         height: livePreview && view === 'preview' ? 360 : 'auto',
         maxHeight: 480,
         overflow: 'auto',
-        background: livePreview && view === 'preview' ? '#fff' : 'var(--bg-0)',
+        background: livePreview && view === 'preview' ? '#fff' : 'transparent',
       }}>
         {view === 'preview' && livePreview ? (
           <div key={reloadKey} style={{ width: '100%', height: '100%' }}>
