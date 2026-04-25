@@ -595,8 +595,8 @@ async def _run_conference(
 ) -> AsyncIterator[str]:
     """Core generator: runs all participants, collects results, synthesizes."""
     if body.mode == "debate":
-        async for event in _run_debate_conference(body):
-            yield event
+        async for chunk in _run_debate_conference(body):
+            yield chunk
         return
 
     queue: asyncio.Queue[dict] = asyncio.Queue()
@@ -652,8 +652,8 @@ async def _run_conference(
             queue,
         )
         while not queue.empty():
-            event = queue.get_nowait()
-            yield _sse(event)
+            s_event = queue.get_nowait()
+            yield _sse(s_event)
 
     if not final_answer.strip():
         final_answer = "\n\n".join(

@@ -16,14 +16,13 @@ import json
 import logging
 import os
 import re
-from pathlib import Path
-from typing import Any, AsyncIterator
+from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 
 from api.security import MEMORY_RATE_LIMITER, enforce_rate_limit, require_api_auth
-from memory.manager import memory_manager, KODO_DIR
+from memory.manager import memory_manager, KODO_DIR, GLOBAL_MEMORY_FILE
 
 router = APIRouter(prefix="/api/hermes", tags=["hermes"])
 logger = logging.getLogger(__name__)
@@ -481,9 +480,7 @@ async def apply_soul_preset(name: str, request: Request):
     return {"applied": name, "content": soul}
 
 
-# ── 5. Memory (MEMORY.md) direct read/write ───────────────────────────────────
-
-from memory.manager import GLOBAL_MEMORY_FILE  # already imported above via KODO_DIR, re-clarify
+# already imported above via KODO_DIR, re-clarify
 
 
 class MemoryWriteRequest(BaseModel):

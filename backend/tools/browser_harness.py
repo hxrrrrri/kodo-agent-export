@@ -1,4 +1,3 @@
-import asyncio
 from typing import Any
 from tools.base import BaseTool, ToolResult
 
@@ -50,7 +49,7 @@ async def __browser_tool_func():
 {chr(10).join(['    ' + line for line in python_code.split(chr(10))])}
 """
         
-        namespace = {}
+        namespace: dict[str, Any] = {}
         try:
             from privacy import feature_enabled
             if not feature_enabled("BROWSER_HARNESS", default="0"):

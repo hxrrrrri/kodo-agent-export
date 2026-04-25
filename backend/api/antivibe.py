@@ -458,8 +458,10 @@ def _generate_structured_report(
 
         class _RM:
             def __init__(self, r: Any):
-                self.title = r.title; self.url = r.url
-                self.description = r.description; self.score = r.score
+                self.title = r.title
+                self.url = r.url
+                self.description = r.description
+                self.score = r.score
         resources = [_RM(r) for r in resources_raw]
 
         return module.format_deep_dive(phase, fas, resources)
@@ -834,9 +836,13 @@ async def antivibe_full_scan(body: FullScanRequest, request: Request):
                             self.concepts = d.get("concepts", [])
                             class _S:
                                 def __init__(self, s: dict[str, Any]):
-                                    self.kind = s.get("kind", ""); self.name = s.get("name", ""); self.line = s.get("line", 0)
+                                    self.kind = s.get("kind", "")
+                                    self.name = s.get("name", "")
+                                    self.line = s.get("line", 0)
                             self.symbols = [_S(s) for s in d.get("symbols", [])]
-                            self.imports = d.get("imports", []); self.exports = d.get("exports", []); self.key_points = d.get("key_points", [])
+                            self.imports = d.get("imports", [])
+                            self.exports = d.get("exports", [])
+                            self.key_points = d.get("key_points", [])
                             self.path = d.get("rel_path") or d.get("filename", "?")
                     fa_list = [_FA2(a) for a in analyses]
                     quality = module.quality_scores(fa_list)
@@ -862,7 +868,7 @@ async def antivibe_full_scan(body: FullScanRequest, request: Request):
             yield f"data: {json.dumps({'type': 'phase', 'phase': 'ai', 'message': 'Generating deep-dive...'})}\n\n"
 
             prompt_lines = [
-                f"Generate a comprehensive deep-dive analysis of this project's recent changes.",
+                "Generate a comprehensive deep-dive analysis of this project's recent changes.",
                 f"Files analyzed: {len(analyses)} ({total_lines} lines total)",
                 f"Concepts detected: {', '.join(all_concepts) or 'none'}",
                 "",
@@ -887,14 +893,14 @@ async def antivibe_full_scan(body: FullScanRequest, request: Request):
                     prompt_lines.append(f"- [{r['title']}]({r['url']}) — {r['description']}")
 
             if quality:
-                prompt_lines.append(f"\n## Quality baseline (from static analysis):")
+                prompt_lines.append("\n## Quality baseline (from static analysis):")
                 prompt_lines.append(f"- Coverage: {quality.get('coverage', '?')}/100")
                 prompt_lines.append(f"- Depth: {quality.get('depth', '?')}/100")
                 prompt_lines.append(f"- Traceability: {quality.get('traceability', '?')}/100")
                 prompt_lines.append(f"- Overall: {quality.get('overall', '?')}/100")
 
             if trace_steps:
-                prompt_lines.append(f"\n## Representative trace:")
+                prompt_lines.append("\n## Representative trace:")
                 for step in trace_steps:
                     prompt_lines.append(f"- {step}")
 

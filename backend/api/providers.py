@@ -479,5 +479,5 @@ async def openrouter_models_endpoint(request: Request):
                 "pricing": m.get("pricing"),
             })
 
-    models.sort(key=lambda x: x["id"])
+    models.sort(key=lambda x: str(x.get("id", "")))
     return {"models": models, "count": len(models)}

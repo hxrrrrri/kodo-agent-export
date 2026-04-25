@@ -5,7 +5,7 @@
  *   3. User profile viewer + inference
  */
 import { useCallback, useEffect, useState } from 'react'
-import { BookOpen, Brain, Search, Sparkles, User, Zap, Save, CheckCircle } from 'lucide-react'
+import { BookOpen, Brain, Search, Sparkles, User, Zap, Save, CheckCircle, X } from 'lucide-react'
 import { buildApiHeaders } from '../lib/api'
 import { useChatStore } from '../store/chatStore'
 
@@ -28,7 +28,7 @@ interface UserProfile {
   last_updated: string
 }
 
-export function HermesPanel() {
+export function HermesPanel({ onClose }: { onClose?: () => void }) {
   const [tab, setTab] = useState<Tab>('search')
   const sessionId = useChatStore((s) => s.sessionId)
   const sessions = useChatStore((s) => s.sessions)
@@ -211,6 +211,14 @@ export function HermesPanel() {
           <span style={{ fontSize: 10, color: 'var(--text-2)', fontFamily: 'var(--font-mono)' }}>
             search · profile · skills
           </span>
+          {onClose && (
+            <button
+              onClick={onClose}
+              style={{ marginLeft: 'auto', background: 'none', border: 'none', color: 'var(--text-2)', cursor: 'pointer', padding: 0 }}
+            >
+              <X size={14} />
+            </button>
+          )}
         </div>
 
         {/* Tabs */}

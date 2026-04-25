@@ -120,6 +120,7 @@ export function SchedulerPanel() {
             <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-0)', fontFamily: 'var(--font-mono)' }}>
               CRON SCHEDULER
             </span>
+            {loading && <div className="loading-dots" style={{ fontSize: 10, opacity: 0.5 }}>...</div>}
           </div>
           <button
             onClick={() => setShowForm(!showForm)}

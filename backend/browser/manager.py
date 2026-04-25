@@ -15,7 +15,6 @@ in-process and expose helpers as native async functions (no IPC).
 from __future__ import annotations
 
 import asyncio
-import base64
 import json
 import os
 import socket
@@ -23,7 +22,6 @@ import subprocess
 import time
 import urllib.request
 from collections import deque
-from pathlib import Path
 from typing import Any, Optional
 
 import logging
@@ -260,7 +258,7 @@ class BrowserDaemon:
     async def handle(self, req: dict) -> dict:
         """Unified request dispatcher. Used by both internal helpers and the
         public /browser/cdp endpoint."""
-        if not self.is_running and not req.get("meta") in ("status",):
+        if not self.is_running and req.get("meta") not in ("status",):
             return {"error": "Browser daemon not running. Call start_browser() first."}
 
         meta = req.get("meta")
