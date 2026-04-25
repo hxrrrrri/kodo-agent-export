@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react'
-import { Code, Copy, Download, Eye, FileArchive, Link2, Maximize2, Minimize2, Monitor, Share2, Smartphone, SplitSquareHorizontal, Tablet, X } from 'lucide-react'
+import { Code, Copy, Download, Eye, FileArchive, Link2, Maximize2, Minimize2, Monitor, Palette, Share2, Smartphone, SplitSquareHorizontal, Tablet, X } from 'lucide-react'
 import { ArtifactV2, useChatStore } from '../../store/chatStore'
 import { ArtifactRuntime, canLivePreview } from './ArtifactRuntime'
 import { CodeRuntime } from './CodeRuntime'
@@ -38,6 +38,26 @@ export function ArtifactSidePanelV2({ artifactId, onClose }: Props) {
   const [allowForms, setAllowForms] = useState(false)
   const [allowPopups, setAllowPopups] = useState(false)
   const [fullscreen, setFullscreen] = useState(false)
+  const [adapted, setAdapted] = useState(false)
+  const iframeRef = React.useRef<HTMLIFrameElement>(null)
+
+  const handleAdaptToUI = React.useCallback(() => {
+    const cs = getComputedStyle(document.documentElement)
+    const v = (n: string) => cs.getPropertyValue(n).trim()
+    const colors = {
+      bg0: v('--bg-0') || '#0a0a0b',
+      bg1: v('--bg-1') || '#111114',
+      bg2: v('--bg-2') || '#1a1a1f',
+      bg3: v('--bg-3') || '#222228',
+      text0: v('--text-0') || '#f0f0f5',
+      text1: v('--text-1') || '#a8a8b8',
+      text2: v('--text-2') || '#606070',
+      border: v('--border') || '#2a2a32',
+      accent: v('--accent') || '#ff4d21',
+    }
+    iframeRef.current?.contentWindow?.postMessage({ __kodo: 'adapt-ui', colors }, '*')
+    setAdapted(true)
+  }, [])
 
   useEffect(() => {
     // When the artifact gets a new version, jump to it.
@@ -182,6 +202,17 @@ export function ArtifactSidePanelV2({ artifactId, onClose }: Props) {
           <button type="button" onClick={() => downloadArtifactAsZip(artifact)} style={iconBtn()} title="Download bundle as ZIP">
             <FileArchive size={13} />
             <span style={{ fontSize: 10 }}>ZIP</span>
+          </button>
+        )}
+        {canLivePreview(artifact.type) && (
+          <button
+            type="button"
+            onClick={handleAdaptToUI}
+            style={iconBtn(adapted)}
+            title="Adapt colors to match the current UI theme"
+          >
+            <Palette size={13} />
+            <span style={{ fontSize: 10 }}>{adapted ? 'Adapted' : 'Adapt UI'}</span>
           </button>
         )}
         <button type="button" onClick={share} style={iconBtn()} title="Share link">
@@ -342,16 +373,16 @@ function tabBtn(active: boolean) {
   }
 }
 
-function iconBtn() {
+function iconBtn(active = false) {
   return {
     display: 'flex',
     alignItems: 'center',
     gap: 4,
     padding: '4px 8px',
     borderRadius: 6,
-    border: '1px solid transparent',
-    background: 'transparent',
-    color: 'var(--text-2)' as const,
+    border: active ? '1px solid var(--accent)' : '1px solid transparent',
+    background: active ? 'var(--accent-dim)' : 'transparent',
+    color: active ? ('var(--accent)' as const) : ('var(--text-2)' as const),
     fontSize: 11,
     fontFamily: 'var(--font-mono)',
     cursor: 'pointer',

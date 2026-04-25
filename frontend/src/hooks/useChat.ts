@@ -190,6 +190,63 @@ function normalizeTodoItems(value: unknown): TodoItem[] | undefined {
   return rows.length > 0 ? rows : undefined
 }
 
+/**
+ * Auto-extract a task plan from model text when no tool-generated todos exist.
+ * Works for ALL models (Ollama, local, cloud) — looks for numbered lists or
+ * checklist sections that look like implementation steps.
+ * Only fires if response has 3+ steps (heavy task threshold).
+ */
+function extractTodoPlanFromText(content: string): TodoItem[] | undefined {
+  const text = String(content || '').trim()
+  if (!text) return undefined
+
+  // Look for a plan/steps/task section heading first, then fall back to a
+  // numbered list anywhere in the text.
+  const SECTION_RE = /(?:^|\n)#+\s*(?:plan|steps?|tasks?|implementation|todo|roadmap|approach)[:\s]*\n([\s\S]{20,600})/i
+  const sectionMatch = SECTION_RE.exec(text)
+  const searchIn = sectionMatch ? sectionMatch[1] : text
+
+  // Match numbered list items: "1. ...", "1) ..."
+  const NUMBERED_RE = /^\s*(\d+)[.)]\s+(.+)/gm
+  // Match checkbox items: "- [ ] ...", "* [ ] ...", "- [x] ..."
+  const CHECK_RE = /^\s*[-*]\s+\[[ xX]\]\s+(.+)/gm
+
+  const items: TodoItem[] = []
+
+  let m: RegExpExecArray | null
+  NUMBERED_RE.lastIndex = 0
+  while ((m = NUMBERED_RE.exec(searchIn)) !== null) {
+    const title = m[2].trim().replace(/\*\*/g, '').replace(/`/g, '').slice(0, 120)
+    if (title.length < 5) continue
+    items.push({
+      id: String(items.length + 1),
+      title,
+      status: 'pending',
+      category: detectCategory(title),
+    })
+    if (items.length >= 12) break
+  }
+
+  // If no numbered items, try checkboxes
+  if (items.length === 0) {
+    CHECK_RE.lastIndex = 0
+    while ((m = CHECK_RE.exec(searchIn)) !== null) {
+      const title = m[1].trim().replace(/\*\*/g, '').slice(0, 120)
+      if (title.length < 5) continue
+      items.push({
+        id: String(items.length + 1),
+        title,
+        status: 'pending',
+        category: detectCategory(title),
+      })
+      if (items.length >= 12) break
+    }
+  }
+
+  // Only return for heavy tasks (3+ steps)
+  return items.length >= 3 ? items : undefined
+}
+
 function normalizeArtifactItems(value: unknown): ArtifactItem[] | undefined {
   if (!Array.isArray(value)) return undefined
 
@@ -1303,15 +1360,23 @@ export function useChat() {
 
       case 'done':
         if (!silent && assistantId) {
-          store.updateMessageById(assistantId, (msg) => ({
-            ...msg,
-            isStreaming: false,
-            usage: event.usage as Message['usage'],
-            todoItems: (msg.todoItems || []).map((item) => ({
+          store.updateMessageById(assistantId, (msg) => {
+            // Mark in-progress items done
+            const finishedTodos = (msg.todoItems || []).map((item) => ({
               ...item,
               status: item.status === 'pending' ? 'completed' : item.status,
-            })),
-          }))
+            }))
+            // If no tool-generated todos, try to extract from response text
+            const autoTodos = finishedTodos.length === 0
+              ? extractTodoPlanFromText(msg.content)
+              : undefined
+            return {
+              ...msg,
+              isStreaming: false,
+              usage: event.usage as Message['usage'],
+              todoItems: finishedTodos.length > 0 ? finishedTodos : (autoTodos ?? finishedTodos),
+            }
+          })
         }
         eventHandlers?.onDone?.(event.usage as Message['usage'] | undefined, event)
         if (!silent) {

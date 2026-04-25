@@ -198,6 +198,20 @@ interface PartialBundle {
   entrypoint?: string
 }
 
+/** Heuristic: promote plain html/react/mermaid/svg fences from weak models that
+ *  didn't use the artifact prefix but produced a full renderable document. */
+function shouldPromoteToArtifact(lang: string, body: string): ArtifactType | null {
+  const l = lang.toLowerCase().trim()
+  const b = body.trim()
+  if ((l === 'html' || l === 'html5') && /<!DOCTYPE|<html[\s>]/i.test(b)) return 'html'
+  if (l === 'html' && b.length > 200) return 'html'
+  if ((l === 'jsx' || l === 'tsx' || l === 'react') && /export\s+default\s+function/i.test(b)) return 'react'
+  if (l === 'mermaid') return 'mermaid'
+  if (l === 'dot' || l === 'graphviz') return 'dot'
+  if (l === 'svg' && /<svg[\s>]/i.test(b)) return 'svg'
+  return null
+}
+
 export function parseArtifacts(source: string): ParseResult {
   const text = String(source || '')
   if (!text.trim()) return { artifacts: [], streaming: false }
@@ -220,6 +234,10 @@ export function parseArtifacts(source: string): ParseResult {
       if (attrs.isArtifact && !body.includes('```')) {
         streaming = true
       }
+      // Also detect streaming plain html/react fences from weak models
+      if (!streaming && !attrs.isArtifact && shouldPromoteToArtifact(info, body) && !body.includes('```')) {
+        streaming = true
+      }
     }
   }
 
@@ -228,7 +246,27 @@ export function parseArtifacts(source: string): ParseResult {
     const info = match[1] || ''
     const body = match[2] || ''
     const attrs = parseInfoString(info)
-    if (!attrs.isArtifact) continue
+
+    // Promote plain html/react/mermaid fences from weak models (Ollama etc.)
+    // that didn't use the artifact prefix but produced a full renderable document.
+    if (!attrs.isArtifact) {
+      const promoted = shouldPromoteToArtifact(info, body)
+      if (promoted && body.trim()) {
+        syntheticIndex += 1
+        const title = info.trim() || `${promoted}-${syntheticIndex}`
+        const filename = defaultFilename(promoted)
+        singles.push({
+          id: `promoted-${promoted}-${syntheticIndex}`,
+          type: promoted,
+          title,
+          version: 1,
+          files: [{ path: filename, content: body, language: info.trim() || promoted }],
+          entrypoint: filename,
+          createdAt: Date.now(),
+        })
+      }
+      continue
+    }
     if (!body.trim()) continue
 
     // Legacy: synthesise a v2 artifact with type=code.

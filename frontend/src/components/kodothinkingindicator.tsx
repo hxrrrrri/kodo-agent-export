@@ -1,11 +1,12 @@
 import { useEffect, useRef, useState } from 'react'
 import { KodoLogoMark } from './KodoLogoMark'
 
+// ── Labels ──────────────────────────────────────────────────────────────────
+
 const THINKING_LABELS = [
   'Thinking...',
   'Reasoning deeply...',
   'Analyzing context...',
-  'Flabbergasting...',
   'Processing...',
   'Crunching tokens...',
   'Connecting the dots...',
@@ -22,6 +23,7 @@ const THINKING_LABELS = [
   'Diving in...',
   'Mapping it out...',
   'Brewing ideas...',
+  'Flabbergasting...',
 ]
 
 const TOOL_LABELS: Record<string, string[]> = {
@@ -45,6 +47,80 @@ const TOOL_LABELS: Record<string, string[]> = {
   send_email: ['Sending email...', 'Delivering message...'],
 }
 
+// ── Scramble hook ────────────────────────────────────────────────────────────
+// Each character position rapidly cycles through random chars before locking
+// to the correct character — same effect as Claude Code's thinking indicator.
+
+const CHARSET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!@#$%&*<>?/'
+
+function randomChar(): string {
+  return CHARSET[Math.floor(Math.random() * CHARSET.length)]
+}
+
+function useScramble(target: string, active: boolean): string {
+  const [display, setDisplay] = useState(target)
+  const frameRef = useRef<number | null>(null)
+  const startRef = useRef<number>(0)
+
+  useEffect(() => {
+    if (!active) {
+      setDisplay(target)
+      return
+    }
+
+    // Cancel any running animation
+    if (frameRef.current !== null) cancelAnimationFrame(frameRef.current)
+
+    const len = target.length
+    // Each character takes ~40ms to resolve; chars resolve left-to-right
+    const charDuration = 40   // ms per char to settle
+    const scrambleDuration = charDuration * len + 120  // total scramble window
+
+    startRef.current = performance.now()
+
+    function step(now: number) {
+      const elapsed = now - startRef.current
+      const progress = Math.min(elapsed / scrambleDuration, 1)
+
+      // How many chars have settled (left-to-right)
+      const settledCount = Math.floor(progress * len)
+
+      let result = ''
+      for (let i = 0; i < len; i++) {
+        if (i < settledCount) {
+          // Char has settled — lock to target
+          result += target[i]
+        } else if (target[i] === ' ' || target[i] === '.' || target[i] === ',' || target[i] === '!') {
+          // Preserve punctuation and spaces as-is
+          result += target[i]
+        } else {
+          // Still scrambling — show random char
+          result += randomChar()
+        }
+      }
+
+      setDisplay(result)
+
+      if (progress < 1) {
+        frameRef.current = requestAnimationFrame(step)
+      } else {
+        setDisplay(target)
+        frameRef.current = null
+      }
+    }
+
+    frameRef.current = requestAnimationFrame(step)
+    return () => {
+      if (frameRef.current !== null) cancelAnimationFrame(frameRef.current)
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [target, active])
+
+  return display
+}
+
+// ── Component ────────────────────────────────────────────────────────────────
+
 function pickLabel(labels: string[], seed: number): string {
   return labels[seed % labels.length]
 }
@@ -55,24 +131,20 @@ type Props = {
 
 export function KodoThinkingIndicator({ activeTool }: Props) {
   const [labelIndex, setLabelIndex] = useState(0)
-  const [visible, setVisible] = useState(true)
+  const [scrambleKey, setScrambleKey] = useState(0)
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const seedRef = useRef(0)
 
-  // Cycle label every 2.2s with a quick fade between
+  // Cycle label every 2.4s
   useEffect(() => {
     setLabelIndex(0)
     seedRef.current = 0
-    setVisible(true)
+    setScrambleKey((k) => k + 1)
 
     intervalRef.current = setInterval(() => {
-      // fade out, swap, fade in
-      setVisible(false)
-      setTimeout(() => {
-        seedRef.current += 1
-        setLabelIndex(seedRef.current)
-        setVisible(true)
-      }, 280)
+      seedRef.current += 1
+      setLabelIndex(seedRef.current)
+      setScrambleKey((k) => k + 1)
     }, 2400)
 
     return () => {
@@ -80,8 +152,7 @@ export function KodoThinkingIndicator({ activeTool }: Props) {
     }
   }, [activeTool])
 
-  // Determine displayed label
-  const label = (() => {
+  const targetLabel = (() => {
     if (activeTool) {
       const key = activeTool.toLowerCase()
       const toolLabels = TOOL_LABELS[key]
@@ -92,15 +163,13 @@ export function KodoThinkingIndicator({ activeTool }: Props) {
     return THINKING_LABELS[labelIndex % THINKING_LABELS.length]
   })()
 
+  const animatedLabel = useScramble(targetLabel, true)
+
   const isToolActive = Boolean(activeTool)
   const orbitColor = isToolActive ? 'var(--yellow)' : 'var(--accent)'
   const logoColor = isToolActive ? 'var(--yellow)' : 'var(--logo-primary)'
-  const glowColor = isToolActive
-    ? 'rgba(255,215,0,0.55)'
-    : 'rgba(255,122,47,0.5)'
-  const glowColor2 = isToolActive
-    ? 'rgba(255,215,0,0.18)'
-    : 'rgba(255,77,33,0.2)'
+  const glowColor = isToolActive ? 'rgba(255,215,0,0.55)' : 'rgba(255,122,47,0.5)'
+  const glowColor2 = isToolActive ? 'rgba(255,215,0,0.18)' : 'rgba(255,77,33,0.2)'
 
   return (
     <div
@@ -114,104 +183,30 @@ export function KodoThinkingIndicator({ activeTool }: Props) {
       }}
     >
       {/* ── Orbit ring + logo ── */}
-      <div
-        style={{
-          position: 'relative',
-          width: 36,
-          height: 36,
-          flexShrink: 0,
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-        }}
-      >
-        {/* Outer glow ring (CSS animation via className) */}
-        <div
-          className="kodo-orbit-ring"
-          style={{
-            position: 'absolute',
-            inset: 0,
-            borderRadius: '50%',
-            border: `1.5px solid ${orbitColor}`,
-            opacity: 0.3,
-          }}
-        />
-
-        {/* Spinning arc */}
-        <div
-          className="kodo-spin-arc"
-          style={{
-            position: 'absolute',
-            inset: -3,
-            borderRadius: '50%',
-            border: '2px solid transparent',
-            borderTopColor: orbitColor,
-            borderRightColor: orbitColor,
-          }}
-        />
-
-        {/* Slow counter-spin arc (secondary) */}
-        <div
-          className="kodo-spin-arc-reverse"
-          style={{
-            position: 'absolute',
-            inset: 3,
-            borderRadius: '50%',
-            border: '1.5px solid transparent',
-            borderBottomColor: isToolActive ? 'var(--yellow)' : 'var(--accent)',
-            opacity: 0.55,
-          }}
-        />
-
-        {/* Orbit dot */}
-        <div
-          className="kodo-orbit-dot"
-          style={{
-            position: 'absolute',
-            width: 5,
-            height: 5,
-            borderRadius: '50%',
-            background: orbitColor,
-            boxShadow: `0 0 6px 2px ${glowColor}`,
-            top: '50%',
-            left: '50%',
-            marginTop: -2.5,
-            marginLeft: -2.5,
-            transformOrigin: '2.5px 2.5px',
-          }}
-        />
-
-        {/* Center logo */}
-        <div
-          className="kodo-logo-pulse"
-          style={{
-            position: 'relative',
-            zIndex: 2,
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            filter: `drop-shadow(0 0 5px ${glowColor2})`,
-          }}
-        >
+      <div style={{ position: 'relative', width: 36, height: 36, flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+        <div className="kodo-orbit-ring" style={{ position: 'absolute', inset: 0, borderRadius: '50%', border: `1.5px solid ${orbitColor}`, opacity: 0.3 }} />
+        <div className="kodo-spin-arc" style={{ position: 'absolute', inset: -3, borderRadius: '50%', border: '2px solid transparent', borderTopColor: orbitColor, borderRightColor: orbitColor }} />
+        <div className="kodo-spin-arc-reverse" style={{ position: 'absolute', inset: 3, borderRadius: '50%', border: '1.5px solid transparent', borderBottomColor: isToolActive ? 'var(--yellow)' : 'var(--accent)', opacity: 0.55 }} />
+        <div className="kodo-orbit-dot" style={{ position: 'absolute', width: 5, height: 5, borderRadius: '50%', background: orbitColor, boxShadow: `0 0 6px 2px ${glowColor}`, top: '50%', left: '50%', marginTop: -2.5, marginLeft: -2.5, transformOrigin: '2.5px 2.5px' }} />
+        <div className="kodo-logo-pulse" style={{ position: 'relative', zIndex: 2, display: 'flex', alignItems: 'center', justifyContent: 'center', filter: `drop-shadow(0 0 5px ${glowColor2})` }}>
           <KodoLogoMark size={18} color={logoColor} decorative />
         </div>
       </div>
 
-      {/* ── Cycling label ── */}
+      {/* ── Scrambled label ── */}
       <span
+        key={scrambleKey}
         style={{
           fontSize: 11,
           fontFamily: 'var(--font-mono)',
           color: isToolActive ? 'var(--yellow)' : 'var(--text-1)',
           letterSpacing: '0.05em',
           whiteSpace: 'nowrap',
-          opacity: visible ? 1 : 0,
-          transform: visible ? 'translateY(0)' : 'translateY(-3px)',
-          transition: 'opacity 0.28s ease, transform 0.28s ease',
-          minWidth: 170,
+          minWidth: 180,
+          display: 'inline-block',
         }}
       >
-        {label}
+        {animatedLabel}
       </span>
 
       {/* ── Trailing dots ── */}

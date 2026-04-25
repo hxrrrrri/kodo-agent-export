@@ -133,6 +133,42 @@ async def list_artifact_versions(session_id: str, artifact_id: str, request: Req
     return {"versions": await artifact_store.get_all_versions(session_id, artifact_id)}
 
 
+@router.get("/gallery/batch")
+async def gallery_batch(
+    request: Request,
+    session_ids: str = Query(default="", description="Comma-separated session IDs"),
+    limit: int = Query(default=200, ge=1, le=500),
+) -> dict[str, Any]:
+    """Return latest artifact with content for multiple sessions in one request.
+    Replaces N×M per-session/per-artifact round-trips in the gallery."""
+    if not _artifacts_enabled():
+        return {"entries": []}
+    require_api_auth(request)
+    await enforce_rate_limit(request, MEMORY_RATE_LIMITER, "artifacts_list")
+
+    ids = [s.strip() for s in session_ids.split(",") if s.strip()][:50]
+    if not ids:
+        return {"entries": []}
+
+    import asyncio
+
+    async def fetch_session(sid: str) -> list[dict]:
+        try:
+            rows = await artifact_store.list_artifacts(sid, include_content=True)
+            return [{"session_id": sid, **r} for r in rows]
+        except Exception:
+            return []
+
+    results = await asyncio.gather(*[fetch_session(sid) for sid in ids])
+    entries: list[dict] = []
+    for batch in results:
+        entries.extend(batch)
+        if len(entries) >= limit:
+            break
+
+    return {"entries": entries[:limit]}
+
+
 @router.get("/shared/{session_id}/{artifact_id}")
 async def get_shared_artifact(
     session_id: str,

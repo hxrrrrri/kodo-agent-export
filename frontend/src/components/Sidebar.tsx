@@ -3,6 +3,7 @@ import {
   Activity,
   BarChart2,
   BookOpen,
+  Brain,
   Cpu,
   FileText,
   Hammer,
@@ -35,6 +36,7 @@ import { PromptCompressorPanel } from './PromptCompressorPanel'
 import { SkillBuilderPanel } from './SkillBuilderPanel'
 import { CodeReviewPanel } from './CodeReviewPanel'
 import { AntiVibePanel } from './AntiVibePanel'
+import { HermesPanel } from './HermesPanel'
 import { ArtifactGallery } from './ArtifactGallery'
 import { ThemeStudio, applyVarsToDOM } from './ThemeStudio'
 import { SessionInsights } from './SessionInsights'
@@ -44,7 +46,7 @@ type SidebarProps = {
   onToggleCollapse: () => void
 }
 
-type SidebarView = 'sessions' | 'providers' | 'agents' | 'usage' | 'prompts' | 'compressor' | 'skills' | 'crg' | 'review' | 'antivibe' | 'settings' | 'design' | 'gallery' | 'insights'
+type SidebarView = 'sessions' | 'providers' | 'agents' | 'usage' | 'prompts' | 'compressor' | 'skills' | 'crg' | 'review' | 'antivibe' | 'hermes' | 'settings' | 'design' | 'gallery' | 'insights'
 
 type RuntimeTask = {
   task_id: string
@@ -1406,9 +1408,13 @@ export function Sidebar({ collapsed, onToggleCollapse }: SidebarProps) {
             icon={<BookOpen size={15} />}
             label="AntiVibe"
             active={activeView === 'antivibe'}
-            onClick={() => {
-              window.dispatchEvent(new Event('kodo:toggle-antivibe'))
-            }}
+            onClick={() => setActiveView('antivibe')}
+          />
+          <PanelNav
+            icon={<Brain size={15} />}
+            label="Hermes"
+            active={activeView === 'hermes'}
+            onClick={() => setActiveView('hermes')}
           />
           <PanelNav
             icon={<Settings size={15} />}
@@ -2349,6 +2355,10 @@ export function Sidebar({ collapsed, onToggleCollapse }: SidebarProps) {
 
           {activeView === 'antivibe' && (
             <AntiVibePanel />
+          )}
+
+          {activeView === 'hermes' && (
+            <HermesPanel />
           )}
 
           {activeView === 'gallery' && (

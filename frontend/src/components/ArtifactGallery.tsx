@@ -31,7 +31,14 @@ export function ArtifactGallery() {
   const sessions = useChatStore((s) => s.sessions)
   const sessionArtifacts = useChatStore((s) => s.sessionArtifacts)
   const setSelectedArtifactV2 = useChatStore((s) => s.setSelectedArtifactV2)
+  const upsertSessionArtifact = useChatStore((s) => s.upsertSessionArtifact)
   const loadSession = useChatStore((s) => s.sessionId)
+
+  const openArtifact = (item: GalleryItem) => {
+    // Upsert into the store so ArtifactSidePanelV2 can find it by id
+    upsertSessionArtifact(item.artifact)
+    setSelectedArtifactV2({ id: item.artifact.id, version: item.artifact.version })
+  }
 
   // Memoize session ID key to prevent infinite re-render in useEffect
   const sessionKey = useMemo(() => sessions.map((s) => s.session_id).join(','), [sessions])
@@ -58,47 +65,33 @@ export function ArtifactGallery() {
         }
       }
 
+      // Batch-fetch all other sessions in chunks of 50 — single round-trip per chunk
       const otherSessions = sessions.filter((s) => s.session_id !== loadSession)
+      const sessionMap = new Map(sessions.map((s) => [s.session_id, s.title || s.session_id.slice(0, 8)]))
+      const CHUNK = 50
 
-      async function fetchSession(sess: typeof otherSessions[0], attempt = 0): Promise<GalleryItem[]> {
-        if (cancelled) return []
-        const url = `/api/artifacts/${encodeURIComponent(sess.session_id)}?include_content=true`
+      for (let i = 0; i < otherSessions.length; i += CHUNK) {
+        if (cancelled) return
+        const chunk = otherSessions.slice(i, i + CHUNK)
+        const ids = encodeURIComponent(chunk.map((s) => s.session_id).join(','))
         try {
-          const res = await fetch(url, { headers: buildApiHeaders() })
-          if (res.status === 429) {
-            if (attempt >= 4) return []
-            const wait = 600 * Math.pow(2, attempt) + Math.random() * 300
-            await new Promise((r) => setTimeout(r, wait))
-            return fetchSession(sess, attempt + 1)
+          const res = await fetch(
+            `/api/artifacts/gallery/batch?session_ids=${ids}&limit=200`,
+            { headers: buildApiHeaders() }
+          )
+          if (!res.ok) continue
+          const data = await res.json() as { entries: Array<{ session_id: string; latest?: ArtifactV2 }> }
+          for (const entry of data.entries || []) {
+            const latest = entry.latest as ArtifactV2 | undefined
+            if (!latest) continue
+            allItems.push({
+              sessionId: entry.session_id,
+              sessionTitle: sessionMap.get(entry.session_id) || entry.session_id.slice(0, 8),
+              artifact: latest,
+            })
           }
-          if (!res.ok) return []
-          const data = await res.json()
-          const list: any[] = data.artifacts || []
-          const result: GalleryItem[] = []
-          for (const art of list) {
-            const latest = art.latest as ArtifactV2 | undefined
-            if (latest) {
-              result.push({
-                sessionId: sess.session_id,
-                sessionTitle: sess.title || sess.session_id.slice(0, 8),
-                artifact: latest,
-              })
-            }
-          }
-          return result
-        } catch {
-          return []
-        }
-      }
-
-      // One session at a time with 150ms gap to stay well under rate limit
-      for (const sess of otherSessions) {
-        if (cancelled) return
-        const result = await fetchSession(sess)
-        if (cancelled) return
-        allItems.push(...result)
-        setItems([...allItems])
-        await new Promise((r) => setTimeout(r, 150))
+          if (!cancelled) setItems([...allItems])
+        } catch { /* skip */ }
       }
 
       if (!cancelled) setLoading(false)
@@ -201,7 +194,7 @@ export function ArtifactGallery() {
                 key={`${item.sessionId}-${item.artifact.id}-${item.artifact.version}`}
                 type="button"
                 onClick={() => {
-                  setSelectedArtifactV2({ id: item.artifact.id, version: item.artifact.version })
+                  openArtifact(item)
                 }}
                 style={{
                   background: 'var(--bg-2)',

@@ -44,6 +44,8 @@ interface StaticAnalysis {
   exports?: string[]
   concepts?: string[]
   key_points?: string[]
+  trace?: string[]
+  quality?: { coverage: number; depth: number; traceability: number; overall: number }
   resources?: Array<{ title: string; url: string; description: string; score: number }>
   error?: string
 }
@@ -299,6 +301,8 @@ export function AntiVibePanel({ onClose }: AntiVibePanelProps = {}) {
               symbols: evt.aggregate?.top_symbols,
               concepts: evt.aggregate?.all_concepts,
               resources: evt.aggregate?.resources,
+              quality: evt.aggregate?.quality,
+              trace: evt.aggregate?.trace,
             })
             setScanLog((l) => [...l, { type: 'success', message: `Static analysis: ${evt.aggregate?.files_analyzed} files, ${evt.aggregate?.symbol_count} symbols, ${(evt.aggregate?.all_concepts || []).length} concepts` }])
           } else if (type === 'ai_text') {
@@ -743,6 +747,24 @@ export function AntiVibePanel({ onClose }: AntiVibePanelProps = {}) {
           </button>
           {staticExpanded && (
             <div style={{ padding: '8px 14px', fontSize: 11, fontFamily: 'var(--font-mono)', color: 'var(--text-1)', background: 'var(--bg-1)' }}>
+
+              {/* Quality scores */}
+              {staticData.quality && (
+                <div style={{ marginBottom: 8, display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                  {(['coverage', 'depth', 'traceability', 'overall'] as const).map((k) => {
+                    const v = staticData.quality![k] ?? 0
+                    const color = v >= 70 ? 'var(--green)' : v >= 40 ? 'var(--yellow)' : 'var(--red)'
+                    return (
+                      <div key={k} style={{ background: 'var(--bg-2)', borderRadius: 8, padding: '4px 10px', border: `1px solid ${color}44`, textAlign: 'center' }}>
+                        <div style={{ fontSize: 14, fontWeight: 700, color }}>{v}</div>
+                        <div style={{ fontSize: 9, color: 'var(--text-2)', letterSpacing: '0.06em' }}>{k.toUpperCase()}</div>
+                      </div>
+                    )
+                  })}
+                </div>
+              )}
+
+              {/* Concepts */}
               {staticData.concepts && staticData.concepts.length > 0 && (
                 <div style={{ marginBottom: 6 }}>
                   <span style={{ color: 'var(--text-2)' }}>concepts: </span>
@@ -751,6 +773,8 @@ export function AntiVibePanel({ onClose }: AntiVibePanelProps = {}) {
                   ))}
                 </div>
               )}
+
+              {/* Symbols */}
               {staticData.symbols && staticData.symbols.length > 0 && (
                 <div style={{ marginBottom: 6 }}>
                   <span style={{ color: 'var(--text-2)' }}>symbols ({staticData.symbols.length}):</span>
@@ -764,16 +788,30 @@ export function AntiVibePanel({ onClose }: AntiVibePanelProps = {}) {
                   </div>
                 </div>
               )}
+
+              {/* Representative trace */}
+              {staticData.trace && staticData.trace.length > 0 && (
+                <div style={{ marginBottom: 6 }}>
+                  <span style={{ color: 'var(--text-2)' }}>trace:</span>
+                  <ol style={{ margin: '4px 0 0 0', padding: '0 0 0 16px' }}>
+                    {staticData.trace.map((step, i) => (
+                      <li key={i} style={{ marginBottom: 3, fontSize: 10, color: 'var(--text-1)', lineHeight: 1.4 }}>{step}</li>
+                    ))}
+                  </ol>
+                </div>
+              )}
+
+              {/* Resources */}
               {staticData.resources && staticData.resources.length > 0 && (
                 <div>
-                  <span style={{ color: 'var(--text-2)' }}>resources:</span>
+                  <span style={{ color: 'var(--text-2)' }}>curated resources:</span>
                   <ul style={{ margin: '4px 0 0 0', padding: '0 0 0 16px' }}>
-                    {staticData.resources.slice(0, 5).map((r) => (
-                      <li key={r.url} style={{ marginBottom: 2 }}>
+                    {staticData.resources.slice(0, 6).map((r) => (
+                      <li key={r.url} style={{ marginBottom: 3 }}>
                         <a href={r.url} target="_blank" rel="noopener noreferrer" style={{ color: 'var(--blue)', textDecoration: 'none', fontSize: 10.5 }}>
                           {r.title}
                         </a>
-                        <span style={{ color: 'var(--text-2)', fontSize: 10 }}> · {r.description}</span>
+                        <span style={{ color: 'var(--text-2)', fontSize: 10 }}> · score {r.score} · {r.description}</span>
                       </li>
                     ))}
                   </ul>

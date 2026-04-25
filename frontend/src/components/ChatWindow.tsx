@@ -2135,15 +2135,14 @@ export function ChatWindow({ editorOpen, onToggleEditor }: ChatWindowProps) {
           </button>
         </div>
 
-        {/* All other header buttons — equal-distributed flex */}
+        {/* All other header buttons — wrap so full names always show */}
         <div className="kodo-header-buttons" style={{
           display: headerCollapsed ? 'none' : 'flex',
-          flex: 1,
-          gap: 8,
-          minWidth: 0,
+          gap: 6,
           flexWrap: 'wrap',
           alignItems: 'center',
           justifyContent: 'flex-end',
+          flex: 1,
         }}>
 
         <button
@@ -2761,21 +2760,17 @@ export function ChatWindow({ editorOpen, onToggleEditor }: ChatWindowProps) {
       )}
 
       {!contextBarCollapsed && (
-      <CollabBar
-        sessionId={sessionId}
-        observerMode={observerMode}
-        shareUrl={shareUrl}
-        expiresAt={expiresAt}
-        viewerCount={viewerCount}
-        lastEventType={lastEventType}
-        error={collabError}
-        onShare={() => {
-          void createShare()
-        }}
-        onRevoke={() => {
-          void revokeShare()
-        }}
-      />
+        <CollabBar
+          sessionId={sessionId}
+          observerMode={observerMode}
+          shareUrl={shareUrl}
+          expiresAt={expiresAt}
+          viewerCount={viewerCount}
+          lastEventType={lastEventType}
+          error={collabError}
+          onShare={() => { void createShare() }}
+          onRevoke={() => { void revokeShare() }}
+        />
       )}
 
       {projectDirPickerError && (

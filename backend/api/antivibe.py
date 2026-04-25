@@ -385,16 +385,34 @@ def _static_analyze_source(code: str, filename: str) -> dict[str, Any]:
         concepts = module.detect_concepts(code, language, symbols, filename)
         resources = module.select_resources(concepts, language, limit=8)
 
+        # Build a minimal FileAnalysis-like object for quality_scores
+        class _FA:
+            def __init__(self):
+                self.path = filename
+                self.language = language
+                self.line_count = max(1, len(code.splitlines()))
+                self.symbols = symbols
+                self.concepts = concepts
+                self.imports = list(imports)
+                self.exports = list(exports)
+                self.key_points = list(key_points)
+
+        fa = _FA()
+        quality = module.quality_scores([fa]) if hasattr(module, "quality_scores") else {}
+        trace = module.representative_trace([fa]) if hasattr(module, "representative_trace") else []
+
         return {
             "available": True,
             "filename": filename,
             "language": language,
-            "line_count": len(code.splitlines()),
+            "line_count": fa.line_count,
             "symbols": [{"kind": s.kind, "name": s.name, "line": s.line} for s in symbols[:30]],
             "imports": list(imports[:20]),
             "exports": list(exports[:20]),
             "concepts": list(concepts),
             "key_points": list(key_points),
+            "quality": quality,
+            "trace": trace,
             "resources": [
                 {"title": r.title, "url": r.url, "description": r.description, "score": r.score}
                 for r in resources
@@ -403,6 +421,51 @@ def _static_analyze_source(code: str, filename: str) -> dict[str, Any]:
     except Exception as exc:
         logger.exception("Static analysis failed")
         return {"available": False, "error": str(exc), "symbols": [], "concepts": [], "resources": []}
+
+
+def _generate_structured_report(
+    module: Any,
+    analyses_data: list[dict[str, Any]],
+    phase: str,
+) -> str:
+    """Use antivibe's format_deep_dive to produce a structured markdown report."""
+    if module is None or not analyses_data:
+        return ""
+
+    class _FA:
+        def __init__(self, d: dict[str, Any]):
+            self.path = d.get("path") or d.get("rel_path") or d.get("filename", "unknown")
+            self.language = d.get("language", "Unknown")
+            self.line_count = d.get("line_count", 0)
+            self.imports = d.get("imports", [])
+            self.exports = d.get("exports", [])
+            self.key_points = d.get("key_points", [])
+            self.concepts = d.get("concepts", [])
+
+            class _Sym:
+                def __init__(self, s: dict[str, Any]):
+                    self.kind = s.get("kind", "symbol")
+                    self.name = s.get("name", "?")
+                    self.line = s.get("line", 0)
+            self.symbols = [_Sym(s) for s in d.get("symbols", [])]
+
+    try:
+        fas = [_FA(d) for d in analyses_data if d.get("available", True)]
+        if not fas:
+            return ""
+        all_concepts = sorted({c for fa in fas for c in fa.concepts})
+        resources_raw = module.select_resources(all_concepts, fas[0].language, limit=8) if fas else []
+
+        class _RM:
+            def __init__(self, r: Any):
+                self.title = r.title; self.url = r.url
+                self.description = r.description; self.score = r.score
+        resources = [_RM(r) for r in resources_raw]
+
+        return module.format_deep_dive(phase, fas, resources)
+    except Exception as exc:
+        logger.warning("format_deep_dive failed: %s", exc)
+        return ""
 
 
 def _build_user_prompt(req: AntiVibeRequest, static_data: dict[str, Any] | None) -> str:
@@ -418,22 +481,37 @@ def _build_user_prompt(req: AntiVibeRequest, static_data: dict[str, Any] | None)
 
     if static_data and static_data.get("available"):
         parts.append("")
-        parts.append("## Pre-computed Static Analysis (use these as anchors for citations):")
+        parts.append("## Pre-computed Static Analysis (use these as citation anchors):")
         if static_data.get("symbols"):
-            parts.append("**Symbols detected:**")
+            parts.append("**Symbols:**")
             for s in static_data["symbols"][:15]:
                 parts.append(f"  - {s['kind']} `{s['name']}` at line {s['line']}")
         if static_data.get("concepts"):
             parts.append(f"**Concepts detected:** {', '.join(static_data['concepts'])}")
+        if static_data.get("key_points"):
+            parts.append("**Key findings from static parse:**")
+            for kp in static_data["key_points"][:5]:
+                parts.append(f"  - {kp}")
+        if static_data.get("trace"):
+            parts.append("**Representative trace:**")
+            for step in static_data["trace"][:4]:
+                parts.append(f"  - {step}")
+        if static_data.get("quality"):
+            q = static_data["quality"]
+            parts.append(
+                f"**Quality baseline:** coverage={q.get('coverage', '?')}, "
+                f"depth={q.get('depth', '?')}, traceability={q.get('traceability', '?')}, "
+                f"overall={q.get('overall', '?')}"
+            )
         if static_data.get("imports"):
             parts.append(f"**Imports:** {', '.join(static_data['imports'][:10])}")
         if static_data.get("resources"):
-            parts.append("**Suggested resources (prefer these in output):**")
+            parts.append("**Curated resources (reference these in your output):**")
             for r in static_data["resources"][:5]:
                 parts.append(f"  - [{r['title']}]({r['url']}) — {r['description']}")
 
     parts.append("")
-    parts.append("Provide a complete AntiVibe deep-dive analysis following the structured format.")
+    parts.append("Produce a complete AntiVibe deep-dive. Cite symbol names and line numbers. Refine quality scores based on your analysis. Include curated resources.")
     return "\n".join(parts)
 
 
@@ -745,6 +823,29 @@ async def antivibe_full_scan(body: FullScanRequest, request: Request):
                 except Exception:
                     pass
 
+            # Quality scores across all files
+            quality: dict[str, int] = {}
+            if module is not None and analyses:
+                try:
+                    class _FA2:
+                        def __init__(self, d: dict[str, Any]):
+                            self.language = d.get("language", "Unknown")
+                            self.line_count = d.get("line_count", 0)
+                            self.concepts = d.get("concepts", [])
+                            class _S:
+                                def __init__(self, s: dict[str, Any]):
+                                    self.kind = s.get("kind", ""); self.name = s.get("name", ""); self.line = s.get("line", 0)
+                            self.symbols = [_S(s) for s in d.get("symbols", [])]
+                            self.imports = d.get("imports", []); self.exports = d.get("exports", []); self.key_points = d.get("key_points", [])
+                            self.path = d.get("rel_path") or d.get("filename", "?")
+                    fa_list = [_FA2(a) for a in analyses]
+                    quality = module.quality_scores(fa_list)
+                    trace_steps = module.representative_trace(fa_list)[:5]
+                except Exception:
+                    trace_steps = []
+            else:
+                trace_steps = []
+
             aggregate = {
                 "files_analyzed": len(analyses),
                 "total_lines": total_lines,
@@ -752,6 +853,8 @@ async def antivibe_full_scan(body: FullScanRequest, request: Request):
                 "symbol_count": len(all_symbols),
                 "top_symbols": all_symbols[:30],
                 "resources": aggregated_resources,
+                "quality": quality,
+                "trace": trace_steps,
             }
             yield f"data: {json.dumps({'type': 'static_done', 'aggregate': aggregate})}\n\n"
 
@@ -783,12 +886,24 @@ async def antivibe_full_scan(body: FullScanRequest, request: Request):
                 for r in aggregated_resources[:5]:
                     prompt_lines.append(f"- [{r['title']}]({r['url']}) — {r['description']}")
 
-            prompt_lines.append("\nProduce a highly detailed, professional AntiVibe deep-dive covering ALL files holistically. Focus on:")
-            prompt_lines.append("1. **In-depth Architecture**: Explain the overall system design and architecture clearly.")
-            prompt_lines.append("2. **Data Workflow**: Detail how data flows between components and layers (database, api, frontend).")
-            prompt_lines.append("3. **Wireframes**: Diagram or describe how these components map to user interfaces and wireframes.")
-            prompt_lines.append("4. **Technology Choices**: Deeply analyze why these specific technologies/patterns are used, why alternatives weren't chosen, and why this is the best fit.")
-            prompt_lines.append("5. **Study Materials**: Provide links and recommendations for the best official docs, highly-rated YouTube video concepts, and further reading for these specific frameworks/patterns.")
+            if quality:
+                prompt_lines.append(f"\n## Quality baseline (from static analysis):")
+                prompt_lines.append(f"- Coverage: {quality.get('coverage', '?')}/100")
+                prompt_lines.append(f"- Depth: {quality.get('depth', '?')}/100")
+                prompt_lines.append(f"- Traceability: {quality.get('traceability', '?')}/100")
+                prompt_lines.append(f"- Overall: {quality.get('overall', '?')}/100")
+
+            if trace_steps:
+                prompt_lines.append(f"\n## Representative trace:")
+                for step in trace_steps:
+                    prompt_lines.append(f"- {step}")
+
+            prompt_lines.append("\nProduce a comprehensive, professional AntiVibe deep-dive covering ALL files holistically. Include:")
+            prompt_lines.append("1. **Architecture**: Overall system design — layers, boundaries, data flow")
+            prompt_lines.append("2. **Design patterns**: Which patterns appear, why they were chosen, trade-offs vs alternatives")
+            prompt_lines.append("3. **Quality assessment**: Refine the baseline scores with your analysis, explain each dimension")
+            prompt_lines.append("4. **Learning path**: Cite the curated resources above, add any must-reads specific to these patterns")
+            prompt_lines.append("5. **Next steps**: Concrete actions to improve coverage, depth, and traceability")
             user_prompt = "\n".join(prompt_lines)
 
             collected_text: list[str] = []
@@ -808,6 +923,9 @@ async def antivibe_full_scan(body: FullScanRequest, request: Request):
                 timestamp = dt.datetime.now().strftime("%Y-%m-%d-%H%M%S")
                 out_path = deep_dive_dir / f"{safe_phase}-{timestamp}.md"
 
+                # Use antivibe's format_deep_dive for the structured static section
+                structured_prefix = _generate_structured_report(module, analyses, body.phase) if module else ""
+
                 header = [
                     f"# Deep Dive: {body.phase}",
                     "",
@@ -815,18 +933,23 @@ async def antivibe_full_scan(body: FullScanRequest, request: Request):
                     f"_Provider: {provider} · Model: {model}_",
                     f"_Files analyzed: {len(analyses)} · Total lines: {total_lines}_",
                     f"_Concepts: {', '.join(all_concepts) or 'none'}_",
-                    "",
-                    "## Files Analyzed",
-                    "",
                 ]
-                for a in analyses:
-                    header.append(f"- `{a.get('rel_path', a.get('filename', '?'))}` ({a.get('language', '?')}, {a.get('line_count', 0)} lines)")
-                header.append("")
-                header.append("---")
-                header.append("")
+                if quality:
+                    header.append(
+                        f"_Quality: coverage={quality.get('coverage','?')}, "
+                        f"depth={quality.get('depth','?')}, "
+                        f"traceability={quality.get('traceability','?')}, "
+                        f"overall={quality.get('overall','?')}_"
+                    )
+                header += ["", "---", ""]
+
+                full_doc = "\n".join(header)
+                if structured_prefix:
+                    full_doc += structured_prefix + "\n\n---\n\n## AI Deep-Dive Analysis\n\n"
+                full_doc += full_analysis
 
                 try:
-                    out_path.write_text("\n".join(header) + full_analysis, encoding="utf-8")
+                    out_path.write_text(full_doc, encoding="utf-8")
                     saved_path = str(out_path)
                     yield f"data: {json.dumps({'type': 'saved', 'path': saved_path, 'filename': out_path.name})}\n\n"
                 except OSError as exc:

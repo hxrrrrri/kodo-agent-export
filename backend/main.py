@@ -41,6 +41,7 @@ from api.skills_admin import router as skills_admin_router
 from api.tts import router as tts_router
 from api.conference import router as conference_router
 from api.antivibe import router as antivibe_router
+from api.hermes_features import router as hermes_router
 from observability.audit import log_audit_event
 from observability.request_context import clear_request_id, set_request_id
 from providers.smart_router import get_smart_router, smart_router_enabled
@@ -107,6 +108,7 @@ app.include_router(cron_router, prefix="/api")
 app.include_router(artifacts_router)
 app.include_router(conference_router)
 app.include_router(antivibe_router)
+app.include_router(hermes_router)
 
 
 @app.middleware("http")

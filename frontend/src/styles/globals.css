@@ -646,15 +646,11 @@ aside {
 .mono { font-family: var(--font-mono); }
 .display { font-family: var(--font-display); }
 
-/* Header buttons — equal flex distribution */
+/* Header buttons — never shrink, wrap to next row when tight */
 .kodo-header-buttons > button,
 .kodo-header-buttons > a {
-  flex: 1 1 0 !important;
-  min-width: 0 !important;
-  justify-content: center !important;
+  flex-shrink: 0 !important;
   white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
 }
 
 /* Global readability — bump small inline text up so nothing reads below 12px */

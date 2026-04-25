@@ -34,7 +34,9 @@ export const SandboxIframe = forwardRef<HTMLIFrameElement, Props>(function Sandb
         width: '100%',
         height: '100%',
         border: 'none',
-        background: '#fff',
+        background: 'transparent',
+        colorScheme: 'dark',
+        display: 'block',
         ...style,
       }}
     />

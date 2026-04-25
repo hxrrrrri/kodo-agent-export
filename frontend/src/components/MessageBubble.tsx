@@ -11,6 +11,7 @@ import { AdvisorReview, ArtifactItem, ArtifactRef, Message, PreviewItem, useChat
 import { buildApiHeaders, parseApiError } from '../lib/api'
 import { ToolCallCard } from './ToolCallCard'
 import { InlineArtifactCard } from './artifacts/InlineArtifactCard'
+import { TodoPanel } from './TodoPanel'
 
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -222,18 +223,18 @@ function ArtifactPanel({ artifacts }: { artifacts: ArtifactItem[] }) {
 
   return (
     <div style={{
-      marginTop: 12,
+      marginTop: 8,
       border: '1px solid var(--border)',
       borderRadius: 'var(--radius)',
       overflow: 'hidden',
-      background: 'var(--bg-0)',
+      background: 'transparent',
     }}>
       {/* Tab bar */}
       <div style={{
         display: 'flex',
         alignItems: 'center',
-        background: 'var(--bg-2)',
-        borderBottom: '1px solid var(--border)',
+        background: 'transparent',
+        padding: '6px 10px',
         overflowX: 'auto',
         gap: 0,
       }}>
@@ -318,7 +319,7 @@ function ArtifactPanel({ artifacts }: { artifacts: ArtifactItem[] }) {
         customStyle={{
           margin: 0,
           borderRadius: 0,
-          background: '#0f0f13',
+          background: 'transparent',
           fontSize: 12,
           padding: '12px 16px',
           maxHeight: 400,
@@ -444,7 +445,7 @@ function PreviewPanel({ previews }: { previews: PreviewItem[] }) {
           height: 480,
           border: 'none',
           display: 'block',
-          background: '#fff',
+          background: 'transparent',
         }}
         sandbox="allow-scripts allow-same-origin allow-forms allow-popups"
         title={`Preview: ${preview.url}`}
@@ -1100,6 +1101,11 @@ export function MessageBubble({
             </button>
           )}
         </div>
+      )}
+
+      {/* Inline task plan — auto-shown for heavy tasks (3+ items) */}
+      {message.todoItems && message.todoItems.length > 0 && (
+        <TodoPanel items={message.todoItems} />
       )}
 
       {/* Artifacts v2 refs */}
