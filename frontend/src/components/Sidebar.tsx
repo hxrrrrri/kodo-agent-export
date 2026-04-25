@@ -2,6 +2,7 @@ import { MouseEvent as ReactMouseEvent, useEffect, useMemo, useRef, useState } f
 import {
   Activity,
   BarChart2,
+  BookOpen,
   Cpu,
   FileText,
   Hammer,
@@ -33,6 +34,7 @@ import { PromptLibraryPanel } from './PromptLibraryPanel'
 import { PromptCompressorPanel } from './PromptCompressorPanel'
 import { SkillBuilderPanel } from './SkillBuilderPanel'
 import { CodeReviewPanel } from './CodeReviewPanel'
+import { AntiVibePanel } from './AntiVibePanel'
 import { ArtifactGallery } from './ArtifactGallery'
 import { ThemeStudio, applyVarsToDOM } from './ThemeStudio'
 import { SessionInsights } from './SessionInsights'
@@ -42,7 +44,7 @@ type SidebarProps = {
   onToggleCollapse: () => void
 }
 
-type SidebarView = 'sessions' | 'providers' | 'agents' | 'usage' | 'prompts' | 'compressor' | 'skills' | 'crg' | 'review' | 'settings' | 'design' | 'gallery' | 'insights'
+type SidebarView = 'sessions' | 'providers' | 'agents' | 'usage' | 'prompts' | 'compressor' | 'skills' | 'crg' | 'review' | 'antivibe' | 'settings' | 'design' | 'gallery' | 'insights'
 
 type RuntimeTask = {
   task_id: string
@@ -1401,6 +1403,12 @@ export function Sidebar({ collapsed, onToggleCollapse }: SidebarProps) {
             onClick={() => setActiveView('review')}
           />
           <PanelNav
+            icon={<BookOpen size={15} />}
+            label="AntiVibe"
+            active={activeView === 'antivibe'}
+            onClick={() => setActiveView('antivibe')}
+          />
+          <PanelNav
             icon={<Settings size={15} />}
             label="Settings"
             active={activeView === 'settings'}
@@ -2335,6 +2343,10 @@ export function Sidebar({ collapsed, onToggleCollapse }: SidebarProps) {
 
           {activeView === 'review' && (
             <CodeReviewPanel sessionId={sessionId} projectDir={projectDir} />
+          )}
+
+          {activeView === 'antivibe' && (
+            <AntiVibePanel />
           )}
 
           {activeView === 'gallery' && (

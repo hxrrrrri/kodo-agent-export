@@ -268,7 +268,20 @@ export const useChatStore = create<ChatState>((set) => ({
   selectedArtifactV2: null,
 
   setSessionId: (id) => set({ sessionId: id }),
-  setSessions: (sessions) => set({ sessions }),
+  setSessions: (sessions) => {
+    // Restore starred state from localStorage when sessions are loaded
+    let starred: Set<string>
+    try {
+      const raw = typeof window !== 'undefined' ? window.localStorage.getItem('kodo:starred-sessions') : null
+      starred = new Set(raw ? JSON.parse(raw) : [])
+    } catch {
+      starred = new Set()
+    }
+    const restored = starred.size > 0
+      ? sessions.map((s) => starred.has(s.session_id) ? { ...s, starred: true } : s)
+      : sessions
+    set({ sessions: restored })
+  },
   setMessages: (messages) => set({ messages }),
   setInput: (input) => {
     set({ input })
@@ -323,9 +336,17 @@ export const useChatStore = create<ChatState>((set) => ({
   clearSessionArtifacts: () => set({ sessionArtifacts: {}, selectedArtifactV2: null }),
   setSelectedArtifactV2: (ref) => set({ selectedArtifactV2: ref }),
   toggleSessionStar: (sessionId) =>
-    set((s) => ({
-      sessions: s.sessions.map((sess) =>
+    set((s) => {
+      const sessions = s.sessions.map((sess) =>
         sess.session_id === sessionId ? { ...sess, starred: !sess.starred } : sess
-      ),
-    })),
+      )
+      // Persist starred IDs to localStorage
+      try {
+        const starredIds = sessions.filter((sess) => sess.starred).map((sess) => sess.session_id)
+        if (typeof window !== 'undefined') {
+          window.localStorage.setItem('kodo:starred-sessions', JSON.stringify(starredIds))
+        }
+      } catch { /* ignore */ }
+      return { sessions }
+    }),
 }))

@@ -91,12 +91,16 @@ async def upsert_artifact(session_id: str, body: ArtifactUpsertRequest, request:
 
 
 @router.get("/{session_id}")
-async def list_artifacts(session_id: str, request: Request) -> dict[str, Any]:
+async def list_artifacts(
+    session_id: str,
+    request: Request,
+    include_content: bool = Query(default=False),
+) -> dict[str, Any]:
     if not _artifacts_enabled():
         return {"artifacts": []}
     require_api_auth(request)
     await enforce_rate_limit(request, MEMORY_RATE_LIMITER, "artifacts_list")
-    return {"artifacts": await artifact_store.list_artifacts(session_id)}
+    return {"artifacts": await artifact_store.list_artifacts(session_id, include_content=include_content)}
 
 
 @router.get("/{session_id}/{artifact_id}")

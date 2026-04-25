@@ -597,8 +597,8 @@ body {
   background-attachment: fixed;
   color: var(--text-0);
   font-family: var(--font-mono);
-  font-size: 14px;
-  line-height: 1.6;
+  font-size: 15px;
+  line-height: 1.65;
   -webkit-font-smoothing: antialiased;
 }
 
@@ -645,6 +645,38 @@ aside {
 .truncate { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .mono { font-family: var(--font-mono); }
 .display { font-family: var(--font-display); }
+
+/* Header buttons — equal flex distribution */
+.kodo-header-buttons > button,
+.kodo-header-buttons > a {
+  flex: 1 1 0 !important;
+  min-width: 0 !important;
+  justify-content: center !important;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Global readability — bump small inline text up so nothing reads below 12px */
+textarea, input, select { font-size: 13px !important; }
+
+/* Prose / message content — ensure comfortable reading size */
+.prose,
+.prose p,
+.prose li,
+.prose blockquote,
+[data-message-content],
+[data-assistant-text] {
+  font-size: 14.5px;
+  line-height: 1.75;
+}
+.prose code,
+.prose pre code {
+  font-size: 13px;
+}
+.prose h1 { font-size: 20px; }
+.prose h2 { font-size: 17px; }
+.prose h3 { font-size: 15px; }
 
 /* Animations */
 @keyframes blink {

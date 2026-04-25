@@ -69,7 +69,7 @@ class ArtifactStore:
             await f.write(json.dumps(payload, ensure_ascii=True, indent=2))
         tmp.replace(path)
 
-    async def list_artifacts(self, session_id: str) -> list[dict[str, Any]]:
+    async def list_artifacts(self, session_id: str, include_content: bool = False) -> list[dict[str, Any]]:
         async with self._lock(session_id):
             payload = await self._load(session_id)
         rows: list[dict[str, Any]] = []
@@ -78,14 +78,17 @@ class ArtifactStore:
                 continue
             latest = versions[-1] if versions else None
             if latest:
-                rows.append({
+                row: dict[str, Any] = {
                     "id": art_id,
                     "latest_version": int(latest.get("version", 1)),
                     "type": latest.get("type", "code"),
                     "title": latest.get("title", art_id),
                     "updated_at": latest.get("updated_at"),
                     "version_count": len(versions),
-                })
+                }
+                if include_content:
+                    row["latest"] = latest
+                rows.append(row)
         return rows
 
     async def get(

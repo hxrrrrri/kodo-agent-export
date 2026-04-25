@@ -136,62 +136,54 @@ function buildSrcDoc(artifact: ArtifactV2, reloadKey = 0): string {
   const entrypoint = artifact.files.find((f) => f.path === entrypointPath) || artifact.files[0]
   const siblings = artifact.files.filter((f) => f.path !== entrypoint.path)
 
-  const blobMapDecls = siblings.map((f) => {
-    const mime = mimeForPath(f.path)
-    return `["${escapeJs(f.path)}", new Blob([${JSON.stringify(f.content)}], { type: "${mime}" })]`
-  }).join(',\n')
-
-  const rewriteScript = `
-<script>
-(function() {
-  var files = new Map([${blobMapDecls}]);
-  var urls = new Map();
-  files.forEach(function(blob, path) { urls.set(path, URL.createObjectURL(blob)); });
-
-  function resolve(href) {
-    if (!href) return href;
-    if (/^(https?:|data:|blob:|mailto:|javascript:|#)/i.test(href)) return href;
-    var clean = href.replace(/^\\.?\\//, '');
-    return urls.get(clean) || href;
+  // Build a lookup for sibling files by their path (with and without ./ prefix)
+  const fileMap = new Map<string, { content: string; path: string }>()
+  for (const f of siblings) {
+    fileMap.set(f.path, f)
+    fileMap.set(f.path.replace(/^\.\//, ''), f)
+    const basename = f.path.split('/').pop() || f.path
+    fileMap.set(basename, f)
   }
 
-  document.addEventListener('DOMContentLoaded', function() {
-    document.querySelectorAll('link[href], script[src], img[src], source[src], a[href], iframe[src]').forEach(function(el) {
-      var attr = el.hasAttribute('href') ? 'href' : 'src';
-      el.setAttribute(attr, resolve(el.getAttribute(attr)));
-    });
-  });
-})();
-</script>`
+  function resolveFileRef(ref: string): string | null {
+    if (!ref) return null
+    if (/^(https?:|data:|blob:|mailto:|javascript:|#)/i.test(ref)) return null
+    const clean = ref.replace(/^\.\//, '')
+    const f = fileMap.get(ref) || fileMap.get(clean) || fileMap.get(ref.split('/').pop() || ref)
+    return f ? f.content : null
+  }
 
-  const body = entrypoint.content
+  // Pre-process HTML: replace <link href="*.css"> with inline <style> and <script src="*.js"> with inline <script>
+  function inlineAssets(html: string): string {
+    // Inline CSS link tags
+    html = html.replace(/<link\b([^>]*)\bhref=["']([^"']+)["']([^>]*)>/gi, (match, pre, href, post) => {
+      const isStylesheet = /rel=["']stylesheet["']/i.test(pre + post) || /\.css$/i.test(href)
+      if (!isStylesheet) return match
+      const content = resolveFileRef(href)
+      if (content === null) return match // external URL or not found — keep as-is
+      return `<style>/* inlined: ${escapeHtml(href)} */\n${content}</style>`
+    })
+    // Inline local JS script tags
+    html = html.replace(/<script\b([^>]*)src=["']([^"']+)["']([^>]*)><\/script>/gi, (match, pre, src, post) => {
+      if (/^(https?:|\/\/)/i.test(src)) return match // external — keep
+      const content = resolveFileRef(src)
+      if (content === null) return match
+      return `<script${pre}${post}>${content}<\/script>`
+    })
+    return html
+  }
+
+  let body = inlineAssets(entrypoint.content)
   let result: string
   if (/<head[^>]*>/i.test(body)) {
-    result = body.replace(/<head[^>]*>/i, (m) => m + ERROR_BRIDGE + rewriteScript)
+    result = body.replace(/<head[^>]*>/i, (m) => m + ERROR_BRIDGE)
   } else {
-    result = `<!DOCTYPE html><html><head><meta charset="utf-8">${ERROR_BRIDGE}${rewriteScript}</head><body>${body}</body></html>`
+    result = `<!DOCTYPE html><html><head><meta charset="utf-8">${ERROR_BRIDGE}</head><body>${body}</body></html>`
   }
   if (reloadKey > 0) result += `<!-- kodo-reload:${reloadKey} -->`
   return result
 }
 
-function mimeForPath(path: string): string {
-  const lower = path.toLowerCase()
-  if (lower.endsWith('.html') || lower.endsWith('.htm')) return 'text/html'
-  if (lower.endsWith('.css')) return 'text/css'
-  if (lower.endsWith('.js') || lower.endsWith('.mjs')) return 'application/javascript'
-  if (lower.endsWith('.json')) return 'application/json'
-  if (lower.endsWith('.svg')) return 'image/svg+xml'
-  if (lower.endsWith('.png')) return 'image/png'
-  if (lower.endsWith('.jpg') || lower.endsWith('.jpeg')) return 'image/jpeg'
-  if (lower.endsWith('.gif')) return 'image/gif'
-  if (lower.endsWith('.webp')) return 'image/webp'
-  return 'text/plain'
-}
-
-function escapeJs(text: string): string {
-  return text.replace(/["\\]/g, (m) => '\\' + m)
-}
 
 // escapeHtml is exported so tests can introspect the sanitiser if needed.
 export { escapeHtml }

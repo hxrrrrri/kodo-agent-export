@@ -303,6 +303,19 @@ export function ProviderPanel() {
     }
   }
 
+  const loadOpenRouterModels = async () => {
+    try {
+      const res = await fetch('/api/providers/openrouter/models', { headers: buildApiHeaders() })
+      if (!res.ok) return
+      const payload = await res.json() as { models: Array<{ id: string; name: string }> }
+      const ids = (payload.models || []).map((m) => String(m.id || '').trim()).filter(Boolean)
+      if (ids.length > 0) {
+        setModelCatalog((prev) => ({ ...prev, openrouter: ids }))
+        setProviderAvailability((prev) => ({ ...prev, openrouter: true }))
+      }
+    } catch { /* silently skip */ }
+  }
+
   const loadOllamaSetupStatus = async () => {
     setOllamaSetupLoading(true)
     try {
@@ -575,6 +588,7 @@ export function ProviderPanel() {
     void loadProfiles()
     void loadOllamaSetupStatus()
     void loadWebhookEvents()
+    void loadOpenRouterModels()
   }, [])
 
   useEffect(() => {

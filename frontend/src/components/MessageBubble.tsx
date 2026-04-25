@@ -10,6 +10,7 @@ import { vscDarkPlus } from 'react-syntax-highlighter/dist/esm/styles/prism'
 import { AdvisorReview, ArtifactItem, ArtifactRef, Message, PreviewItem, useChatStore } from '../store/chatStore'
 import { buildApiHeaders, parseApiError } from '../lib/api'
 import { ToolCallCard } from './ToolCallCard'
+import { InlineArtifactCard } from './artifacts/InlineArtifactCard'
 
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -181,7 +182,6 @@ function AdvisorReviewCard({ review }: { review: AdvisorReview }) {
 
 function ArtifactRefPanel({ refs }: { refs: ArtifactRef[] }) {
   const sessionArtifacts = useChatStore((s) => s.sessionArtifacts)
-  const setSelectedArtifactV2 = useChatStore((s) => s.setSelectedArtifactV2)
 
   const resolved = refs
     .map((ref) => {
@@ -194,61 +194,10 @@ function ArtifactRefPanel({ refs }: { refs: ArtifactRef[] }) {
   if (resolved.length === 0) return null
 
   return (
-    <div style={{
-      marginTop: 12,
-      border: '1px solid var(--border)',
-      borderRadius: 'var(--radius)',
-      overflow: 'hidden',
-      background: 'var(--bg-0)',
-    }}>
-      <div style={{
-        display: 'flex',
-        alignItems: 'center',
-        background: 'var(--bg-2)',
-        borderBottom: '1px solid var(--border)',
-        padding: '5px 10px',
-      }}>
-        <span style={{
-          fontSize: 9,
-          letterSpacing: '0.12em',
-          color: 'var(--accent)',
-          fontFamily: 'var(--font-mono)',
-        }}>
-          ARTIFACTS
-        </span>
-      </div>
-      <div style={{ padding: 8, display: 'flex', flexDirection: 'column', gap: 6 }}>
-        {resolved.map(({ artifact, versionCount }) => (
-          <button
-            key={artifact.id}
-            type="button"
-            onClick={() => setSelectedArtifactV2({ id: artifact.id, version: artifact.version })}
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'space-between',
-              padding: '8px 12px',
-              borderRadius: 6,
-              border: '1px solid var(--border)',
-              background: 'var(--bg-1)',
-              color: 'var(--text-0)',
-              textAlign: 'left',
-              cursor: 'pointer',
-              gap: 10,
-            }}
-          >
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 2, minWidth: 0 }}>
-              <span style={{ fontSize: 12, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                {artifact.title}
-              </span>
-              <span style={{ fontSize: 10, color: 'var(--text-2)', fontFamily: 'var(--font-mono)' }}>
-                {artifact.type} · v{artifact.version}{versionCount > 1 ? ` (${versionCount} versions)` : ''} · {artifact.files.length} file{artifact.files.length === 1 ? '' : 's'}
-              </span>
-            </div>
-            <Maximize2 size={13} style={{ color: 'var(--accent)', flexShrink: 0 }} />
-          </button>
-        ))}
-      </div>
+    <div style={{ marginTop: 12, display: 'flex', flexDirection: 'column', gap: 10 }}>
+      {resolved.map(({ artifact }) => (
+        <InlineArtifactCard key={`${artifact.id}-${artifact.version}`} artifact={artifact} />
+      ))}
     </div>
   )
 }
@@ -789,9 +738,9 @@ export function MessageBubble({
           border: '1px solid var(--border-bright)',
           borderRadius: 'var(--radius)',
           padding: '10px 14px',
-          fontSize: 14,
+          fontSize: 15,
           color: 'var(--text-0)',
-          lineHeight: 1.6,
+          lineHeight: 1.65,
           whiteSpace: 'pre-wrap',
           wordBreak: 'break-word',
         }}>
@@ -904,8 +853,8 @@ export function MessageBubble({
 
       {displayContent && (
         <div style={{
-          fontSize: 14,
-          lineHeight: 1.7,
+          fontSize: 15,
+          lineHeight: 1.75,
           color: 'var(--text-0)',
           borderLeft: contentMatch ? '2px solid var(--yellow)' : undefined,
           paddingLeft: contentMatch ? 10 : 0,
@@ -1042,10 +991,10 @@ export function MessageBubble({
                   return <h1 style={{ fontFamily: 'var(--font-display)', fontSize: 20, fontWeight: 800, marginBottom: 10, color: 'var(--text-0)' }}>{children}</h1>
                 },
                 h2({ children }) {
-                  return <h2 style={{ fontFamily: 'var(--font-display)', fontSize: 16, fontWeight: 700, marginBottom: 8, color: 'var(--text-0)' }}>{children}</h2>
+                  return <h2 style={{ fontFamily: 'var(--font-display)', fontSize: 18, fontWeight: 700, marginBottom: 8, color: 'var(--text-0)' }}>{children}</h2>
                 },
                 h3({ children }) {
-                  return <h3 style={{ fontSize: 14, fontWeight: 600, marginBottom: 6, color: 'var(--text-0)' }}>{children}</h3>
+                  return <h3 style={{ fontSize: 16, fontWeight: 600, marginBottom: 6, color: 'var(--text-0)' }}>{children}</h3>
                 },
                 strong({ children }) {
                   return <strong style={{ fontWeight: 700, color: 'var(--text-0)' }}>{children}</strong>

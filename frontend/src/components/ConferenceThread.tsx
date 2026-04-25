@@ -402,51 +402,108 @@ export function ConferenceThread({ data }: Props) {
       )}
 
       {isDebateMode && debateTurns.length > 0 && (
-        <div style={{
-          marginTop: 12,
-          border: '1px solid var(--border)',
-          borderRadius: 12,
-          background: 'var(--bg-1)',
-          overflow: 'hidden',
-        }}>
+        <div style={{ marginTop: 12, border: '1px solid var(--border)', borderRadius: 12, background: 'var(--bg-1)', overflow: 'hidden' }}>
           <button
             type="button"
             onClick={() => setDebateExpanded((value) => !value)}
             style={{
-              width: '100%',
-              border: 'none',
-              background: 'var(--bg-2)',
-              color: 'var(--text-0)',
-              padding: '9px 12px',
-              display: 'flex',
-              alignItems: 'center',
-              gap: 8,
-              cursor: 'pointer',
-              fontFamily: 'var(--font-mono)',
-              fontSize: 11,
+              width: '100%', border: 'none', background: 'var(--bg-2)',
+              color: 'var(--text-0)', padding: '9px 12px',
+              display: 'flex', alignItems: 'center', gap: 8,
+              cursor: 'pointer', fontFamily: 'var(--font-mono)', fontSize: 11,
               borderBottom: debateExpanded ? '1px solid var(--border)' : 'none',
             }}
           >
             {debateExpanded ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
-            LIVE DEBATE TRANSCRIPT
-            <span style={{ marginLeft: 'auto', color: 'var(--text-2)', fontSize: 10 }}>
-              {debateTurns.length} turns
-            </span>
+            LIVE DEBATE
+            <span style={{ marginLeft: 'auto', color: 'var(--text-2)', fontSize: 10 }}>{debateTurns.length} turns</span>
           </button>
 
           {debateExpanded && (
-            <div style={{ display: 'grid', gap: 10, padding: 12 }}>
+            <div style={{ padding: '6px 14px 10px', background: 'var(--bg-0)' }}>
               {debateTurns.map((turn, idx) => (
-                <ModelCard
-                  key={`${turn.participantId}-${idx}`}
-                  result={turn}
-                  onExpand={() => setExpandedCard(data.results.length + idx)}
-                />
+                <div key={`${turn.participantId}-${idx}`} style={{ display: 'flex', gap: 10, alignItems: 'flex-start', padding: '8px 0' }}>
+                  <div style={{
+                    width: 30, height: 30, borderRadius: '50%', flexShrink: 0,
+                    background: `${turn.color}22`, border: `2px solid ${turn.color}`,
+                    display: 'flex', alignItems: 'center', justifyContent: 'center',
+                    fontSize: 10, fontFamily: 'var(--font-mono)', fontWeight: 700, color: turn.color,
+                  }}>
+                    {turn.name.slice(0, 2).toUpperCase()}
+                  </div>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
+                      <span style={{ fontSize: 11, fontWeight: 700, color: turn.color, fontFamily: 'var(--font-mono)' }}>{turn.name}</span>
+                      {turn.done && !turn.error && <CheckCircle2 size={10} color={turn.color} />}
+                      {turn.text && <button type="button" onClick={() => setExpandedCard(data.results.length + idx)} title="Expand" style={{ background: 'none', border: 'none', color: 'var(--text-2)', cursor: 'pointer', padding: 2, display: 'flex' }}><Maximize2 size={10} /></button>}
+                    </div>
+                    <div style={{ background: 'var(--bg-2)', borderRadius: 10, border: `1px solid ${turn.color}44`, padding: '8px 12px', fontSize: 12.5, lineHeight: 1.7, color: 'var(--text-0)' }}>
+                      <ReactMarkdown remarkPlugins={[remarkGfm]} components={{
+                        code({ children, ...props }: any) {
+                          return <code style={{ background: 'var(--bg-3)', borderRadius: 3, padding: '1px 5px', fontSize: 11, fontFamily: 'var(--font-mono)', color: 'var(--green)' }} {...props}>{children}</code>
+                        },
+                        p({ children }) { return <p style={{ marginBottom: 6 }}>{children}</p> },
+                      }}>{turn.text || '...'}</ReactMarkdown>
+                    </div>
+                  </div>
+                </div>
               ))}
             </div>
           )}
         </div>
       )}
+
+      {/* Best Answers section — shown when done */}
+      {data.synthesisDone && debateTurns.length > 0 && (() => {
+        const allTexts = [...data.results.map((r) => r.text), ...debateTurns.map((t) => t.text)].filter(Boolean)
+        const sorted = [...allTexts].sort((a, b) => b.length - a.length)
+        const bestAnswer = sorted[0] || ''
+        let bestCode = ''
+        for (const t of allTexts) {
+          const m = t.match(/```[\w]*\n([\s\S]*?)```/)
+          if (m) { bestCode = m[0]; break }
+        }
+        const suggestions: string[] = []
+        for (const t of allTexts) {
+          for (const line of t.split('\n')) {
+            if (/^[\s]*[-*]\s+/.test(line) || /^\d+\.\s+/.test(line)) {
+              const clean = line.trim().replace(/^[-*\d.]+\s+/, '')
+              if (clean.length > 20 && !suggestions.includes(clean)) suggestions.push(clean)
+            }
+          }
+        }
+        const bestSuggestions = suggestions.slice(0, 6).map((s) => `- ${s}`).join('\n')
+        return (
+          <div style={{ marginTop: 12, border: '1px solid var(--border)', borderRadius: 12, overflow: 'hidden', background: 'var(--bg-1)' }}>
+            <div style={{ padding: '8px 14px', background: 'var(--bg-2)', borderBottom: '1px solid var(--border)', display: 'flex', alignItems: 'center', gap: 8 }}>
+              <span style={{ fontSize: 9 }}>🏆</span>
+              <span style={{ fontFamily: 'var(--font-mono)', fontSize: 11, fontWeight: 700, color: 'var(--yellow)' }}>BEST ANSWERS &amp; INSIGHTS</span>
+            </div>
+            {bestAnswer && (
+              <div style={{ padding: '12px 16px', borderBottom: bestCode || bestSuggestions ? '1px solid var(--border)' : 'none' }}>
+                <div style={{ fontSize: 10, fontFamily: 'var(--font-mono)', color: 'var(--yellow)', fontWeight: 700, marginBottom: 8 }}>★ BEST ANSWER</div>
+                <div style={{ fontSize: 13, lineHeight: 1.75, color: 'var(--text-0)' }}>
+                  <ReactMarkdown remarkPlugins={[remarkGfm]} components={{ p({ children }) { return <p style={{ marginBottom: 8 }}>{children}</p> } }}>{bestAnswer.slice(0, 1500)}</ReactMarkdown>
+                </div>
+              </div>
+            )}
+            {bestCode && (
+              <div style={{ padding: '12px 16px', borderBottom: bestSuggestions ? '1px solid var(--border)' : 'none' }}>
+                <div style={{ fontSize: 10, fontFamily: 'var(--font-mono)', color: 'var(--green)', fontWeight: 700, marginBottom: 8 }}>⌗ BEST CODE</div>
+                <ReactMarkdown remarkPlugins={[remarkGfm]}>{bestCode}</ReactMarkdown>
+              </div>
+            )}
+            {bestSuggestions && (
+              <div style={{ padding: '12px 16px' }}>
+                <div style={{ fontSize: 10, fontFamily: 'var(--font-mono)', color: 'var(--blue)', fontWeight: 700, marginBottom: 8 }}>💡 KEY INSIGHTS</div>
+                <div style={{ fontSize: 13, lineHeight: 1.75, color: 'var(--text-0)' }}>
+                  <ReactMarkdown remarkPlugins={[remarkGfm]} components={{ li({ children }) { return <li style={{ marginBottom: 5 }}>{children}</li> } }}>{bestSuggestions}</ReactMarkdown>
+                </div>
+              </div>
+            )}
+          </div>
+        )
+      })()}
     </div>
   )
 }

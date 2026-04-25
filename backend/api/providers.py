@@ -434,3 +434,50 @@ async def ollama_setup_endpoint(body: OllamaSetupRequest, request: Request):
         "persisted": bool(body.persist),
         **status,
     }
+
+
+@router.get("/openrouter/models")
+async def openrouter_models_endpoint(request: Request):
+    """Fetch all available models from OpenRouter API."""
+    require_api_auth(request)
+    await enforce_rate_limit(request, MEMORY_RATE_LIMITER, "providers_openrouter_models")
+
+    api_key = _env_or_override(request, "OPENROUTER_API_KEY")
+    if not api_key:
+        raise HTTPException(status_code=400, detail="OPENROUTER_API_KEY not configured")
+
+    import httpx
+
+    try:
+        async with httpx.AsyncClient(timeout=20.0) as client:
+            resp = await client.get(
+                "https://openrouter.ai/api/v1/models",
+                headers={
+                    "Authorization": f"Bearer {api_key}",
+                    "HTTP-Referer": "http://localhost",
+                    "X-Title": "kodo-agent",
+                },
+            )
+            resp.raise_for_status()
+            data = resp.json()
+    except httpx.HTTPStatusError as exc:
+        raise HTTPException(status_code=502, detail=f"OpenRouter API error: {exc.response.status_code}") from exc
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Failed to fetch OpenRouter models: {exc}") from exc
+
+    raw_models = data.get("data", []) if isinstance(data, dict) else []
+    models = []
+    for m in raw_models:
+        if not isinstance(m, dict):
+            continue
+        model_id = str(m.get("id", "")).strip()
+        if model_id:
+            models.append({
+                "id": model_id,
+                "name": str(m.get("name", model_id)).strip(),
+                "context_length": m.get("context_length"),
+                "pricing": m.get("pricing"),
+            })
+
+    models.sort(key=lambda x: x["id"])
+    return {"models": models, "count": len(models)}

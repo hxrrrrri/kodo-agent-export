@@ -10,7 +10,7 @@ import { ProjectBrief, applyProjectBrief } from './ProjectBrief'
 import { ConferenceThread, ConferenceThreadData, ConferenceResult } from './ConferenceThread'
 import { useChat } from '../hooks/useChat'
 import { MessageBubble } from './MessageBubble'
-import { CommandDefinition, THEME_OPTIONS, ThemeKey, TodoItem } from '../store/chatStore'
+import { CommandDefinition, THEME_OPTIONS, ThemeKey } from '../store/chatStore'
 import { TerminalPanel } from './TerminalPanel'
 import { NotebookPanel } from './NotebookPanel'
 import { KodoLogoMark } from './KodoLogoMark'
@@ -345,230 +345,9 @@ function decodeBase64ToBytes(data: string): Uint8Array {
   return Uint8Array.from(binary, (char) => char.charCodeAt(0))
 }
 
-// ─── Floating Todo Panel ──────────────────────────────────────────────────────
-const CATEGORY_META: Record<string, { label: string; color: string }> = {
-  analysis: { label: 'ANALYSIS', color: 'var(--blue)' },
-  code:     { label: 'CODE',     color: 'var(--accent)' },
-  fix:      { label: 'FIX',      color: 'var(--red)' },
-  test:     { label: 'TEST',     color: 'var(--yellow)' },
-  docs:     { label: 'DOCS',     color: 'var(--text-2)' },
-  deploy:   { label: 'DEPLOY',   color: 'var(--green)' },
-  design:   { label: 'DESIGN',   color: '#b388ff' },
-  review:   { label: 'REVIEW',   color: '#80cbc4' },
-  plan:     { label: 'PLAN',     color: '#ffab91' },
-}
 
-function TaskCheckIcon({ status }: { status: TodoItem['status'] }) {
-  if (status === 'completed') {
-    return (
-      <div style={{
-        width: 18, height: 18, borderRadius: '50%',
-        background: 'var(--green)', border: '2px solid var(--green)',
-        display: 'flex', alignItems: 'center', justifyContent: 'center',
-        flexShrink: 0,
-      }}>
-        <svg width="9" height="9" viewBox="0 0 10 10" fill="none">
-          <polyline points="1.5,5.5 4,8 8.5,2" stroke="#000" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
-        </svg>
-      </div>
-    )
-  }
-  if (status === 'in_progress') {
-    return (
-      <div style={{
-        width: 18, height: 18, borderRadius: '50%',
-        border: '2px solid var(--accent)',
-        display: 'flex', alignItems: 'center', justifyContent: 'center',
-        flexShrink: 0,
-        animation: 'pulse-accent 1.6s ease-in-out infinite',
-      }}>
-        <div style={{ width: 6, height: 6, borderRadius: '50%', background: 'var(--accent)' }} />
-      </div>
-    )
-  }
-  return (
-    <div style={{
-      width: 18, height: 18, borderRadius: '50%',
-      border: '2px solid var(--border-bright)',
-      display: 'flex', alignItems: 'center', justifyContent: 'center',
-      flexShrink: 0, opacity: 0.5,
-    }} />
-  )
-}
 
-function FloatingTodoPanel({ items }: { items: TodoItem[] }) {
-  const [collapsed, setCollapsed] = useState(false)
-  const allDone = items.length > 0 && items.every((i) => i.status === 'completed')
-  const doneCount = items.filter((i) => i.status === 'completed').length
-  const inProgressIdx = items.findIndex((i) => i.status === 'in_progress')
-  const pct = items.length > 0 ? Math.round((doneCount / items.length) * 100) : 0
-
-  if (items.length === 0) return null
-
-  return (
-    <div style={{
-      marginBottom: 10,
-      background: 'var(--bg-1)',
-      border: `1px solid ${allDone ? 'var(--green)' : 'var(--border)'}`,
-      borderRadius: 10,
-      overflow: 'hidden',
-      animation: 'fadeIn 0.2s ease',
-      transition: 'border-color 0.4s ease',
-    }}>
-      {/* Header */}
-      <button
-        type="button"
-        onClick={() => setCollapsed((v) => !v)}
-        style={{
-          width: '100%', display: 'flex', alignItems: 'center',
-          padding: '9px 12px', background: 'none', border: 'none',
-          cursor: 'pointer', gap: 10,
-        }}
-      >
-        {/* Icon */}
-        {allDone ? (
-          <div style={{ width: 20, height: 20, borderRadius: '50%', background: 'var(--green)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
-            <svg width="10" height="10" viewBox="0 0 10 10" fill="none">
-              <polyline points="1.5,5.5 4,8 8.5,2" stroke="#000" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
-            </svg>
-          </div>
-        ) : (
-          <div style={{
-            width: 20, height: 20, borderRadius: '50%',
-            background: 'conic-gradient(var(--accent) 0% ' + pct + '%, var(--bg-3) ' + pct + '% 100%)',
-            display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
-          }}>
-            <div style={{ width: 12, height: 12, borderRadius: '50%', background: 'var(--bg-1)' }} />
-          </div>
-        )}
-
-        {/* Title + count */}
-        <div style={{ flex: 1, textAlign: 'left' }}>
-          <div style={{ display: 'flex', alignItems: 'baseline', gap: 8 }}>
-            <span style={{ fontFamily: 'var(--font-mono)', fontSize: 11, letterSpacing: '0.1em', color: allDone ? 'var(--green)' : 'var(--text-0)', fontWeight: 700 }}>
-              {allDone ? 'ALL TASKS COMPLETE' : 'TASK PLAN'}
-            </span>
-            <span style={{ fontFamily: 'var(--font-mono)', fontSize: 10, color: 'var(--text-2)' }}>
-              {doneCount} / {items.length}
-            </span>
-          </div>
-          {/* Progress bar */}
-          {!allDone && (
-            <div style={{ marginTop: 4, height: 2, background: 'var(--bg-3)', borderRadius: 2, overflow: 'hidden' }}>
-              <div style={{
-                height: '100%', width: pct + '%',
-                background: 'linear-gradient(90deg, var(--accent), var(--green))',
-                borderRadius: 2,
-                transition: 'width 0.5s ease',
-              }} />
-            </div>
-          )}
-        </div>
-
-        <span style={{ color: 'var(--text-2)', display: 'flex', alignItems: 'center', flexShrink: 0 }}>
-          {collapsed ? <ChevronDown size={13} /> : <ChevronUp size={13} />}
-        </span>
-      </button>
-
-      {/* Task list */}
-      {!collapsed && (
-        <div style={{ borderTop: '1px solid var(--border)', padding: '4px 0' }}>
-          {items.map((item, idx) => {
-            const isCompleted = item.status === 'completed'
-            const isActive = item.status === 'in_progress'
-            const catMeta = item.category ? CATEGORY_META[item.category] : null
-            return (
-              <div
-                key={item.id}
-                style={{
-                  display: 'flex', alignItems: 'flex-start', gap: 10,
-                  padding: '7px 12px',
-                  background: isActive ? 'rgba(255,77,33,0.04)' : 'transparent',
-                  borderLeft: isActive ? '2px solid var(--accent)' : '2px solid transparent',
-                  transition: 'background 0.2s ease',
-                }}
-              >
-                {/* Step number + check */}
-                <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0, marginTop: 1 }}>
-                  <span style={{ fontFamily: 'var(--font-mono)', fontSize: 9, color: 'var(--text-2)', width: 14, textAlign: 'right', lineHeight: 1 }}>
-                    {String(idx + 1).padStart(2, '0')}
-                  </span>
-                  <TaskCheckIcon status={item.status} />
-                </div>
-
-                {/* Content */}
-                <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
-                    <span style={{
-                      fontSize: 12, lineHeight: 1.5,
-                      color: isCompleted ? 'var(--text-2)' : isActive ? 'var(--text-0)' : 'var(--text-1)',
-                      textDecoration: isCompleted ? 'line-through' : 'none',
-                      textDecorationColor: 'var(--border-bright)',
-                      fontWeight: isActive ? 600 : 400,
-                      transition: 'all 0.3s ease',
-                    }}>
-                      {item.title}
-                    </span>
-                    {catMeta && (
-                      <span style={{
-                        fontFamily: 'var(--font-mono)', fontSize: 8,
-                        color: catMeta.color, border: `1px solid ${catMeta.color}`,
-                        borderRadius: 3, padding: '1px 4px', letterSpacing: '0.08em', opacity: 0.8,
-                        flexShrink: 0,
-                      }}>
-                        {catMeta.label}
-                      </span>
-                    )}
-                  </div>
-
-                  {/* Detail */}
-                  {item.detail && (
-                    <div style={{ marginTop: 2, fontSize: 11, color: 'var(--text-2)', lineHeight: 1.5 }}>
-                      {item.detail}
-                    </div>
-                  )}
-
-                  {/* Active tool indicator */}
-                  {isActive && item.tool && (
-                    <div style={{ marginTop: 3, display: 'flex', alignItems: 'center', gap: 4 }}>
-                      <span style={{ width: 5, height: 5, borderRadius: '50%', background: 'var(--accent)', display: 'inline-block', animation: 'pulse-accent 1.4s ease infinite', flexShrink: 0 }} />
-                      <span style={{ fontSize: 9, fontFamily: 'var(--font-mono)', color: 'var(--accent)', letterSpacing: '0.06em' }}>
-                        {item.tool}
-                      </span>
-                    </div>
-                  )}
-                  {isActive && !item.tool && (
-                    <div style={{ marginTop: 3, display: 'flex', alignItems: 'center', gap: 4 }}>
-                      <span style={{ width: 5, height: 5, borderRadius: '50%', background: 'var(--accent)', display: 'inline-block', animation: 'pulse-accent 1.4s ease infinite' }} />
-                      <span style={{ fontSize: 9, fontFamily: 'var(--font-mono)', color: 'var(--accent)', letterSpacing: '0.06em' }}>
-                        IN PROGRESS
-                      </span>
-                    </div>
-                  )}
-                </div>
-              </div>
-            )
-          })}
-
-          {/* Footer summary */}
-          {inProgressIdx >= 0 && (
-            <div style={{
-              margin: '4px 12px 8px',
-              padding: '6px 10px',
-              background: 'var(--bg-2)',
-              borderRadius: 6,
-              fontSize: 10, color: 'var(--text-2)', fontFamily: 'var(--font-mono)',
-              display: 'flex', justifyContent: 'space-between',
-            }}>
-              <span>STEP {inProgressIdx + 1}/{items.length}</span>
-              <span>{items.length - doneCount} remaining · {pct}% complete</span>
-            </div>
-          )}
-        </div>
-      )}
-    </div>
-  )
-}
+// FloatingTodoPanel removed — todo plans are rendered inline in message bubbles via TodoPanel
 
 export function ChatWindow({ editorOpen, onToggleEditor }: ChatWindowProps) {
   const {
@@ -608,6 +387,12 @@ export function ChatWindow({ editorOpen, onToggleEditor }: ChatWindowProps) {
   const [isEditingPrompt, setIsEditingPrompt] = useState(false)
   const [preEditInput, setPreEditInput] = useState('')
   const [showProjectInput, setShowProjectInput] = useState(false)
+  const [contextBarCollapsed, setContextBarCollapsed] = useState(() => {
+    try { return window.localStorage.getItem('kodo:context-bar-collapsed') === '1' } catch { return false }
+  })
+  useEffect(() => {
+    try { window.localStorage.setItem('kodo:context-bar-collapsed', contextBarCollapsed ? '1' : '0') } catch { /* ignore */ }
+  }, [contextBarCollapsed])
   const [projectDirPicking, setProjectDirPicking] = useState(false)
   const [projectDirPickerError, setProjectDirPickerError] = useState('')
   const [permissionSubmitting, setPermissionSubmitting] = useState(false)
@@ -683,16 +468,7 @@ export function ChatWindow({ editorOpen, onToggleEditor }: ChatWindowProps) {
     ? (messages[messages.length - 1] as any)?.advisorVerdict?.verdict ?? null
     : null
 
-  // Active todo items — from the latest assistant message that has todos
-  const activeTodoItems: TodoItem[] = useMemo(() => {
-    for (let i = messages.length - 1; i >= 0; i--) {
-      const m = messages[i]
-      if (m.role === 'assistant' && m.todoItems && m.todoItems.length > 0) {
-        return m.todoItems
-      }
-    }
-    return []
-  }, [messages])
+
 
   const {
     observerMode,
@@ -954,7 +730,7 @@ export function ChatWindow({ editorOpen, onToggleEditor }: ChatWindowProps) {
       requestAnimationFrame(() => {
         if (!textareaRef.current) return
         textareaRef.current.style.height = 'auto'
-        textareaRef.current.style.height = Math.min(textareaRef.current.scrollHeight, 200) + 'px'
+        textareaRef.current.style.height = Math.min(textareaRef.current.scrollHeight, 140) + 'px'
       })
     }
 
@@ -987,7 +763,7 @@ export function ChatWindow({ editorOpen, onToggleEditor }: ChatWindowProps) {
       requestAnimationFrame(() => {
         if (!textareaRef.current) return
         textareaRef.current.style.height = 'auto'
-        textareaRef.current.style.height = Math.min(textareaRef.current.scrollHeight, 200) + 'px'
+        textareaRef.current.style.height = Math.min(textareaRef.current.scrollHeight, 140) + 'px'
         textareaRef.current.focus()
       })
     }
@@ -1050,7 +826,7 @@ export function ChatWindow({ editorOpen, onToggleEditor }: ChatWindowProps) {
             requestAnimationFrame(() => {
               if (!textareaRef.current) return
               textareaRef.current.style.height = 'auto'
-              textareaRef.current.style.height = Math.min(textareaRef.current.scrollHeight, 200) + 'px'
+              textareaRef.current.style.height = Math.min(textareaRef.current.scrollHeight, 140) + 'px'
               textareaRef.current.focus()
               textareaRef.current.selectionStart = textareaRef.current.value.length
               textareaRef.current.selectionEnd = textareaRef.current.value.length
@@ -1069,7 +845,7 @@ export function ChatWindow({ editorOpen, onToggleEditor }: ChatWindowProps) {
         requestAnimationFrame(() => {
           if (!textareaRef.current) return
           textareaRef.current.style.height = 'auto'
-          textareaRef.current.style.height = Math.min(textareaRef.current.scrollHeight, 200) + 'px'
+          textareaRef.current.style.height = Math.min(textareaRef.current.scrollHeight, 140) + 'px'
           textareaRef.current.focus()
           textareaRef.current.selectionStart = textareaRef.current.value.length
           textareaRef.current.selectionEnd = textareaRef.current.value.length
@@ -1084,7 +860,7 @@ export function ChatWindow({ editorOpen, onToggleEditor }: ChatWindowProps) {
     requestAnimationFrame(() => {
       if (!textareaRef.current) return
       textareaRef.current.style.height = 'auto'
-      textareaRef.current.style.height = Math.min(textareaRef.current.scrollHeight, 200) + 'px'
+      textareaRef.current.style.height = Math.min(textareaRef.current.scrollHeight, 140) + 'px'
       textareaRef.current.focus()
       textareaRef.current.selectionStart = textareaRef.current.value.length
       textareaRef.current.selectionEnd = textareaRef.current.value.length
@@ -1100,7 +876,7 @@ export function ChatWindow({ editorOpen, onToggleEditor }: ChatWindowProps) {
     requestAnimationFrame(() => {
       if (!textareaRef.current) return
       textareaRef.current.style.height = 'auto'
-      textareaRef.current.style.height = Math.min(textareaRef.current.scrollHeight, 200) + 'px'
+      textareaRef.current.style.height = Math.min(textareaRef.current.scrollHeight, 140) + 'px'
       textareaRef.current.focus()
       textareaRef.current.selectionStart = textareaRef.current.value.length
       textareaRef.current.selectionEnd = textareaRef.current.value.length
@@ -1162,7 +938,7 @@ export function ChatWindow({ editorOpen, onToggleEditor }: ChatWindowProps) {
     requestAnimationFrame(() => {
       if (!textareaRef.current) return
       textareaRef.current.style.height = 'auto'
-      textareaRef.current.style.height = Math.min(textareaRef.current.scrollHeight, 200) + 'px'
+      textareaRef.current.style.height = Math.min(textareaRef.current.scrollHeight, 140) + 'px'
       if (shouldFocus) {
         textareaRef.current.focus()
         textareaRef.current.selectionStart = textareaRef.current.value.length
@@ -1856,7 +1632,7 @@ export function ChatWindow({ editorOpen, onToggleEditor }: ChatWindowProps) {
       requestAnimationFrame(() => {
         if (!textareaRef.current) return
         textareaRef.current.style.height = 'auto'
-        textareaRef.current.style.height = Math.min(textareaRef.current.scrollHeight, 200) + 'px'
+        textareaRef.current.style.height = Math.min(textareaRef.current.scrollHeight, 140) + 'px'
       })
     }
 
@@ -1988,7 +1764,7 @@ export function ChatWindow({ editorOpen, onToggleEditor }: ChatWindowProps) {
         requestAnimationFrame(() => {
           if (textareaRef.current) {
             textareaRef.current.style.height = 'auto'
-            textareaRef.current.style.height = Math.min(textareaRef.current.scrollHeight, 200) + 'px'
+            textareaRef.current.style.height = Math.min(textareaRef.current.scrollHeight, 140) + 'px'
             textareaRef.current.selectionStart = textareaRef.current.selectionEnd = suggestion.length
           }
         })
@@ -2038,7 +1814,7 @@ export function ChatWindow({ editorOpen, onToggleEditor }: ChatWindowProps) {
   const handleTextareaChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
     setInput(e.target.value)
     e.target.style.height = 'auto'
-    e.target.style.height = Math.min(e.target.scrollHeight, 200) + 'px'
+    e.target.style.height = Math.min(e.target.scrollHeight, 140) + 'px'
   }
 
   const processPickedFiles = useCallback(async (files: File[]) => {
@@ -2208,7 +1984,8 @@ export function ChatWindow({ editorOpen, onToggleEditor }: ChatWindowProps) {
     }
   }, [projectDirPicking, setProjectDir])
 
-  const isEmpty = messages.length === 0
+  const isFreshChat = messages.length === 0 && !sessionId
+  const isEmpty = messages.length === 0 && !input.trim() && isFreshChat
   const isMessageFilteringActive = messageSearchQuery.trim().length > 0
 
   const contextTokens = useMemo(() => {
@@ -2358,8 +2135,16 @@ export function ChatWindow({ editorOpen, onToggleEditor }: ChatWindowProps) {
           </button>
         </div>
 
-        {/* All other header buttons — hidden when collapsed via display:none wrapper */}
-        <div style={{ display: headerCollapsed ? 'none' : 'contents' }}>
+        {/* All other header buttons — equal-distributed flex */}
+        <div className="kodo-header-buttons" style={{
+          display: headerCollapsed ? 'none' : 'flex',
+          flex: 1,
+          gap: 8,
+          minWidth: 0,
+          flexWrap: 'wrap',
+          alignItems: 'center',
+          justifyContent: 'flex-end',
+        }}>
 
         <button
           onClick={() => {
@@ -2975,6 +2760,7 @@ export function ChatWindow({ editorOpen, onToggleEditor }: ChatWindowProps) {
         </div>
       )}
 
+      {!contextBarCollapsed && (
       <CollabBar
         sessionId={sessionId}
         observerMode={observerMode}
@@ -2990,6 +2776,7 @@ export function ChatWindow({ editorOpen, onToggleEditor }: ChatWindowProps) {
           void revokeShare()
         }}
       />
+      )}
 
       {projectDirPickerError && (
         <div style={{
@@ -3005,11 +2792,12 @@ export function ChatWindow({ editorOpen, onToggleEditor }: ChatWindowProps) {
       )}
 
       <div style={{
-        padding: '8px 24px',
+        padding: contextBarCollapsed ? '4px 24px' : '8px 24px',
         borderBottom: '1px solid var(--border)',
         background: 'var(--bg-2)',
         display: 'grid',
         gap: 5,
+        transition: 'padding 0.18s ease',
       }}>
         <div style={{
           display: 'flex',
@@ -3022,28 +2810,43 @@ export function ChatWindow({ editorOpen, onToggleEditor }: ChatWindowProps) {
         }}>
           <span>CONTEXT WINDOW</span>
           <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginLeft: 'auto' }}>
-            {showCacheSavings && (
+            {showCacheSavings && !contextBarCollapsed && (
               <span style={{ color: 'var(--text-2)' }}>
                 Cache: saved ~${estimatedCacheSavings.toFixed(4)}
               </span>
             )}
             <span>{contextTokens.toLocaleString()} / {CONTEXT_TOKEN_BUDGET.toLocaleString()} TOK</span>
+            <button
+              type="button"
+              onClick={() => setContextBarCollapsed((v) => !v)}
+              title={contextBarCollapsed ? 'Expand context bar' : 'Collapse context bar'}
+              aria-label="Toggle context bar"
+              style={{
+                background: 'transparent', border: '1px solid var(--border)',
+                borderRadius: 4, color: 'var(--text-2)', cursor: 'pointer',
+                padding: '1px 4px', display: 'flex', alignItems: 'center',
+              }}
+            >
+              {contextBarCollapsed ? <ChevronDown size={11} /> : <ChevronUp size={11} />}
+            </button>
           </div>
         </div>
-        <div style={{
-          height: 6,
-          borderRadius: 999,
-          border: '1px solid var(--border)',
-          background: 'var(--bg-0)',
-          overflow: 'hidden',
-        }}>
+        {!contextBarCollapsed && (
           <div style={{
-            width: `${contextPercent}%`,
-            height: '100%',
-            background: contextPercent > 85 ? 'var(--red)' : contextPercent > 65 ? 'var(--yellow)' : 'var(--accent)',
-            transition: 'width 0.2s ease',
-          }} />
-        </div>
+            height: 6,
+            borderRadius: 999,
+            border: '1px solid var(--border)',
+            background: 'var(--bg-0)',
+            overflow: 'hidden',
+          }}>
+            <div style={{
+              width: `${contextPercent}%`,
+              height: '100%',
+              background: contextPercent > 85 ? 'var(--red)' : contextPercent > 65 ? 'var(--yellow)' : 'var(--accent)',
+              transition: 'width 0.2s ease',
+            }} />
+          </div>
+        )}
       </div>
 
       {/* Project dir input */}
@@ -3386,7 +3189,7 @@ export function ChatWindow({ editorOpen, onToggleEditor }: ChatWindowProps) {
         onScroll={handleMessagesScroll}
       >
         {/* Centered content wrapper */}
-        <div style={{ maxWidth: 980, margin: '0 auto', padding: '0 28px' }}>
+        <div style={{ maxWidth: 1180, margin: '0 auto', padding: '0 32px' }}>
         {isEmpty && (
           <div style={{
             display: 'flex',
@@ -3561,13 +3364,6 @@ export function ChatWindow({ editorOpen, onToggleEditor }: ChatWindowProps) {
       }}>
         {/* Centered wrapper */}
         <div style={{ maxWidth: 720, margin: '0 auto' }}>
-
-          {/* Floating todo panel */}
-          {activeTodoItems.length > 0 && (
-            <div style={{ marginBottom: 8 }}>
-              <FloatingTodoPanel items={activeTodoItems} />
-            </div>
-          )}
 
           {/* Smart suggestions */}
           <div style={{ marginBottom: 4, padding: '0 0 0' }}>
@@ -3900,7 +3696,7 @@ export function ChatWindow({ editorOpen, onToggleEditor }: ChatWindowProps) {
               fontFamily: 'var(--font-mono)',
               resize: 'none',
               lineHeight: 1.6,
-              maxHeight: 200,
+              maxHeight: 140,
               overflowY: 'auto',
               padding: 0,
               margin: 0,

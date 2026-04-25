@@ -580,11 +580,23 @@ function buildPreviewHtml(files: DesignFile[]): string {
 
   if (htmlFile) {
     let html = sanitizeDesignFileContent(htmlFile.name, htmlFile.language, htmlFile.content)
-    // Inject external CSS/JS files
     const cssInject = cssFiles.map(f => `<style>/* ${f.name} */\n${f.content}</style>`).join('\n')
-    const jsInject = jsFiles.map(f => `<script>/* ${f.name} */\n${f.content}</script>`).join('\n')
-    html = html.replace('</head>', `${cssInject}\n</head>`)
-    html = html.replace('</body>', `${jsInject}\n</body>`)
+    const jsInject = jsFiles.map(f => `<script>/* ${f.name} */\n${f.content}<\/script>`).join('\n')
+
+    // Ensure the document has <head> and <body> so injections always land
+    if (!/<head[\s>]/i.test(html)) {
+      if (/<html[\s>]/i.test(html)) {
+        html = html.replace(/<html[^>]*>/i, (m) => m + '<head></head>')
+      } else {
+        html = `<!DOCTYPE html><html><head></head><body>${html}</body></html>`
+      }
+    }
+    if (!/<\/body>/i.test(html)) {
+      html = html.replace(/<\/html>/i, `</body></html>`) || html + '</body>'
+    }
+
+    html = html.replace(/<\/head>/i, `${cssInject}\n</head>`)
+    html = html.replace(/<\/body>/i, `${jsInject}\n</body>`)
     return html
   }
 
@@ -595,7 +607,7 @@ function buildPreviewHtml(files: DesignFile[]): string {
   // Wrap loose CSS/JS in an HTML shell
   const css = cssFiles.map(f => f.content).join('\n')
   const js = jsFiles.map(f => f.content).join('\n')
-  return `<!DOCTYPE html><html><head><style>${css}</style></head><body>${js ? `<script>${js}</script>` : ''}</body></html>`
+  return `<!DOCTYPE html><html><head><style>${css}</style></head><body>${js ? `<script>${js}<\/script>` : ''}</body></html>`
 }
 
 function normalizePlanItemText(value: string): string {

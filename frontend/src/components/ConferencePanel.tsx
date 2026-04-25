@@ -1,15 +1,29 @@
 /**
- * ConferencePanel — Multi-Model Debate.
+ * ConferencePanel — Multi-Model Live Debate.
  *
- * Sends the same prompt to 2-6 different AI models simultaneously.
- * Each model's streaming response appears in its own column.
- * A synthesizer model reads all responses and produces the best composite answer.
+ * Sends the same prompt to 2-6 different AI models.
+ * In DEBATE mode: models respond to each other in a live chat timeline.
+ * In SYNTHESIZE mode: parallel responses + best composite answer.
  *
- * This is the feature no major AI platform offers: see GPT-4 vs Claude vs
- * Gemini answer the same question side-by-side, then get a synthesis.
+ * After the debate: shows Best Answers, Best Code, and Best Suggestions sections.
+ * The live debate log is collapsible and stays collapsible when saved to session.
  */
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { CheckCircle2, ChevronDown, ChevronRight, Loader, Pause, Plus, Send, X, Zap } from 'lucide-react'
+import {
+  Award,
+  CheckCircle2,
+  ChevronDown,
+  ChevronRight,
+  Code2,
+  Lightbulb,
+  Loader,
+  Pause,
+  Plus,
+  Send,
+  Trophy,
+  X,
+  Zap,
+} from 'lucide-react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { buildApiHeaders } from '../lib/api'
@@ -32,11 +46,16 @@ interface ParticipantState {
   started: boolean
 }
 
-interface DebateTurnState extends ParticipantState {
+interface DebateTurn {
   id: string
   name: string
   provider: string
   color: string
+  round: number
+  text: string
+  done: boolean
+  error: string | null
+  started: boolean
 }
 
 const PROVIDER_COLORS: Record<string, string> = {
@@ -49,6 +68,7 @@ const PROVIDER_COLORS: Record<string, string> = {
   'atomic-chat': '#0ea5e9',
   'github-models': '#24292f',
   codex: '#3b82f6',
+  anthropic: '#d97756',
 }
 
 const DEFAULT_PARTICIPANTS: Participant[] = [
@@ -59,78 +79,105 @@ const DEFAULT_PARTICIPANTS: Participant[] = [
 type KnownProvider = { name: string; big_model: string; configured: boolean; healthy: boolean }
 type ConferenceModelsResponse = { models: Record<string, string[]> }
 
-// ── ParticipantColumn ──────────────────────────────────────────────────────────
+// ── Debate Message Bubble ──────────────────────────────────────────────────────
 
-function ParticipantColumn({
-  participant,
-  state,
-  onRemove,
-}: {
-  participant: Participant
-  state: ParticipantState
-  onRemove: () => void
-}) {
-  const endRef = useRef<HTMLDivElement>(null)
-
-  useEffect(() => {
-    if (!state.done) endRef.current?.scrollIntoView({ block: 'nearest', behavior: 'smooth' })
-  }, [state.text, state.done])
-
+function DebateBubble({ turn }: { turn: DebateTurn }) {
   return (
-    <div style={{
-      flex: 1, minWidth: 220,
-      border: `1px solid ${state.error ? 'var(--red)' : state.done ? participant.color : 'var(--border)'}`,
-      borderRadius: 12,
-      display: 'flex', flexDirection: 'column',
-      overflow: 'hidden',
-      transition: 'border-color 0.3s ease',
-      background: 'var(--bg-1)',
-    }}>
-      {/* Header */}
+    <div style={{ display: 'flex', gap: 10, alignItems: 'flex-start', padding: '8px 0' }}>
+      {/* Avatar */}
       <div style={{
-        padding: '8px 12px',
-        background: 'var(--bg-2)',
-        borderBottom: '1px solid var(--border)',
-        display: 'flex', alignItems: 'center', gap: 8,
-        flexShrink: 0,
+        width: 32, height: 32, borderRadius: '50%', flexShrink: 0,
+        background: `${turn.color}22`, border: `2px solid ${turn.color}`,
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+        fontSize: 11, fontFamily: 'var(--font-mono)', fontWeight: 700, color: turn.color,
       }}>
-        <div style={{ width: 8, height: 8, borderRadius: '50%', background: participant.color, flexShrink: 0 }} />
-        <span style={{ fontFamily: 'var(--font-mono)', fontSize: 11, color: 'var(--text-0)', fontWeight: 600, flex: 1 }}>
-          {participant.name}
-        </span>
-        <span style={{ fontSize: 9, fontFamily: 'var(--font-mono)', color: 'var(--text-2)', letterSpacing: '0.06em' }}>
-          {participant.provider}
-        </span>
-        {!state.started && !state.done && (
-          <span style={{ fontSize: 9, fontFamily: 'var(--font-mono)', color: 'var(--text-2)' }}>WAITING</span>
-        )}
-        {state.started && !state.done && !state.error && (
-          <Loader size={10} color="var(--accent)" style={{ animation: 'spin 1s linear infinite' }} />
-        )}
-        {state.done && !state.error && (
-          <CheckCircle2 size={12} color={participant.color} />
-        )}
-        <button type="button" onClick={onRemove} style={{ background: 'none', border: 'none', color: 'var(--text-2)', cursor: 'pointer', padding: 0 }}>
-          <X size={11} />
-        </button>
+        {turn.name.slice(0, 2).toUpperCase()}
       </div>
 
       {/* Content */}
-      <div style={{ flex: 1, overflowY: 'auto', padding: 12, fontSize: 12, lineHeight: 1.6, color: 'var(--text-1)' }}>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
+          <span style={{ fontSize: 12, fontWeight: 700, color: turn.color, fontFamily: 'var(--font-mono)' }}>
+            {turn.name}
+          </span>
+          <span style={{ fontSize: 10, color: 'var(--text-2)', fontFamily: 'var(--font-mono)' }}>
+            Round {turn.round}
+          </span>
+          {turn.started && !turn.done && !turn.error && (
+            <Loader size={10} color={turn.color} style={{ animation: 'spin 1s linear infinite' }} />
+          )}
+          {turn.done && !turn.error && <CheckCircle2 size={11} color={turn.color} />}
+        </div>
+
+        <div style={{
+          background: 'var(--bg-2)', borderRadius: 10,
+          border: `1px solid ${turn.error ? 'var(--red)' : turn.done ? `${turn.color}44` : 'var(--border)'}`,
+          padding: '10px 14px',
+          fontSize: 13, lineHeight: 1.7, color: 'var(--text-0)',
+          transition: 'border-color 0.3s',
+        }}>
+          {turn.error ? (
+            <span style={{ color: 'var(--red)', fontFamily: 'var(--font-mono)', fontSize: 11 }}>
+              Error: {turn.error}
+            </span>
+          ) : turn.text ? (
+            <>
+              <ReactMarkdown remarkPlugins={[remarkGfm]} components={{
+                code({ children, ...props }: any) {
+                  return <code style={{ background: 'var(--bg-3)', borderRadius: 3, padding: '1px 5px', fontSize: 11, fontFamily: 'var(--font-mono)', color: 'var(--green)' }} {...props}>{children}</code>
+                },
+                p({ children }) { return <p style={{ marginBottom: 6 }}>{children}</p> },
+              }}>
+                {turn.text}
+              </ReactMarkdown>
+              {!turn.done && (
+                <span style={{ display: 'inline-block', width: 6, height: 12, background: turn.color, animation: 'blink 1s step-end infinite', marginLeft: 2, verticalAlign: 'middle' }} />
+              )}
+            </>
+          ) : (
+            <span style={{ color: 'var(--text-2)', fontSize: 11, fontFamily: 'var(--font-mono)' }}>Thinking...</span>
+          )}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ── Synthesis / Parallel response column ──────────────────────────────────────
+
+function ParticipantColumn({ participant, state }: { participant: Participant; state: ParticipantState }) {
+  return (
+    <div style={{
+      flex: 1, minWidth: 200,
+      border: `1px solid ${state.error ? 'var(--red)' : state.done ? participant.color : 'var(--border)'}`,
+      borderRadius: 10, display: 'flex', flexDirection: 'column',
+      overflow: 'hidden', background: 'var(--bg-1)', transition: 'border-color 0.3s',
+    }}>
+      <div style={{
+        padding: '7px 12px', background: 'var(--bg-2)',
+        borderBottom: '1px solid var(--border)',
+        display: 'flex', alignItems: 'center', gap: 8,
+      }}>
+        <div style={{ width: 8, height: 8, borderRadius: '50%', background: participant.color }} />
+        <span style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-0)', fontFamily: 'var(--font-mono)', flex: 1 }}>
+          {participant.name}
+        </span>
+        {state.started && !state.done && !state.error && (
+          <Loader size={10} color={participant.color} style={{ animation: 'spin 1s linear infinite' }} />
+        )}
+        {state.done && !state.error && <CheckCircle2 size={11} color={participant.color} />}
+      </div>
+      <div style={{ flex: 1, overflowY: 'auto', padding: 12, fontSize: 12.5, lineHeight: 1.65, color: 'var(--text-1)' }}>
         {state.error ? (
-          <div style={{ color: 'var(--red)', fontFamily: 'var(--font-mono)', fontSize: 11 }}>
-            Error: {state.error}
-          </div>
+          <div style={{ color: 'var(--red)', fontFamily: 'var(--font-mono)', fontSize: 11 }}>Error: {state.error}</div>
         ) : state.text ? (
           <>
             <ReactMarkdown remarkPlugins={[remarkGfm]} components={{
               code({ children, ...props }: any) {
                 return <code style={{ background: 'var(--bg-3)', borderRadius: 3, padding: '1px 4px', fontSize: 11, fontFamily: 'var(--font-mono)', color: 'var(--green)' }} {...props}>{children}</code>
               },
-              p({ children }) { return <p style={{ marginBottom: 8 }}>{children}</p> },
-            }}>
-              {state.text}
-            </ReactMarkdown>
+              p({ children }) { return <p style={{ marginBottom: 7 }}>{children}</p> },
+            }}>{state.text}</ReactMarkdown>
             {!state.done && (
               <span style={{ display: 'inline-block', width: 6, height: 12, background: participant.color, animation: 'blink 1s step-end infinite', marginLeft: 2, verticalAlign: 'middle' }} />
             )}
@@ -138,23 +185,47 @@ function ParticipantColumn({
         ) : state.started ? (
           <div style={{ color: 'var(--text-2)', fontSize: 11, fontFamily: 'var(--font-mono)' }}>Thinking...</div>
         ) : null}
-        <div ref={endRef} />
       </div>
-
-      {/* Stats */}
-      {state.done && state.text && !state.error && (
-        <div style={{
-          padding: '4px 12px', background: 'var(--bg-2)',
-          borderTop: '1px solid var(--border)',
-          fontSize: 9, fontFamily: 'var(--font-mono)', color: 'var(--text-2)',
-          display: 'flex', gap: 10,
-        }}>
-          <span>{state.text.length.toLocaleString()} chars</span>
-          <span>{state.text.split(/\s+/).length.toLocaleString()} words</span>
-        </div>
-      )}
     </div>
   )
+}
+
+// ── Best-Of Section ────────────────────────────────────────────────────────────
+
+function extractBestSections(texts: string[]): { bestAnswer: string; bestCode: string; bestSuggestions: string } {
+  let bestAnswer = ''
+  let bestCode = ''
+  let bestSuggestions = ''
+
+  // Find longest substantive answer
+  const sorted = [...texts].sort((a, b) => b.length - a.length)
+  bestAnswer = sorted[0] || ''
+
+  // Extract first code block found
+  for (const t of texts) {
+    const codeMatch = t.match(/```[\w]*\n([\s\S]*?)```/)
+    if (codeMatch) {
+      bestCode = codeMatch[0]
+      break
+    }
+  }
+
+  // Extract bullet point suggestions
+  const suggestions: string[] = []
+  for (const t of texts) {
+    const lines = t.split('\n')
+    for (const line of lines) {
+      if (/^[\s]*[-*]\s+/.test(line) || /^\d+\.\s+/.test(line)) {
+        const clean = line.trim().replace(/^[-*\d.]+\s+/, '')
+        if (clean.length > 20 && !suggestions.includes(clean)) {
+          suggestions.push(clean)
+        }
+      }
+    }
+  }
+  bestSuggestions = suggestions.slice(0, 6).map((s) => `- ${s}`).join('\n')
+
+  return { bestAnswer, bestCode, bestSuggestions }
 }
 
 // ── Main Component ─────────────────────────────────────────────────────────────
@@ -165,20 +236,22 @@ export function ConferencePanel() {
   const [prompt, setPrompt] = useState('')
   const [running, setRunning] = useState(false)
   const [participantStates, setParticipantStates] = useState<Record<string, ParticipantState>>({})
-  const [debateTurns, setDebateTurns] = useState<DebateTurnState[]>([])
-  const [debateExpanded, setDebateExpanded] = useState(false)
+  const [debateTurns, setDebateTurns] = useState<DebateTurn[]>([])
+  const [debateExpanded, setDebateExpanded] = useState(true)
+  const [bestExpanded, setBestExpanded] = useState(true)
   const [synthesis, setSynthesis] = useState('')
   const [synthesisRunning, setSynthesisRunning] = useState(false)
   const [synthesisStarted, setSynthesisStarted] = useState(false)
   const [knownProviders, setKnownProviders] = useState<KnownProvider[]>([])
   const [modelsByProvider, setModelsByProvider] = useState<Record<string, string[]>>({})
   const [synthesize, setSynthesize] = useState(true)
-  const [runMode, setRunMode] = useState<'synthesis' | 'debate'>('synthesis')
+  const [runMode, setRunMode] = useState<'synthesis' | 'debate'>('debate')
   const [error, setError] = useState<string | null>(null)
+  const [debateDone, setDebateDone] = useState(false)
   const abortRef = useRef<AbortController | null>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
+  const debateEndRef = useRef<HTMLDivElement>(null)
 
-  // Load available providers
   useEffect(() => {
     fetch('/api/conference/providers', { headers: buildApiHeaders() })
       .then((r) => r.ok ? r.json() : null)
@@ -198,19 +271,18 @@ export function ConferencePanel() {
       .catch(() => {})
   }, [])
 
+  // Auto-scroll debate feed
+  useEffect(() => {
+    if (running) debateEndRef.current?.scrollIntoView({ block: 'nearest', behavior: 'smooth' })
+  }, [debateTurns, running])
+
   function addParticipant() {
     if (participants.length >= 6) return
     const configured = knownProviders.filter((p) => p.configured)
     const unused = configured.find((p) => !participants.some((part) => part.provider === p.name))
     const provider = unused?.name || 'openai'
     const color = PROVIDER_COLORS[provider] || '#888'
-    setParticipants((prev) => [...prev, {
-      id: String(Date.now()),
-      provider,
-      model: '',
-      name: provider,
-      color,
-    }])
+    setParticipants((prev) => [...prev, { id: String(Date.now()), provider, model: '', name: provider, color }])
   }
 
   function removeParticipant(id: string) {
@@ -244,11 +316,12 @@ export function ConferencePanel() {
     setError(null)
     setSynthesis('')
     setDebateTurns([])
-    setDebateExpanded(false)
+    setDebateExpanded(true)
+    setBestExpanded(true)
     setSynthesisStarted(false)
     setSynthesisRunning(false)
+    setDebateDone(false)
 
-    // Init states
     const initStates: Record<string, ParticipantState> = {}
     participants.forEach((p) => {
       initStates[p.id] = { text: '', done: false, error: null, started: false }
@@ -306,7 +379,6 @@ export function ConferencePanel() {
           if (!line.startsWith('data: ')) continue
           const raw = line.slice(6).trim()
           if (!raw) continue
-
           let event: Record<string, unknown>
           try { event = JSON.parse(raw) } catch { continue }
 
@@ -331,14 +403,9 @@ export function ConferencePanel() {
             const name = String(event.name || provider || 'model')
             const id = String(event.turn_id || `${Date.now()}-${Math.random()}`)
             setDebateTurns((turns) => [...turns, {
-              id,
-              name: `R${round} ${name}`,
-              provider,
+              id, name, provider, round,
               color: PROVIDER_COLORS[provider] || '#888',
-              text: '',
-              done: false,
-              error: null,
-              started: true,
+              text: '', done: false, error: null, started: true,
             }])
           } else if (type === 'debate_turn_text') {
             setDebateTurns((turns) => {
@@ -366,16 +433,16 @@ export function ConferencePanel() {
           } else if (type === 'conference_done') {
             setSynthesisRunning(false)
             setRunning(false)
+            setDebateDone(true)
           }
         }
       }
     } catch (e) {
-      if ((e as Error).name !== 'AbortError') {
-        setError((e as Error).message)
-      }
+      if ((e as Error).name !== 'AbortError') setError((e as Error).message)
     } finally {
       setRunning(false)
       setSynthesisRunning(false)
+      setDebateDone(true)
     }
   }, [prompt, participants, runMode, sessionId, synthesize])
 
@@ -388,9 +455,16 @@ export function ConferencePanel() {
     return [current, ...models]
   }
 
+  const allParticipantTexts = Object.values(participantStates).map((s) => s.text).filter(Boolean)
+  const debateTexts = debateTurns.map((t) => t.text).filter(Boolean)
+  const allTexts = [...allParticipantTexts, ...debateTexts]
+  const bestSections = debateDone && allTexts.length > 0 ? extractBestSections(allTexts) : null
+
+  const hasResults = Object.keys(participantStates).length > 0
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>
-      {/* Header */}
+      {/* Header / Controls */}
       <div style={{ padding: '10px 14px 8px', borderBottom: '1px solid var(--border)', flexShrink: 0 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
           <Zap size={14} color="var(--accent)" />
@@ -398,37 +472,25 @@ export function ConferencePanel() {
             MULTI-MODEL CONFERENCE
           </span>
           <span style={{ fontSize: 10, color: 'var(--text-2)', fontFamily: 'var(--font-mono)' }}>
-            {participants.length} models - {runMode === 'debate' ? 'debate' : 'summarize'}
+            {participants.length} models · {runMode}
           </span>
         </div>
 
+        {/* Mode toggle */}
         <div style={{ display: 'inline-flex', border: '1px solid var(--border)', borderRadius: 8, background: 'var(--bg-2)', overflow: 'hidden', marginBottom: 8 }}>
-          {[
-            ['synthesis', 'SUMMARIZE'] as const,
-            ['debate', 'DEBATE'] as const,
-          ].map(([mode, label]) => (
-            <button
-              key={mode}
-              type="button"
-              onClick={() => setRunMode(mode)}
-              disabled={running}
-              style={{
-                border: 'none',
-                borderRight: mode === 'synthesis' ? '1px solid var(--border)' : 'none',
-                background: runMode === mode ? 'var(--accent-dim)' : 'transparent',
-                color: runMode === mode ? 'var(--accent)' : 'var(--text-2)',
-                fontSize: 10,
-                fontFamily: 'var(--font-mono)',
-                padding: '5px 9px',
-                cursor: running ? 'not-allowed' : 'pointer',
-              }}
-            >
-              {label}
+          {(['debate', 'synthesis'] as const).map((mode) => (
+            <button key={mode} type="button" onClick={() => setRunMode(mode)} disabled={running} style={{
+              border: 'none', borderRight: mode === 'debate' ? '1px solid var(--border)' : 'none',
+              background: runMode === mode ? 'var(--accent-dim)' : 'transparent',
+              color: runMode === mode ? 'var(--accent)' : 'var(--text-2)',
+              fontSize: 10, fontFamily: 'var(--font-mono)', padding: '5px 10px', cursor: running ? 'not-allowed' : 'pointer',
+            }}>
+              {mode.toUpperCase()}
             </button>
           ))}
         </div>
 
-        {/* Participant selector row */}
+        {/* Participants */}
         <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 8 }}>
           {participants.map((p) => (
             <div key={p.id} style={{
@@ -437,31 +499,16 @@ export function ConferencePanel() {
               padding: '3px 8px', background: `${p.color}11`,
             }}>
               <div style={{ width: 6, height: 6, borderRadius: '50%', background: p.color }} />
-              <select
-                value={p.provider}
-                onChange={(e) => updateParticipant(p.id, { provider: e.target.value })}
-                disabled={running}
-                style={{
-                  background: 'none', border: 'none', color: 'var(--text-0)',
-                  fontSize: 10, fontFamily: 'var(--font-mono)', cursor: 'pointer', outline: 'none',
-                }}
-              >
+              <select value={p.provider} onChange={(e) => updateParticipant(p.id, { provider: e.target.value })} disabled={running}
+                style={{ background: 'none', border: 'none', color: 'var(--text-0)', fontSize: 10, fontFamily: 'var(--font-mono)', cursor: 'pointer', outline: 'none' }}>
                 {knownProviders.filter((kp) => kp.configured).map((kp) => (
                   <option key={kp.name} value={kp.name}>{kp.name}</option>
                 ))}
                 {configuredProviderNames.length === 0 && <option value={p.provider}>{p.provider}</option>}
               </select>
-              <select
-                value={p.model}
-                onChange={(e) => updateParticipant(p.id, { model: e.target.value })}
-                disabled={running}
-                style={{
-                  maxWidth: 190,
-                  background: 'none', border: 'none', color: 'var(--text-0)',
-                  fontSize: 10, fontFamily: 'var(--font-mono)', cursor: 'pointer', outline: 'none',
-                }}
-              >
-                {!p.model && participantModelOptions(p).length > 0 && <option value="">default</option>}
+              <select value={p.model} onChange={(e) => updateParticipant(p.id, { model: e.target.value })} disabled={running}
+                style={{ maxWidth: 160, background: 'none', border: 'none', color: 'var(--text-0)', fontSize: 10, fontFamily: 'var(--font-mono)', cursor: 'pointer', outline: 'none' }}>
+                {!p.model && <option value="">default</option>}
                 {participantModelOptions(p).length === 0 && <option value="">default</option>}
                 {participantModelOptions(p).map((model) => (
                   <option key={model} value={model}>{model}</option>
@@ -477,40 +524,36 @@ export function ConferencePanel() {
           ))}
           {participants.length < 6 && (
             <button type="button" onClick={addParticipant} disabled={running} style={{
-              background: 'var(--bg-2)', border: '1px dashed var(--border)',
-              borderRadius: 8, padding: '3px 8px', cursor: 'pointer',
-              color: 'var(--text-2)', fontSize: 10, fontFamily: 'var(--font-mono)',
-              display: 'flex', alignItems: 'center', gap: 3,
+              background: 'var(--bg-2)', border: '1px dashed var(--border)', borderRadius: 8,
+              padding: '3px 8px', cursor: 'pointer', color: 'var(--text-2)', fontSize: 10,
+              fontFamily: 'var(--font-mono)', display: 'flex', alignItems: 'center', gap: 3,
             }}>
               <Plus size={9} /> ADD
             </button>
           )}
         </div>
 
-        {/* Prompt input */}
+        {/* Prompt */}
         <div style={{ display: 'flex', gap: 6 }}>
           <textarea
             ref={textareaRef}
             value={prompt}
             onChange={(e) => setPrompt(e.target.value)}
             onKeyDown={(e) => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); void run() } }}
-            placeholder="Ask a question to all models simultaneously... (Cmd+Enter to run)"
+            placeholder="Topic to debate... (Cmd+Enter to start)"
             rows={2}
             disabled={running}
             style={{
               flex: 1, resize: 'none', background: 'var(--bg-2)',
               border: '1px solid var(--border)', borderRadius: 8,
-              color: 'var(--text-0)', fontSize: 12, padding: '7px 10px',
-              outline: 'none', fontFamily: 'var(--font-sans)', lineHeight: 1.5,
-              boxSizing: 'border-box',
+              color: 'var(--text-0)', fontSize: 13, padding: '7px 10px',
+              outline: 'none', fontFamily: 'var(--font-sans)', lineHeight: 1.5, boxSizing: 'border-box',
             }}
             onFocus={(e) => { e.target.style.borderColor = 'var(--accent)' }}
             onBlur={(e) => { e.target.style.borderColor = 'var(--border)' }}
           />
           <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-            <button
-              type="button"
-              onClick={running ? stop : () => void run()}
+            <button type="button" onClick={running ? stop : () => void run()}
               disabled={!running && (!prompt.trim() || participants.length < 2)}
               style={{
                 background: running ? 'var(--red-dim)' : 'var(--accent)',
@@ -519,51 +562,79 @@ export function ConferencePanel() {
                 borderRadius: 8, padding: '6px 12px', cursor: 'pointer',
                 fontSize: 11, fontFamily: 'var(--font-mono)', fontWeight: 700,
                 display: 'flex', alignItems: 'center', gap: 4,
-              }}
-            >
+              }}>
               {running ? <><Pause size={12} /> STOP</> : <><Send size={12} /> DEBATE</>}
             </button>
-            {runMode === 'synthesis' && <label style={{ display: 'flex', alignItems: 'center', gap: 4, cursor: 'pointer', fontSize: 10, fontFamily: 'var(--font-mono)', color: 'var(--text-2)' }}>
-              <input type="checkbox" checked={synthesize} onChange={(e) => setSynthesize(e.target.checked)} disabled={running} style={{ accentColor: 'var(--accent)' }} />
-              SYNTHESIZE
-            </label>}
+            {runMode === 'synthesis' && (
+              <label style={{ display: 'flex', alignItems: 'center', gap: 4, cursor: 'pointer', fontSize: 10, fontFamily: 'var(--font-mono)', color: 'var(--text-2)' }}>
+                <input type="checkbox" checked={synthesize} onChange={(e) => setSynthesize(e.target.checked)} disabled={running} style={{ accentColor: 'var(--accent)' }} />
+                SYNTHESIZE
+              </label>
+            )}
           </div>
         </div>
 
         {error && (
-          <div style={{ marginTop: 6, fontSize: 10, color: 'var(--red)', fontFamily: 'var(--font-mono)' }}>
-            {error}
-          </div>
+          <div style={{ marginTop: 6, fontSize: 10, color: 'var(--red)', fontFamily: 'var(--font-mono)' }}>{error}</div>
         )}
       </div>
 
-      {/* Columns area */}
-      {Object.keys(participantStates).length > 0 ? (
-        <div style={{ flex: 1, overflow: 'auto', padding: 10 }}>
-          {/* Participant columns */}
-          {runMode === 'synthesis' && <div style={{ display: 'flex', gap: 10, marginBottom: 10, minHeight: 200 }}>
-            {participants.map((p) => (
-              <ParticipantColumn
-                key={p.id}
-                participant={p}
-                state={participantStates[p.id] || { text: '', done: false, error: null, started: false }}
-                onRemove={() => removeParticipant(p.id)}
-              />
-            ))}
-          </div>}
+      {/* Results area */}
+      {hasResults ? (
+        <div style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column' }}>
 
-          {/* Synthesis section */}
-          {synthesisStarted && (
-            <div style={{
-              border: `1px solid ${synthesisRunning ? 'var(--accent)' : 'var(--green)'}`,
-              borderRadius: 12, overflow: 'hidden',
-              background: 'var(--bg-1)',
-              transition: 'border-color 0.3s ease',
-            }}>
-              <div style={{
-                padding: '8px 12px', background: 'var(--bg-2)',
-                borderBottom: '1px solid var(--border)',
+          {/* SYNTHESIS mode: parallel columns */}
+          {runMode === 'synthesis' && Object.keys(participantStates).length > 0 && (
+            <div style={{ padding: 10 }}>
+              <div style={{ display: 'flex', gap: 10, marginBottom: 10, minHeight: 180 }}>
+                {participants.map((p) => (
+                  <ParticipantColumn
+                    key={p.id}
+                    participant={p}
+                    state={participantStates[p.id] || { text: '', done: false, error: null, started: false }}
+                  />
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* DEBATE mode: live chat timeline */}
+          {runMode === 'debate' && debateTurns.length > 0 && (
+            <div style={{ borderBottom: '1px solid var(--border)' }}>
+              <button type="button" onClick={() => setDebateExpanded((v) => !v)} style={{
+                width: '100%', border: 'none', background: 'var(--bg-2)',
+                color: 'var(--text-0)', padding: '8px 14px',
                 display: 'flex', alignItems: 'center', gap: 8,
+                cursor: 'pointer', fontSize: 11, fontFamily: 'var(--font-mono)',
+                borderBottom: debateExpanded ? '1px solid var(--border)' : 'none',
+              }}>
+                {debateExpanded ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
+                <Zap size={12} color="var(--accent)" />
+                LIVE DEBATE
+                <span style={{ marginLeft: 'auto', fontSize: 9, color: 'var(--text-2)' }}>
+                  {debateTurns.length} turns · {debateTurns.filter((t) => t.done).length} done
+                </span>
+                {running && <Loader size={10} color="var(--accent)" style={{ animation: 'spin 1s linear infinite' }} />}
+              </button>
+
+              {debateExpanded && (
+                <div style={{ padding: '4px 14px 8px', background: 'var(--bg-0)' }}>
+                  {debateTurns.map((turn) => (
+                    <DebateBubble key={turn.id} turn={turn} />
+                  ))}
+                  <div ref={debateEndRef} />
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Synthesis result */}
+          {synthesisStarted && (
+            <div style={{ borderBottom: '1px solid var(--border)' }}>
+              <div style={{
+                padding: '8px 14px', background: 'var(--bg-2)',
+                display: 'flex', alignItems: 'center', gap: 8,
+                borderBottom: '1px solid var(--border)',
               }}>
                 <div style={{ width: 8, height: 8, borderRadius: '50%', background: synthesisRunning ? 'var(--accent)' : 'var(--green)', animation: synthesisRunning ? 'pulse-accent 1.4s ease infinite' : 'none' }} />
                 <span style={{ fontFamily: 'var(--font-mono)', fontSize: 11, fontWeight: 700, color: synthesisRunning ? 'var(--accent)' : 'var(--green)' }}>
@@ -572,10 +643,10 @@ export function ConferencePanel() {
                 {synthesisRunning && <Loader size={10} color="var(--accent)" style={{ animation: 'spin 1s linear infinite' }} />}
                 {!synthesisRunning && synthesis && <CheckCircle2 size={12} color="var(--green)" />}
               </div>
-              <div style={{ padding: '12px 16px', fontSize: 13, color: 'var(--text-0)', lineHeight: 1.7 }}>
+              <div style={{ padding: '12px 16px', fontSize: 13.5, color: 'var(--text-0)', lineHeight: 1.75 }}>
                 <ReactMarkdown remarkPlugins={[remarkGfm]} components={{
                   code({ children, ...props }: any) {
-                    return <code style={{ background: 'var(--bg-3)', borderRadius: 3, padding: '1px 5px', fontSize: 11, fontFamily: 'var(--font-mono)', color: 'var(--green)' }} {...props}>{children}</code>
+                    return <code style={{ background: 'var(--bg-3)', borderRadius: 3, padding: '1px 5px', fontSize: 11.5, fontFamily: 'var(--font-mono)', color: 'var(--green)' }} {...props}>{children}</code>
                   },
                   p({ children }) { return <p style={{ marginBottom: 10 }}>{children}</p> },
                 }}>
@@ -588,27 +659,78 @@ export function ConferencePanel() {
             </div>
           )}
 
-          {runMode === 'debate' && debateTurns.length > 0 && (
-            <div style={{ marginTop: 10, border: '1px solid var(--border)', borderRadius: 12, background: 'var(--bg-1)', overflow: 'hidden' }}>
-              <button
-                type="button"
-                onClick={() => setDebateExpanded((value) => !value)}
-                style={{ width: '100%', border: 'none', background: 'var(--bg-2)', color: 'var(--text-0)', padding: '8px 12px', display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', fontSize: 11, fontFamily: 'var(--font-mono)' }}
-              >
-                {debateExpanded ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
-                LIVE DEBATE TRANSCRIPT
-                <span style={{ marginLeft: 'auto', color: 'var(--text-2)', fontSize: 10 }}>{debateTurns.length} turns</span>
+          {/* Best-of section — shown after debate completes */}
+          {bestSections && (
+            <div>
+              <button type="button" onClick={() => setBestExpanded((v) => !v)} style={{
+                width: '100%', border: 'none', background: 'var(--bg-2)',
+                color: 'var(--text-0)', padding: '8px 14px',
+                display: 'flex', alignItems: 'center', gap: 8,
+                cursor: 'pointer', fontSize: 11, fontFamily: 'var(--font-mono)',
+                borderBottom: bestExpanded ? '1px solid var(--border)' : 'none',
+              }}>
+                {bestExpanded ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
+                <Trophy size={12} color="var(--yellow)" />
+                BEST ANSWERS &amp; INSIGHTS
               </button>
-              {debateExpanded && (
-                <div style={{ display: 'grid', gap: 10, padding: 10 }}>
-                  {debateTurns.map((turn) => (
-                    <ParticipantColumn
-                      key={turn.id}
-                      participant={{ id: turn.id, provider: turn.provider, model: '', name: turn.name, color: turn.color }}
-                      state={turn}
-                      onRemove={() => {}}
-                    />
-                  ))}
+
+              {bestExpanded && (
+                <div style={{ padding: '0 0 16px' }}>
+                  {/* Best Answer */}
+                  {bestSections.bestAnswer && (
+                    <div style={{ borderBottom: '1px solid var(--border)', padding: '12px 16px' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 10 }}>
+                        <Award size={13} color="var(--yellow)" />
+                        <span style={{ fontSize: 11, fontWeight: 700, color: 'var(--yellow)', fontFamily: 'var(--font-mono)' }}>BEST ANSWER</span>
+                      </div>
+                      <div style={{ fontSize: 13, lineHeight: 1.75, color: 'var(--text-0)' }}>
+                        <ReactMarkdown remarkPlugins={[remarkGfm]} components={{
+                          code({ children, ...props }: any) {
+                            return <code style={{ background: 'var(--bg-3)', borderRadius: 3, padding: '1px 5px', fontSize: 11, fontFamily: 'var(--font-mono)', color: 'var(--green)' }} {...props}>{children}</code>
+                          },
+                          p({ children }) { return <p style={{ marginBottom: 8 }}>{children}</p> },
+                        }}>
+                          {bestSections.bestAnswer.length > 1500 ? bestSections.bestAnswer.slice(0, 1500) + '...' : bestSections.bestAnswer}
+                        </ReactMarkdown>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Best Code */}
+                  {bestSections.bestCode && (
+                    <div style={{ borderBottom: '1px solid var(--border)', padding: '12px 16px' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 10 }}>
+                        <Code2 size={13} color="var(--green)" />
+                        <span style={{ fontSize: 11, fontWeight: 700, color: 'var(--green)', fontFamily: 'var(--font-mono)' }}>BEST CODE</span>
+                      </div>
+                      <div style={{ fontSize: 12.5, lineHeight: 1.65, color: 'var(--text-0)' }}>
+                        <ReactMarkdown remarkPlugins={[remarkGfm]} components={{
+                          code({ children, ...props }: any) {
+                            return <code style={{ background: 'var(--bg-3)', borderRadius: 3, padding: '1px 5px', fontSize: 11, fontFamily: 'var(--font-mono)', color: 'var(--green)' }} {...props}>{children}</code>
+                          },
+                        }}>
+                          {bestSections.bestCode}
+                        </ReactMarkdown>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Best Suggestions */}
+                  {bestSections.bestSuggestions && (
+                    <div style={{ padding: '12px 16px' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 10 }}>
+                        <Lightbulb size={13} color="var(--blue)" />
+                        <span style={{ fontSize: 11, fontWeight: 700, color: 'var(--blue)', fontFamily: 'var(--font-mono)' }}>KEY INSIGHTS</span>
+                      </div>
+                      <div style={{ fontSize: 13, lineHeight: 1.75, color: 'var(--text-0)' }}>
+                        <ReactMarkdown remarkPlugins={[remarkGfm]} components={{
+                          li({ children }) { return <li style={{ marginBottom: 6, paddingLeft: 4 }}>{children}</li> },
+                        }}>
+                          {bestSections.bestSuggestions}
+                        </ReactMarkdown>
+                      </div>
+                    </div>
+                  )}
                 </div>
               )}
             </div>
@@ -616,18 +738,24 @@ export function ConferencePanel() {
         </div>
       ) : (
         <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 16, padding: 24 }}>
-          <div style={{ fontSize: 32, fontFamily: 'var(--font-mono)', color: 'var(--border-bright)', letterSpacing: '-0.02em' }}>
-            [ CONFERENCE ]
-          </div>
-          <div style={{ fontSize: 12, color: 'var(--text-2)', textAlign: 'center', lineHeight: 1.7, maxWidth: 380 }}>
-            Select 2-6 models, write your question, hit DEBATE.
-            Each model answers independently. A synthesizer reads all
-            responses and produces the single best answer.
+          <div style={{ fontSize: 30, fontFamily: 'var(--font-mono)', color: 'var(--border-bright)', letterSpacing: '-0.02em' }}>[ CONFERENCE ]</div>
+          <div style={{ fontSize: 13, color: 'var(--text-2)', textAlign: 'center', lineHeight: 1.7, maxWidth: 380 }}>
+            Select 2–6 models and a topic. In DEBATE mode, models argue back and forth in a live timeline.
+            Best answers, code, and insights are extracted when the debate finishes.
           </div>
           <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', justifyContent: 'center' }}>
-            {['Which sorting algorithm is fastest?', 'Explain quantum entanglement', 'Best practices for API design?', 'How does React reconciliation work?'].map((eg) => (
+            {[
+              'Which sorting algorithm is fastest in practice?',
+              'Best practices for React performance?',
+              'Explain quantum entanglement simply',
+              'REST vs GraphQL vs tRPC?',
+            ].map((eg) => (
               <button key={eg} type="button" onClick={() => { setPrompt(eg); textareaRef.current?.focus() }}
-                style={{ background: 'var(--bg-2)', border: '1px solid var(--border)', borderRadius: 20, padding: '5px 12px', fontSize: 10, fontFamily: 'var(--font-mono)', color: 'var(--text-1)', cursor: 'pointer' }}>
+                style={{
+                  background: 'var(--bg-2)', border: '1px solid var(--border)', borderRadius: 20,
+                  padding: '5px 12px', fontSize: 10, fontFamily: 'var(--font-mono)',
+                  color: 'var(--text-1)', cursor: 'pointer',
+                }}>
                 {eg}
               </button>
             ))}

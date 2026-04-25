@@ -729,8 +729,26 @@ async def list_conference_models(request: Request):
         if p.name in ("ollama", "atomic-chat"):
             models = await list_available_models(p.name)
             result[p.name] = models if models else [p.big_model]
+        elif p.name == "openrouter":
+            import os
+            import httpx
+            api_key = os.getenv("OPENROUTER_API_KEY", "").strip()
+            if api_key:
+                try:
+                    async with httpx.AsyncClient(timeout=15.0) as client:
+                        resp = await client.get(
+                            "https://openrouter.ai/api/v1/models",
+                            headers={"Authorization": f"Bearer {api_key}", "HTTP-Referer": "http://localhost", "X-Title": "kodo-agent"},
+                        )
+                        resp.raise_for_status()
+                        data = resp.json()
+                    raw = [str(m.get("id", "")).strip() for m in (data.get("data") or []) if isinstance(m, dict) and m.get("id")]
+                    result["openrouter"] = sorted([m for m in raw if m])
+                except Exception:
+                    result["openrouter"] = [m for m in [p.big_model, p.small_model] if m]
+            else:
+                result["openrouter"] = [m for m in [p.big_model, p.small_model] if m]
         else:
-            # Use configured big + small model (deduplicated)
             models_list = list(dict.fromkeys([p.big_model, p.small_model]))
             result[p.name] = [m for m in models_list if m]
 

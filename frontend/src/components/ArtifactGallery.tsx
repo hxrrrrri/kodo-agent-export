@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { Eye, Grid, Search } from 'lucide-react'
 import { useChatStore } from '../store/chatStore'
 import { ArtifactV2 } from '../lib/artifacts/types'
@@ -33,13 +33,20 @@ export function ArtifactGallery() {
   const setSelectedArtifactV2 = useChatStore((s) => s.setSelectedArtifactV2)
   const loadSession = useChatStore((s) => s.sessionId)
 
+  // Memoize session ID key to prevent infinite re-render in useEffect
+  const sessionKey = useMemo(() => sessions.map((s) => s.session_id).join(','), [sessions])
+
   useEffect(() => {
+    let cancelled = false
+
     async function loadAll() {
       setLoading(true)
+      setItems([])
       const allItems: GalleryItem[] = []
 
-      // First: load artifacts already in memory (current session)
+      // In-memory artifacts from current session
       for (const [, versions] of Object.entries(sessionArtifacts)) {
+        if (cancelled) return
         const latest = versions[versions.length - 1]
         if (latest) {
           const sess = sessions.find((s) => s.session_id === loadSession)
@@ -51,41 +58,56 @@ export function ArtifactGallery() {
         }
       }
 
-      // Then: fetch from other sessions (up to 10 most recent)
-      const otherSessions = sessions.filter((s) => s.session_id !== loadSession).slice(0, 10)
-      for (const sess of otherSessions) {
+      const otherSessions = sessions.filter((s) => s.session_id !== loadSession)
+
+      async function fetchSession(sess: typeof otherSessions[0], attempt = 0): Promise<GalleryItem[]> {
+        if (cancelled) return []
+        const url = `/api/artifacts/${encodeURIComponent(sess.session_id)}?include_content=true`
         try {
-          const res = await fetch(`/api/artifacts/${encodeURIComponent(sess.session_id)}`, {
-            headers: buildApiHeaders(),
-          })
-          if (!res.ok) continue
+          const res = await fetch(url, { headers: buildApiHeaders() })
+          if (res.status === 429) {
+            if (attempt >= 4) return []
+            const wait = 600 * Math.pow(2, attempt) + Math.random() * 300
+            await new Promise((r) => setTimeout(r, wait))
+            return fetchSession(sess, attempt + 1)
+          }
+          if (!res.ok) return []
           const data = await res.json()
           const list: any[] = data.artifacts || []
+          const result: GalleryItem[] = []
           for (const art of list) {
-            const versionsRes = await fetch(
-              `/api/artifacts/${encodeURIComponent(sess.session_id)}/${encodeURIComponent(art.id)}`,
-              { headers: buildApiHeaders() }
-            )
-            if (!versionsRes.ok) continue
-            const vData = await versionsRes.json()
-            const latest = vData.versions?.[vData.versions.length - 1]
+            const latest = art.latest as ArtifactV2 | undefined
             if (latest) {
-              allItems.push({
+              result.push({
                 sessionId: sess.session_id,
                 sessionTitle: sess.title || sess.session_id.slice(0, 8),
-                artifact: latest as ArtifactV2,
+                artifact: latest,
               })
             }
           }
-        } catch { /* skip */ }
+          return result
+        } catch {
+          return []
+        }
       }
 
-      setItems(allItems)
-      setLoading(false)
+      // One session at a time with 150ms gap to stay well under rate limit
+      for (const sess of otherSessions) {
+        if (cancelled) return
+        const result = await fetchSession(sess)
+        if (cancelled) return
+        allItems.push(...result)
+        setItems([...allItems])
+        await new Promise((r) => setTimeout(r, 150))
+      }
+
+      if (!cancelled) setLoading(false)
     }
+
     void loadAll()
+    return () => { cancelled = true }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sessions.length])
+  }, [sessionKey])
 
   const types = ['all', ...Array.from(new Set(items.map((i) => i.artifact.type)))]
 
