@@ -54,7 +54,11 @@ interface AntiVibeStatus {
   primary_provider: string | null
 }
 
-export function AntiVibePanel() {
+type AntiVibePanelProps = {
+  onClose?: () => void
+}
+
+export function AntiVibePanel({ onClose }: AntiVibePanelProps = {}) {
   const projectDir = useChatStore((s) => s.projectDir)
 
   const [mode, setMode] = useState<'paste' | 'git' | 'full'>('full')
@@ -450,6 +454,12 @@ export function AntiVibePanel() {
             <span style={{ marginLeft: 'auto', fontSize: 9, fontFamily: 'var(--font-mono)', color: status.cli_module_loaded ? 'var(--green)' : 'var(--yellow)' }}>
               {status.cli_module_loaded ? '● CLI' : '○ NO-CLI'}
             </span>
+          )}
+          {onClose && (
+            <button type="button" onClick={onClose} title="Close AntiVibe panel"
+              style={{ width: 24, height: 24, borderRadius: 6, border: '1px solid var(--border)', background: 'var(--bg-3)', color: 'var(--text-1)', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, marginLeft: status ? 0 : 'auto' }}>
+              <X size={12} />
+            </button>
           )}
         </div>
 

@@ -6,6 +6,7 @@ import { EditorPanel } from './components/EditorPanel'
 import { ArtifactSidePanel } from './components/ArtifactSidePanel'
 import { ArtifactSidePanelV2 } from './components/artifacts/ArtifactSidePanelV2'
 import { DesignStudio } from './components/DesignStudio'
+import { AntiVibePanel } from './components/AntiVibePanel'
 import { useChatStore } from './store/chatStore'
 import { THEME_KEYS, THEME_TONES, ThemeKey } from './store/chatStore'
 import { requestUiNotificationPermission } from './lib/notifications'
@@ -22,7 +23,9 @@ export default function App() {
 
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
   const [editorOpen, setEditorOpen] = useState(false)
+  const [antivibeOpen, setAntivibeOpen] = useState(false)
   const [editorWidthPercent, setEditorWidthPercent] = useState(40)
+  const [antivibeWidthPercent, setAntivibeWidthPercent] = useState(42)
   const [artifactWidthPercent, setArtifactWidthPercent] = useState(42)
   const rootRef = useRef<HTMLDivElement>(null)
   const theme = useChatStore((state) => state.theme)
@@ -92,6 +95,12 @@ export default function App() {
     setEditorOpen((prev) => !prev)
   }
 
+  useEffect(() => {
+    const handler = () => setAntivibeOpen((prev) => !prev)
+    window.addEventListener('kodo:toggle-antivibe', handler)
+    return () => window.removeEventListener('kodo:toggle-antivibe', handler)
+  }, [])
+
   const startResizeEditor = (event: ReactMouseEvent<HTMLDivElement>) => {
     event.preventDefault()
     const root = rootRef.current
@@ -136,7 +145,29 @@ export default function App() {
     window.addEventListener('mouseup', onUp)
   }
 
-  const rightPanelWidth = artifactOpen ? artifactWidthPercent : (showEditor ? editorWidthPercent : 0)
+  const startResizeAntivibe = (event: ReactMouseEvent<HTMLDivElement>) => {
+    event.preventDefault()
+    const root = rootRef.current
+    if (!root) return
+
+    const onMove = (moveEvent: MouseEvent) => {
+      const rect = root.getBoundingClientRect()
+      const rightPanePx = rect.right - moveEvent.clientX
+      const next = (rightPanePx / rect.width) * 100
+      const clamped = Math.max(28, Math.min(65, next))
+      setAntivibeWidthPercent(clamped)
+    }
+
+    const onUp = () => {
+      window.removeEventListener('mousemove', onMove)
+      window.removeEventListener('mouseup', onUp)
+    }
+
+    window.addEventListener('mousemove', onMove)
+    window.addEventListener('mouseup', onUp)
+  }
+
+  const rightPanelWidth = artifactOpen ? artifactWidthPercent : (showEditor ? editorWidthPercent : (antivibeOpen ? antivibeWidthPercent : 0))
 
   return (
     <div style={{
@@ -212,6 +243,27 @@ export default function App() {
               }}
             />
             <EditorPanel widthPercent={editorWidthPercent} />
+          </>
+        )}
+
+        {antivibeOpen && !artifactOpen && !showEditor && (
+          <>
+            <div
+              role="separator"
+              aria-orientation="vertical"
+              onMouseDown={startResizeAntivibe}
+              style={{
+                width: 6,
+                cursor: 'col-resize',
+                background: 'var(--bg-2)',
+                borderLeft: '1px solid var(--border)',
+                borderRight: '1px solid var(--border)',
+                flexShrink: 0,
+              }}
+            />
+            <div style={{ width: `${antivibeWidthPercent}%`, flexShrink: 0, height: '100%', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+              <AntiVibePanel onClose={() => setAntivibeOpen(false)} />
+            </div>
           </>
         )}
       </div>

@@ -1406,7 +1406,9 @@ export function Sidebar({ collapsed, onToggleCollapse }: SidebarProps) {
             icon={<BookOpen size={15} />}
             label="AntiVibe"
             active={activeView === 'antivibe'}
-            onClick={() => setActiveView('antivibe')}
+            onClick={() => {
+              window.dispatchEvent(new Event('kodo:toggle-antivibe'))
+            }}
           />
           <PanelNav
             icon={<Settings size={15} />}
