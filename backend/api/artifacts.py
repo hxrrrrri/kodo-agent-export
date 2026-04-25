@@ -4,11 +4,17 @@ POST /api/artifacts/{session_id}      — upsert an artifact version (authed)
 GET  /api/artifacts/{session_id}      — list artifacts in session (authed)
 GET  /api/artifacts/{session_id}/{artifact_id} — fetch latest or specific version (authed)
 GET  /api/artifacts/{session_id}/{artifact_id}/versions — all versions (authed)
+GET  /api/artifacts/gallery/batch    — bulk gallery fetch for multiple sessions (authed)
 GET  /api/artifacts/shared/{session_id}/{artifact_id}?token=... — public read via collab token
+
+IMPORTANT: Static/literal routes (/gallery/batch, /shared/...) MUST be registered
+BEFORE the dynamic path-parameter routes (/{session_id}, /{session_id}/{artifact_id})
+in FastAPI/Starlette, otherwise the dynamic route will match first and shadow them.
 """
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Query, Request
@@ -54,6 +60,70 @@ def _validate_artifact_id(artifact_id: str) -> str:
         raise HTTPException(status_code=400, detail="artifact_id contains invalid characters")
     return text
 
+
+# ── STATIC ROUTES FIRST ─────────────────────────────────────────────────────
+# These must come BEFORE the dynamic /{session_id} routes or FastAPI will
+# match e.g. GET /gallery/batch as /{session_id}/{artifact_id} = ("gallery","batch").
+
+@router.get("/gallery/batch")
+async def gallery_batch(
+    request: Request,
+    session_ids: str = Query(default="", description="Comma-separated session IDs"),
+    limit: int = Query(default=200, ge=1, le=500),
+) -> dict[str, Any]:
+    """Return latest artifact with content for multiple sessions in one request.
+    Replaces N×M per-session/per-artifact round-trips in the gallery."""
+    if not _artifacts_enabled():
+        return {"entries": []}
+    require_api_auth(request)
+    await enforce_rate_limit(request, MEMORY_RATE_LIMITER, "artifacts_list")
+
+    ids = [s.strip() for s in session_ids.split(",") if s.strip()][:50]
+    if not ids:
+        return {"entries": []}
+
+    async def fetch_session(sid: str) -> list[dict]:
+        try:
+            rows = await artifact_store.list_artifacts(sid, include_content=True)
+            return [{"session_id": sid, **r} for r in rows]
+        except Exception:
+            return []
+
+    results = await asyncio.gather(*[fetch_session(sid) for sid in ids])
+    entries: list[dict] = []
+    for batch in results:
+        entries.extend(batch)
+        if len(entries) >= limit:
+            break
+
+    return {"entries": entries[:limit]}
+
+
+@router.get("/shared/{session_id}/{artifact_id}")
+async def get_shared_artifact(
+    session_id: str,
+    artifact_id: str,
+    token: str = Query(..., max_length=256),
+    version: int | None = Query(default=None, ge=1, le=10_000),
+) -> dict[str, Any]:
+    """Read-only public view gated by a collab share token bound to the session."""
+    if not _artifacts_enabled():
+        raise HTTPException(status_code=404, detail="Artifacts v2 disabled")
+    if not feature_enabled("COLLAB", default="0"):
+        raise HTTPException(status_code=404, detail="Sharing is disabled")
+
+    ok = await validate_collab_token(session_id, token.strip())
+    if not ok:
+        raise HTTPException(status_code=401, detail="Invalid or expired share token")
+
+    artifact_id = _validate_artifact_id(artifact_id)
+    row = await artifact_store.get(session_id, artifact_id, version=version)
+    if row is None:
+        raise HTTPException(status_code=404, detail="Artifact not found")
+    return {"artifact": row, "read_only": True}
+
+
+# ── DYNAMIC ROUTES ───────────────────────────────────────────────────────────
 
 @router.post("/{session_id}")
 async def upsert_artifact(session_id: str, body: ArtifactUpsertRequest, request: Request) -> dict[str, Any]:
@@ -131,63 +201,3 @@ async def list_artifact_versions(session_id: str, artifact_id: str, request: Req
 
     artifact_id = _validate_artifact_id(artifact_id)
     return {"versions": await artifact_store.get_all_versions(session_id, artifact_id)}
-
-
-@router.get("/gallery/batch")
-async def gallery_batch(
-    request: Request,
-    session_ids: str = Query(default="", description="Comma-separated session IDs"),
-    limit: int = Query(default=200, ge=1, le=500),
-) -> dict[str, Any]:
-    """Return latest artifact with content for multiple sessions in one request.
-    Replaces N×M per-session/per-artifact round-trips in the gallery."""
-    if not _artifacts_enabled():
-        return {"entries": []}
-    require_api_auth(request)
-    await enforce_rate_limit(request, MEMORY_RATE_LIMITER, "artifacts_list")
-
-    ids = [s.strip() for s in session_ids.split(",") if s.strip()][:50]
-    if not ids:
-        return {"entries": []}
-
-    import asyncio
-
-    async def fetch_session(sid: str) -> list[dict]:
-        try:
-            rows = await artifact_store.list_artifacts(sid, include_content=True)
-            return [{"session_id": sid, **r} for r in rows]
-        except Exception:
-            return []
-
-    results = await asyncio.gather(*[fetch_session(sid) for sid in ids])
-    entries: list[dict] = []
-    for batch in results:
-        entries.extend(batch)
-        if len(entries) >= limit:
-            break
-
-    return {"entries": entries[:limit]}
-
-
-@router.get("/shared/{session_id}/{artifact_id}")
-async def get_shared_artifact(
-    session_id: str,
-    artifact_id: str,
-    token: str = Query(..., max_length=256),
-    version: int | None = Query(default=None, ge=1, le=10_000),
-) -> dict[str, Any]:
-    """Read-only public view gated by a collab share token bound to the session."""
-    if not _artifacts_enabled():
-        raise HTTPException(status_code=404, detail="Artifacts v2 disabled")
-    if not feature_enabled("COLLAB", default="0"):
-        raise HTTPException(status_code=404, detail="Sharing is disabled")
-
-    ok = await validate_collab_token(session_id, token.strip())
-    if not ok:
-        raise HTTPException(status_code=401, detail="Invalid or expired share token")
-
-    artifact_id = _validate_artifact_id(artifact_id)
-    row = await artifact_store.get(session_id, artifact_id, version=version)
-    if row is None:
-        raise HTTPException(status_code=404, detail="Artifact not found")
-    return {"artifact": row, "read_only": True}

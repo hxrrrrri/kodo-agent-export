@@ -50,29 +50,29 @@ export function ArtifactGallery() {
       setLoading(true)
       setItems([])
       const allItems: GalleryItem[] = []
+      const sessionMap = new Map(sessions.map((s) => [s.session_id, s.title || s.session_id.slice(0, 8)]))
 
-      // In-memory artifacts from current session
+      // Seed with in-memory artifacts first so gallery shows something instantly
       for (const [, versions] of Object.entries(sessionArtifacts)) {
         if (cancelled) return
         const latest = versions[versions.length - 1]
         if (latest) {
-          const sess = sessions.find((s) => s.session_id === loadSession)
           allItems.push({
             sessionId: loadSession || '',
-            sessionTitle: sess?.title || 'Current session',
+            sessionTitle: sessionMap.get(loadSession || '') || 'Current session',
             artifact: latest,
           })
         }
       }
+      if (allItems.length > 0 && !cancelled) setItems([...allItems])
 
-      // Batch-fetch all other sessions in chunks of 50 — single round-trip per chunk
-      const otherSessions = sessions.filter((s) => s.session_id !== loadSession)
-      const sessionMap = new Map(sessions.map((s) => [s.session_id, s.title || s.session_id.slice(0, 8)]))
+      // Batch-fetch ALL sessions (including current) from backend in chunks of 50
       const CHUNK = 50
+      const seenIds = new Set<string>()
 
-      for (let i = 0; i < otherSessions.length; i += CHUNK) {
+      for (let i = 0; i < sessions.length; i += CHUNK) {
         if (cancelled) return
-        const chunk = otherSessions.slice(i, i + CHUNK)
+        const chunk = sessions.slice(i, i + CHUNK)
         const ids = encodeURIComponent(chunk.map((s) => s.session_id).join(','))
         try {
           const res = await fetch(
@@ -80,15 +80,34 @@ export function ArtifactGallery() {
             { headers: buildApiHeaders() }
           )
           if (!res.ok) continue
-          const data = await res.json() as { entries: Array<{ session_id: string; latest?: ArtifactV2 }> }
+          const data = await res.json() as { entries: Array<any> }
           for (const entry of data.entries || []) {
-            const latest = entry.latest as ArtifactV2 | undefined
-            if (!latest) continue
-            allItems.push({
-              sessionId: entry.session_id,
-              sessionTitle: sessionMap.get(entry.session_id) || entry.session_id.slice(0, 8),
-              artifact: latest,
-            })
+            // Each entry is a flattened list_artifacts row:
+            // { session_id, id, type, title, latest_version, version_count, latest: ArtifactV2 }
+            // The full ArtifactV2 (with files[]) lives under entry.latest
+            const artifact: ArtifactV2 | null = entry.latest ?? null
+            if (!artifact || !artifact.id) continue
+            // Deduplicate by artifact id (in-memory may already have current session items)
+            const dedupKey = `${entry.session_id}::${artifact.id}`
+            if (seenIds.has(dedupKey)) continue
+            seenIds.add(dedupKey)
+            // Replace in-memory entry for same artifact if backend version exists
+            const existingIdx = allItems.findIndex(
+              (it) => it.sessionId === entry.session_id && it.artifact.id === artifact.id
+            )
+            if (existingIdx >= 0) {
+              allItems[existingIdx] = {
+                sessionId: entry.session_id,
+                sessionTitle: sessionMap.get(entry.session_id) || entry.session_id.slice(0, 8),
+                artifact,
+              }
+            } else {
+              allItems.push({
+                sessionId: entry.session_id,
+                sessionTitle: sessionMap.get(entry.session_id) || entry.session_id.slice(0, 8),
+                artifact,
+              })
+            }
           }
           if (!cancelled) setItems([...allItems])
         } catch { /* skip */ }

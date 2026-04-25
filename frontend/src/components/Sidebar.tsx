@@ -1202,6 +1202,23 @@ export function Sidebar({ collapsed, onToggleCollapse }: SidebarProps) {
         />
 
         <RailButton
+          icon={<BookOpen size={15} />}
+          label="AntiVibe"
+          onClick={() => {
+            window.dispatchEvent(new CustomEvent('kodo:toggle-antivibe'))
+          }}
+          active={false}
+        />
+        <RailButton
+          icon={<Brain size={15} />}
+          label="Hermes"
+          onClick={() => {
+            window.dispatchEvent(new CustomEvent('kodo:toggle-hermes'))
+          }}
+          active={false}
+        />
+
+        <RailButton
           icon={<Wand2 size={15} />}
           label="Design Studio"
           onClick={() => {
