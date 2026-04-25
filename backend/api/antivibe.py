@@ -618,7 +618,7 @@ async def antivibe_save_deep_dive(body: SaveDeepDiveRequest, request: Request):
 class FullScanRequest(BaseModel):
     repo: str = Field(default="", max_length=512)
     since_ref: str = Field(default="HEAD~5", max_length=128)
-    max_files: int = Field(default=15, ge=1, le=50)
+    max_files: int = Field(default=15, ge=1)
     phase: str = Field(default="full-scan", max_length=128)
     auto_save: bool = Field(default=True)
     include_unchanged: bool = Field(default=False)
@@ -783,7 +783,12 @@ async def antivibe_full_scan(body: FullScanRequest, request: Request):
                 for r in aggregated_resources[:5]:
                     prompt_lines.append(f"- [{r['title']}]({r['url']}) — {r['description']}")
 
-            prompt_lines.append("\nProduce a structured AntiVibe deep-dive covering ALL files holistically. Highlight design patterns shared across files, architectural concerns, learning opportunities, and concrete next steps.")
+            prompt_lines.append("\nProduce a highly detailed, professional AntiVibe deep-dive covering ALL files holistically. Focus on:")
+            prompt_lines.append("1. **In-depth Architecture**: Explain the overall system design and architecture clearly.")
+            prompt_lines.append("2. **Data Workflow**: Detail how data flows between components and layers (database, api, frontend).")
+            prompt_lines.append("3. **Wireframes**: Diagram or describe how these components map to user interfaces and wireframes.")
+            prompt_lines.append("4. **Technology Choices**: Deeply analyze why these specific technologies/patterns are used, why alternatives weren't chosen, and why this is the best fit.")
+            prompt_lines.append("5. **Study Materials**: Provide links and recommendations for the best official docs, highly-rated YouTube video concepts, and further reading for these specific frameworks/patterns.")
             user_prompt = "\n".join(prompt_lines)
 
             collected_text: list[str] = []

@@ -253,7 +253,7 @@ export function AntiVibePanel({ onClose }: AntiVibePanelProps = {}) {
         body: JSON.stringify({
           repo: projectDir || '',
           since_ref: fullSinceRef,
-          max_files: fullMaxFiles,
+          max_files: includeUnchanged ? 999999 : fullMaxFiles,
           phase: phase.trim() || 'full-scan',
           auto_save: true,
           include_unchanged: includeUnchanged,
