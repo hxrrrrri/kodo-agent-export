@@ -8,6 +8,8 @@ aiofiles>=23.2.1
 pydantic>=2.6.0
 sse-starlette>=2.0.0
 python-multipart>=0.0.9
+cdp-use>=1.4.5
+websockets>=16.0
 
 # code-review-graph integration
 code-review-graph>=2.2.1
