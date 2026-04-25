@@ -108,15 +108,48 @@ class MemoryManager:
         return messages
 
     async def load_memory(self, project_dir: str | None = None) -> str:
-        """Load global + project memory into a system prompt section."""
+        """Load global + project + user-profile + SOUL into a system prompt section."""
         parts = []
 
-        # Global memory
+        # SOUL.md — personality / persona file (injected first, highest priority)
+        soul_file = KODO_DIR / "SOUL.md"
+        if soul_file.exists():
+            async with aiofiles.open(soul_file, "r") as f:
+                soul_content = await f.read()
+            if soul_content.strip():
+                parts.append(f"## Agent Persona (SOUL.md)\n{soul_content}")
+
+        # Global memory (MEMORY.md)
         if GLOBAL_MEMORY_FILE.exists():
             async with aiofiles.open(GLOBAL_MEMORY_FILE, "r") as f:
                 content = await f.read()
             if content.strip():
                 parts.append(f"## Global Memory (from ~/.kodo/MEMORY.md)\n{content}")
+
+        # User profile (user_profile.json → rendered as markdown)
+        user_profile_file = KODO_DIR / "user_profile.json"
+        if user_profile_file.exists():
+            try:
+                async with aiofiles.open(user_profile_file, "r") as f:
+                    raw = await f.read()
+                profile = json.loads(raw)
+                if isinstance(profile, dict):
+                    lines = ["## User Profile (auto-inferred)"]
+                    traits = profile.get("traits", {})
+                    prefs = profile.get("preferences", {})
+                    notes = profile.get("notes", [])
+                    if traits:
+                        lines.append("**Traits:** " + ", ".join(f"{k}={v}" for k, v in traits.items()))
+                    if prefs:
+                        lines.append("**Preferences:** " + ", ".join(f"{k}={v}" for k, v in prefs.items()))
+                    if notes:
+                        lines.append("**Notes:**")
+                        for note in notes[-5:]:
+                            lines.append(f"- {note}")
+                    if len(lines) > 1:
+                        parts.append("\n".join(lines))
+            except Exception:
+                pass
 
         # Project memory
         if project_dir:

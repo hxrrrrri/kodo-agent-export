@@ -5,11 +5,11 @@
  *   3. User profile viewer + inference
  */
 import { useCallback, useEffect, useState } from 'react'
-import { BookOpen, Brain, Search, Sparkles, User, Zap } from 'lucide-react'
+import { BookOpen, Brain, Search, Sparkles, User, Zap, Save, CheckCircle } from 'lucide-react'
 import { buildApiHeaders } from '../lib/api'
 import { useChatStore } from '../store/chatStore'
 
-type Tab = 'search' | 'profile' | 'skill'
+type Tab = 'search' | 'profile' | 'skill' | 'identity'
 
 interface SearchResult {
   session_id: string
@@ -51,9 +51,63 @@ export function HermesPanel() {
   const [creatingSkill, setCreatingSkill] = useState(false)
   const [skillResult, setSkillResult] = useState('')
 
+  // Identity state
+  const [soulContent, setSoulContent] = useState('')
+  const [memoryContent, setMemoryContent] = useState('')
+  const [loadingIdentity, setLoadingIdentity] = useState(false)
+  const [savingSoul, setSavingSoul] = useState(false)
+  const [savingMemory, setSavingMemory] = useState(false)
+
+  const loadIdentity = useCallback(async () => {
+    setLoadingIdentity(true)
+    try {
+      const [soulRes, memRes] = await Promise.all([
+        fetch('/api/hermes/soul', { headers: buildApiHeaders() }),
+        fetch('/api/hermes/memory', { headers: buildApiHeaders() }),
+      ])
+      if (soulRes.ok) {
+        const soulData = await soulRes.json()
+        setSoulContent(soulData.content || '')
+      }
+      if (memRes.ok) {
+        const memData = await memRes.json()
+        setMemoryContent(memData.content || '')
+      }
+    } catch { /* ignore */ }
+    setLoadingIdentity(false)
+  }, [])
+
+  const saveSoul = useCallback(async () => {
+    setSavingSoul(true)
+    try {
+      await fetch('/api/hermes/soul', {
+        method: 'POST',
+        headers: buildApiHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify({ content: soulContent })
+      })
+      setTimeout(() => setSavingSoul(false), 1000)
+    } catch { setSavingSoul(false) }
+  }, [soulContent])
+
+  const saveMemory = useCallback(async () => {
+    setSavingMemory(true)
+    try {
+      await fetch('/api/hermes/memory', {
+        method: 'POST',
+        headers: buildApiHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify({ content: memoryContent })
+      })
+      setTimeout(() => setSavingMemory(false), 1000)
+    } catch { setSavingMemory(false) }
+  }, [memoryContent])
+
   useEffect(() => {
     setSkillSession(sessionId || '')
   }, [sessionId])
+
+  useEffect(() => {
+    if (tab === 'identity') void loadIdentity()
+  }, [tab, loadIdentity])
 
   const doSearch = useCallback(async () => {
     if (!query.trim()) return
@@ -141,7 +195,8 @@ export function HermesPanel() {
   const TABS = [
     { id: 'search' as Tab, icon: <Search size={11} />, label: 'SEARCH' },
     { id: 'profile' as Tab, icon: <User size={11} />, label: 'PROFILE' },
-    { id: 'skill' as Tab, icon: <Sparkles size={11} />, label: 'SKILL' },
+    { id: 'skill' as Tab, icon: <Sparkles size={11} />, label: 'SKILLS' },
+    { id: 'identity' as Tab, icon: <Brain size={11} />, label: 'IDENTITY' },
   ]
 
   return (
@@ -394,6 +449,75 @@ export function HermesPanel() {
               <div style={{ marginTop: 10, fontSize: 11, color: skillResult.startsWith('Error') ? 'var(--red)' : 'var(--green)', fontFamily: 'var(--font-mono)' }}>
                 {skillResult}
               </div>
+            )}
+          </div>
+        )}
+
+        {/* ── IDENTITY TAB ── */}
+        {tab === 'identity' && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+            <div style={{ fontSize: 11, color: 'var(--text-2)', fontFamily: 'var(--font-mono)' }}>
+              Manage your agent's Persona (SOUL) and Global Memory. These files are injected into every session.
+            </div>
+
+            {loadingIdentity ? (
+              <div style={{ fontSize: 12, color: 'var(--text-2)', textAlign: 'center', padding: 20 }}>Loading...</div>
+            ) : (
+              <>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <span style={{ fontSize: 10, color: 'var(--text-1)', fontFamily: 'var(--font-mono)', fontWeight: 700 }}>SOUL.md (Persona)</span>
+                    <button
+                      onClick={() => void saveSoul()}
+                      style={{
+                        background: 'transparent', border: 'none', color: savingSoul ? 'var(--green)' : 'var(--blue)',
+                        cursor: 'pointer', fontSize: 10, display: 'flex', alignItems: 'center', gap: 4, padding: 0
+                      }}
+                    >
+                      {savingSoul ? <CheckCircle size={12} /> : <Save size={12} />} {savingSoul ? 'Saved' : 'Save'}
+                    </button>
+                  </div>
+                  <textarea
+                    value={soulContent}
+                    onChange={e => setSoulContent(e.target.value)}
+                    style={{
+                      ...inputStyle,
+                      minHeight: 180, resize: 'vertical', fontSize: 11,
+                      fontFamily: 'var(--font-mono)', whiteSpace: 'pre-wrap'
+                    }}
+                    onFocus={(e) => { e.target.style.borderColor = 'var(--blue)' }}
+                    onBlur={(e) => { e.target.style.borderColor = 'var(--border)' }}
+                  />
+                  <div style={{ fontSize: 9, color: 'var(--text-2)' }}>Defines the agent's core personality and coding style.</div>
+                </div>
+
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <span style={{ fontSize: 10, color: 'var(--text-1)', fontFamily: 'var(--font-mono)', fontWeight: 700 }}>MEMORY.md (Global Memory)</span>
+                    <button
+                      onClick={() => void saveMemory()}
+                      style={{
+                        background: 'transparent', border: 'none', color: savingMemory ? 'var(--green)' : 'var(--blue)',
+                        cursor: 'pointer', fontSize: 10, display: 'flex', alignItems: 'center', gap: 4, padding: 0
+                      }}
+                    >
+                      {savingMemory ? <CheckCircle size={12} /> : <Save size={12} />} {savingMemory ? 'Saved' : 'Save'}
+                    </button>
+                  </div>
+                  <textarea
+                    value={memoryContent}
+                    onChange={e => setMemoryContent(e.target.value)}
+                    style={{
+                      ...inputStyle,
+                      minHeight: 180, resize: 'vertical', fontSize: 11,
+                      fontFamily: 'var(--font-mono)', whiteSpace: 'pre-wrap'
+                    }}
+                    onFocus={(e) => { e.target.style.borderColor = 'var(--blue)' }}
+                    onBlur={(e) => { e.target.style.borderColor = 'var(--border)' }}
+                  />
+                  <div style={{ fontSize: 9, color: 'var(--text-2)' }}>Global facts and procedures the agent should always remember.</div>
+                </div>
+              </>
             )}
           </div>
         )}

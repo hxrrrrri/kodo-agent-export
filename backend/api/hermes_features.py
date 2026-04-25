@@ -396,3 +396,174 @@ async def infer_profile_from_session(
         logger.warning("Profile inference failed: %s", exc)
 
     return {"updated": False, "reason": "LLM inference returned unusable output"}
+
+
+# ── 4. SOUL.md — Personality / Persona System ─────────────────────────────────
+
+SOUL_PATH = KODO_DIR / "SOUL.md"
+
+DEFAULT_SOUL = """# Kodo Persona
+
+You are Kodo — a precise, senior-level coding assistant who values correctness over speed.
+
+## Personality
+- Direct and concise: no filler phrases like "Certainly!" or "Of course!"
+- Honest about uncertainty: say "I'm not sure" rather than guessing
+- Proactive: point out related issues you notice, even if not asked
+
+## Code Style
+- Prefer clarity over cleverness
+- Always explain *why*, not just *what*
+- Flag edge cases and error paths explicitly
+"""
+
+PRESET_SOULS = {
+    "kodo": DEFAULT_SOUL,
+    "architect": """# Senior Architect Persona
+You are a principal software architect with 20 years of experience.
+Focus on: system design, scalability, tradeoffs, and long-term maintainability.
+Always ask: "What are the failure modes?" and "How does this scale to 10x?"
+Be opinionated but acknowledge alternatives.
+""",
+    "mentor": """# Socratic Mentor Persona
+You are a patient coding mentor who teaches by asking questions.
+Instead of giving answers directly, guide the user to discover them.
+Use the Socratic method: ask clarifying questions, hint at the right direction.
+Celebrate small wins and encourage exploration.
+""",
+    "reviewer": """# Strict Code Reviewer Persona
+You are a strict but fair code reviewer.
+Your job: find bugs, security issues, performance problems, and style violations.
+Be direct. Use a numbered list of findings with severity: [CRITICAL] [WARNING] [SUGGESTION].
+Never let a PR pass without at least checking: error handling, edge cases, and tests.
+""",
+    "rubber-duck": """# Rubber Duck Debugger Persona
+You are a rubber duck. You listen patiently as the user explains their code.
+Ask "What did you expect to happen?" and "What actually happened?" after every explanation.
+Do not give solutions. Help the user think by asking the right questions.
+""",
+}
+
+
+class SoulUpdateRequest(BaseModel):
+    content: str = Field(min_length=1, max_length=8000)
+
+
+@router.get("/soul")
+async def get_soul(request: Request):
+    """Return the current SOUL.md content and available presets."""
+    require_api_auth(request)
+    content = SOUL_PATH.read_text(encoding="utf-8") if SOUL_PATH.exists() else DEFAULT_SOUL
+    return {
+        "content": content,
+        "presets": list(PRESET_SOULS.keys()),
+    }
+
+
+@router.post("/soul")
+async def update_soul(body: SoulUpdateRequest, request: Request):
+    """Save a new SOUL.md (raw content)."""
+    require_api_auth(request)
+    KODO_DIR.mkdir(parents=True, exist_ok=True)
+    SOUL_PATH.write_text(body.content, encoding="utf-8")
+    return {"saved": True, "length": len(body.content)}
+
+
+@router.post("/soul/preset/{name}")
+async def apply_soul_preset(name: str, request: Request):
+    """Apply a built-in persona preset."""
+    require_api_auth(request)
+    soul = PRESET_SOULS.get(name.lower().strip())
+    if not soul:
+        raise HTTPException(status_code=404, detail=f"Preset '{name}' not found. Available: {list(PRESET_SOULS.keys())}")
+    KODO_DIR.mkdir(parents=True, exist_ok=True)
+    SOUL_PATH.write_text(soul, encoding="utf-8")
+    return {"applied": name, "content": soul}
+
+
+# ── 5. Memory (MEMORY.md) direct read/write ───────────────────────────────────
+
+from memory.manager import GLOBAL_MEMORY_FILE  # already imported above via KODO_DIR, re-clarify
+
+
+class MemoryWriteRequest(BaseModel):
+    content: str = Field(min_length=1, max_length=20000)
+
+
+@router.get("/memory")
+async def get_memory(request: Request):
+    """Return the current MEMORY.md content."""
+    require_api_auth(request)
+    content = GLOBAL_MEMORY_FILE.read_text(encoding="utf-8") if GLOBAL_MEMORY_FILE.exists() else ""
+    return {"content": content}
+
+
+@router.post("/memory")
+async def set_memory(body: MemoryWriteRequest, request: Request):
+    """Overwrite MEMORY.md with new content."""
+    require_api_auth(request)
+    KODO_DIR.mkdir(parents=True, exist_ok=True)
+    GLOBAL_MEMORY_FILE.write_text(body.content, encoding="utf-8")
+    return {"saved": True, "length": len(body.content)}
+
+
+@router.post("/memory/append")
+async def append_memory(body: MemoryWriteRequest, request: Request):
+    """Append a note to MEMORY.md."""
+    require_api_auth(request)
+    await memory_manager.append_to_memory(body.content)
+    return {"appended": True}
+
+
+# ── 6. Auto-improve an existing skill from a follow-up session ────────────────
+
+class ImproveSkillRequest(BaseModel):
+    skill_name: str = Field(min_length=1, max_length=80, pattern=r"^[a-zA-Z0-9_-]+$")
+    session_id: str = Field(min_length=1, max_length=128)
+    improvement_hint: str = Field(default="", max_length=300)
+
+
+@router.post("/improve-skill")
+async def improve_skill(body: ImproveSkillRequest, request: Request):
+    """Update an existing skill by analysing a new session where the skill was used."""
+    require_api_auth(request)
+    await enforce_rate_limit(request, MEMORY_RATE_LIMITER, "hermes_improve_skill")
+
+    skills_dir = KODO_DIR / "skills"
+    skill_path = skills_dir / f"{body.skill_name}.md"
+    if not skill_path.exists():
+        raise HTTPException(status_code=404, detail=f"Skill '{body.skill_name}' not found")
+
+    session_file = SESSIONS_DIR / f"{body.session_id}.json"
+    if not session_file.exists():
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    existing_skill = skill_path.read_text(encoding="utf-8")
+    data = json.loads(session_file.read_text(encoding="utf-8", errors="replace"))
+    messages = data.get("messages", [])
+
+    conv_text = "\n\n".join(
+        f"{m.get('role','').upper()}: {str(m.get('content',''))[:400]}"
+        for m in messages[:25]
+        if isinstance(m.get("content"), str)
+    )
+
+    llm_prompt = (
+        f"You are improving a reusable skill document.\n\n"
+        f"CURRENT SKILL:\n{existing_skill}\n\n"
+        f"NEW CONVERSATION (using this skill):\n{conv_text}\n\n"
+        f"Improvement hint: {body.improvement_hint or 'make the skill more accurate and comprehensive'}\n\n"
+        f"Rewrite the skill to incorporate lessons learned from the conversation. "
+        f"Keep it concise and actionable. Return ONLY the updated skill document."
+    )
+
+    improved = await _llm_call(llm_prompt, max_tokens=1000)
+    if not improved.strip():
+        raise HTTPException(status_code=502, detail="LLM returned empty improvement")
+
+    skill_path.write_text(improved, encoding="utf-8")
+    return {
+        "skill_name": body.skill_name,
+        "improved": True,
+        "content": improved,
+    }

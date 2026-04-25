@@ -4,6 +4,7 @@ import {
   BarChart2,
   BookOpen,
   Brain,
+  Clock,
   Cpu,
   FileText,
   Hammer,
@@ -40,13 +41,14 @@ import { HermesPanel } from './HermesPanel'
 import { ArtifactGallery } from './ArtifactGallery'
 import { ThemeStudio, applyVarsToDOM } from './ThemeStudio'
 import { SessionInsights } from './SessionInsights'
+import { SchedulerPanel } from './SchedulerPanel'
 
 type SidebarProps = {
   collapsed: boolean
   onToggleCollapse: () => void
 }
 
-type SidebarView = 'sessions' | 'providers' | 'agents' | 'usage' | 'prompts' | 'compressor' | 'skills' | 'crg' | 'review' | 'antivibe' | 'hermes' | 'settings' | 'design' | 'gallery' | 'insights'
+type SidebarView = 'sessions' | 'providers' | 'agents' | 'usage' | 'prompts' | 'compressor' | 'skills' | 'crg' | 'review' | 'antivibe' | 'hermes' | 'settings' | 'design' | 'gallery' | 'insights' | 'scheduler'
 
 type RuntimeTask = {
   task_id: string
@@ -1434,6 +1436,12 @@ export function Sidebar({ collapsed, onToggleCollapse }: SidebarProps) {
             onClick={() => setActiveView('hermes')}
           />
           <PanelNav
+            icon={<Clock size={15} />}
+            label="Scheduler"
+            active={activeView === 'scheduler'}
+            onClick={() => setActiveView('scheduler')}
+          />
+          <PanelNav
             icon={<Settings size={15} />}
             label="Settings"
             active={activeView === 'settings'}
@@ -2376,6 +2384,10 @@ export function Sidebar({ collapsed, onToggleCollapse }: SidebarProps) {
 
           {activeView === 'hermes' && (
             <HermesPanel />
+          )}
+
+          {activeView === 'scheduler' && (
+            <SchedulerPanel />
           )}
 
           {activeView === 'gallery' && (
