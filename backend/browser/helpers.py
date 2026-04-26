@@ -421,16 +421,452 @@ def http_get(url: str, headers: Optional[dict] = None, timeout: float = 20.0) ->
         return resp.read().decode("utf-8", errors="replace")
 
 
+# ── Wait for element ─────────────────────────────────────────────────────────
+
+async def wait_for_selector(
+    selector: str,
+    timeout: float = 10.0,
+    visible: bool = True,
+) -> bool:
+    """Poll until a CSS selector matches a visible element (or times out).
+
+    Returns True when found, False on timeout. Use before clicking dynamic
+    content that may not yet be in the DOM.
+    """
+    deadline = time.time() + timeout
+    expr = (
+        "(()=>{const e=document.querySelector("
+        + json.dumps(selector)
+        + ");if(!e)return false;"
+        + ("const r=e.getBoundingClientRect();return r.width>0&&r.height>0&&window.getComputedStyle(e).visibility!=='hidden';" if visible else "return true;")
+        + "})()"
+    )
+    while time.time() < deadline:
+        try:
+            found = await js(expr)
+            if found:
+                return True
+        except Exception:
+            pass
+        await asyncio.sleep(0.25)
+    return False
+
+
+async def wait_for_text(text: str, selector: str = "body", timeout: float = 10.0) -> bool:
+    """Poll until an element's text content contains the given string."""
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        try:
+            content = await extract_text(selector)
+            if text.lower() in content.lower():
+                return True
+        except Exception:
+            pass
+        await asyncio.sleep(0.3)
+    return False
+
+
+async def wait_for_network_idle(idle_ms: float = 500, timeout: float = 10.0) -> bool:
+    """Wait until no new network requests fire for `idle_ms` milliseconds."""
+    d = await _daemon()
+    deadline = time.time() + timeout
+    last_activity = time.time()
+    initial_count = len(d.events)
+    NETWORK_METHODS = {"Network.requestWillBeSent", "Network.responseReceived", "Network.loadingFinished"}
+    while time.time() < deadline:
+        current_count = len(d.events)
+        if current_count > initial_count:
+            # Check if any recent events are network events
+            recent = list(d.events)[initial_count:]
+            if any(e.get("method") in NETWORK_METHODS for e in recent):
+                last_activity = time.time()
+            initial_count = current_count
+        if time.time() - last_activity >= idle_ms / 1000:
+            return True
+        await asyncio.sleep(0.1)
+    return False
+
+
+# ── Cookie management (cookies.md) ──────────────────────────────────────────
+
+async def get_cookies(urls: Optional[list[str]] = None) -> list[dict]:
+    """Return all cookies, optionally filtered to specific URLs."""
+    if urls:
+        r = await cdp("Network.getCookies", urls=urls)
+    else:
+        r = await cdp("Network.getAllCookies")
+    return r.get("cookies", [])
+
+
+async def set_cookie(name: str, value: str, domain: str = "", path: str = "/",
+                     secure: bool = False, http_only: bool = False,
+                     same_site: str = "None") -> bool:
+    """Set a single browser cookie."""
+    r = await cdp(
+        "Network.setCookie",
+        name=name, value=value,
+        **({} if not domain else {"domain": domain}),
+        path=path,
+        secure=secure,
+        httpOnly=http_only,
+        sameSite=same_site,
+    )
+    return bool(r.get("success", False))
+
+
+async def delete_cookies(name: str, url: str = "", domain: str = "") -> None:
+    """Delete cookies matching a name (and optionally url/domain)."""
+    params: dict = {"name": name}
+    if url:
+        params["url"] = url
+    if domain:
+        params["domain"] = domain
+    await cdp("Network.deleteCookies", **params)
+
+
+async def clear_all_cookies() -> None:
+    """Delete all cookies in the browser."""
+    await cdp("Network.clearBrowserCookies")
+
+
+# ── Network request interception (network-requests.md) ──────────────────────
+
+async def enable_request_interception(url_patterns: Optional[list[str]] = None) -> None:
+    """Intercept outgoing fetch/XHR requests matching URL patterns.
+
+    After enabling, the daemon event buffer will contain `Fetch.requestPaused`
+    events. Call `fulfill_request` or `continue_request` for each.
+
+    url_patterns: list of glob patterns (e.g. ['*api.example.com*']).
+    """
+    d = await _daemon()
+    await cdp("Fetch.enable", patterns=[
+        {"urlPattern": p, "requestStage": "Request"}
+        for p in (url_patterns or ["*"])
+    ])
+    d._log_action("network", "intercept_enabled", {"patterns": url_patterns or ["*"]})
+
+
+async def disable_request_interception() -> None:
+    """Stop intercepting requests."""
+    await cdp("Fetch.disable")
+
+
+async def get_intercepted_requests() -> list[dict]:
+    """Return Fetch.requestPaused events collected since last drain."""
+    events = await drain_events()
+    return [e for e in events if e.get("method") == "Fetch.requestPaused"]
+
+
+async def fulfill_request(request_id: str, status: int = 200,
+                           body: str = "", content_type: str = "application/json") -> None:
+    """Respond to an intercepted request with a mock response."""
+    import base64 as _b64
+    await cdp(
+        "Fetch.fulfillRequest",
+        requestId=request_id,
+        responseCode=status,
+        responseHeaders=[{"name": "Content-Type", "value": content_type}],
+        body=_b64.b64encode(body.encode()).decode(),
+    )
+
+
+async def continue_request(request_id: str, url: Optional[str] = None,
+                            headers: Optional[dict] = None) -> None:
+    """Continue an intercepted request, optionally modifying url/headers."""
+    params: dict = {"requestId": request_id}
+    if url:
+        params["url"] = url
+    if headers:
+        params["headers"] = [{"name": k, "value": v} for k, v in headers.items()]
+    await cdp("Fetch.continueRequest", **params)
+
+
+# ── Drag and drop (drag-and-drop.md) ────────────────────────────────────────
+
+async def drag_and_drop(
+    from_selector: str, to_selector: str, hold_ms: float = 100
+) -> bool:
+    """Drag element matching from_selector to element matching to_selector.
+
+    Uses CDP Input.dispatchDragEvent for native drag support.
+    """
+    d = await _daemon()
+    expr_from = (
+        "(()=>{const e=document.querySelector("
+        + json.dumps(from_selector)
+        + ");if(!e)return null;const r=e.getBoundingClientRect();"
+        "return{x:r.left+r.width/2,y:r.top+r.height/2}})()"
+    )
+    expr_to = (
+        "(()=>{const e=document.querySelector("
+        + json.dumps(to_selector)
+        + ");if(!e)return null;const r=e.getBoundingClientRect();"
+        "return{x:r.left+r.width/2,y:r.top+r.height/2}})()"
+    )
+    src = await js(expr_from)
+    dst = await js(expr_to)
+    if not src or not dst:
+        return False
+    sx, sy = float(src["x"]), float(src["y"])
+    dx, dy = float(dst["x"]), float(dst["y"])
+    # Use CDP drag events
+    await cdp("Input.dispatchDragEvent", type="dragEnter", x=sx, y=sy,
+              data={"items": [], "dragOperationsMask": 1})
+    await cdp("Input.dispatchDragEvent", type="dragOver", x=sx, y=sy,
+              data={"items": [], "dragOperationsMask": 1})
+    await asyncio.sleep(hold_ms / 1000)
+    await cdp("Input.dispatchDragEvent", type="dragOver", x=dx, y=dy,
+              data={"items": [], "dragOperationsMask": 1})
+    await cdp("Input.dispatchDragEvent", type="drop", x=dx, y=dy,
+              data={"items": [], "dragOperationsMask": 1})
+    await cdp("Input.dispatchDragEvent", type="dragEnd", x=dx, y=dy,
+              data={"items": [], "dragOperationsMask": 1})
+    d._log_action("input", "drag_drop", {"from": from_selector, "to": to_selector})
+    return True
+
+
+# ── Viewport / device emulation (viewport.md) ──────────────────────────────
+
+DEVICE_PRESETS = {
+    "mobile": {"width": 390, "height": 844, "deviceScaleFactor": 3, "mobile": True},
+    "tablet": {"width": 768, "height": 1024, "deviceScaleFactor": 2, "mobile": True},
+    "desktop": {"width": 1280, "height": 800, "deviceScaleFactor": 1, "mobile": False},
+    "desktop-hd": {"width": 1920, "height": 1080, "deviceScaleFactor": 1, "mobile": False},
+}
+
+
+async def set_viewport(
+    width: int = 1280,
+    height: int = 800,
+    device_scale_factor: float = 1.0,
+    mobile: bool = False,
+    preset: Optional[str] = None,
+) -> None:
+    """Set the browser viewport. Use `preset` ('mobile', 'tablet', 'desktop')
+    or specify width/height/scale directly."""
+    d = await _daemon()
+    if preset and preset in DEVICE_PRESETS:
+        p = DEVICE_PRESETS[preset]
+        width = p["width"]
+        height = p["height"]
+        device_scale_factor = p["deviceScaleFactor"]
+        mobile = p["mobile"]
+    await cdp(
+        "Emulation.setDeviceMetricsOverride",
+        width=width,
+        height=height,
+        deviceScaleFactor=device_scale_factor,
+        mobile=mobile,
+    )
+    d._log_action("viewport", "set", {"width": width, "height": height, "mobile": mobile})
+
+
+async def reset_viewport() -> None:
+    """Remove device emulation override."""
+    await cdp("Emulation.clearDeviceMetricsOverride")
+
+
+# ── PDF export (print-as-pdf.md) ────────────────────────────────────────────
+
+async def export_pdf(
+    path: Optional[str] = None,
+    landscape: bool = False,
+    print_background: bool = True,
+    scale: float = 1.0,
+    paper_format: str = "A4",
+) -> str:
+    """Export current page as PDF. Returns the on-disk path."""
+    import base64 as _b64
+    d = await _daemon()
+    r = await cdp(
+        "Page.printToPDF",
+        landscape=landscape,
+        printBackground=print_background,
+        scale=scale,
+        paperWidth=8.27 if paper_format == "A4" else 8.5,
+        paperHeight=11.69 if paper_format == "A4" else 11.0,
+    )
+    raw = _b64.b64decode(r["data"])
+    out_path = path or _tmp_path("kodo_page.pdf")
+    parent = os.path.dirname(out_path)
+    if parent:
+        os.makedirs(parent, exist_ok=True)
+    with open(out_path, "wb") as f:
+        f.write(raw)
+    d._log_action("visual", "pdf", {"path": out_path, "bytes": len(raw)})
+    return out_path
+
+
+# ── Accessibility tree ───────────────────────────────────────────────────────
+
+async def get_accessibility_tree(max_depth: int = 10) -> list[dict]:
+    """Return the full accessibility tree. Better than DOM for finding
+    elements by role/name without brittle CSS selectors."""
+    r = await cdp("Accessibility.getFullAXTree", depth=max_depth)
+    return r.get("nodes", [])
+
+
+async def find_by_role(role: str, name: Optional[str] = None) -> Optional[dict]:
+    """Find first accessible element with the given ARIA role and optional name."""
+    nodes = await get_accessibility_tree()
+    for node in nodes:
+        node_role = (node.get("role") or {}).get("value", "")
+        if node_role.lower() != role.lower():
+            continue
+        if name is not None:
+            node_name = (node.get("name") or {}).get("value", "")
+            if name.lower() not in node_name.lower():
+                continue
+        return node
+    return None
+
+
+async def find_by_text_content(text: str, tag: str = "*",
+                                 exact: bool = False) -> Optional[dict]:
+    """Find and return coordinates of the first element containing `text`.
+    Returns {x, y, selector} or None.
+    """
+    op = "===" if exact else "includes"
+    expr = (
+        f"(()=>{{const all=document.querySelectorAll('{tag}');"
+        f"for(const e of all){{const t=(e.innerText||e.textContent||'').trim();"
+        f"if(t.toLowerCase().{op}({json.dumps(text.lower())})){{const r=e.getBoundingClientRect();"
+        f"if(r.width>0)return{{x:r.left+r.width/2,y:r.top+r.height/2,text:t.slice(0,80)}}}}}};return null}})()"
+    )
+    return await js(expr)
+
+
+async def click_by_text(text: str, tag: str = "*", exact: bool = False) -> bool:
+    """Click the first element whose text content contains `text`."""
+    d = await _daemon()
+    coords = await find_by_text_content(text, tag=tag, exact=exact)
+    if not coords:
+        return False
+    await click_at_xy(coords["x"], coords["y"])
+    d._log_action("input", "click_by_text", {"text": text, "x": coords["x"], "y": coords["y"]})
+    return True
+
+
+# ── Shadow DOM (shadow-dom.md) ───────────────────────────────────────────────
+
+async def query_shadow(host_selector: str, inner_selector: str) -> Optional[dict]:
+    """Query inside a shadow DOM root. Returns element rect or None."""
+    expr = (
+        "(()=>{const host=document.querySelector("
+        + json.dumps(host_selector)
+        + ");if(!host||!host.shadowRoot)return null;"
+        "const el=host.shadowRoot.querySelector("
+        + json.dumps(inner_selector)
+        + ");if(!el)return null;const r=el.getBoundingClientRect();"
+        "return{x:r.left+r.width/2,y:r.top+r.height/2,visible:r.width>0}})()"
+    )
+    return await js(expr)
+
+
+async def click_shadow(host_selector: str, inner_selector: str) -> bool:
+    """Click an element inside a shadow DOM root."""
+    coords = await query_shadow(host_selector, inner_selector)
+    if not coords or not coords.get("visible"):
+        return False
+    await click_at_xy(coords["x"], coords["y"])
+    return True
+
+
+# ── Local storage ────────────────────────────────────────────────────────────
+
+async def get_local_storage(key: str) -> Optional[str]:
+    return await js(f"localStorage.getItem({json.dumps(key)})")
+
+
+async def set_local_storage(key: str, value: str) -> None:
+    await js(f"localStorage.setItem({json.dumps(key)},{json.dumps(value)})")
+
+
+async def clear_local_storage() -> None:
+    await js("localStorage.clear()")
+
+
+# ── Form helpers ─────────────────────────────────────────────────────────────
+
+async def fill_form(fields: dict[str, str], submit_selector: Optional[str] = None) -> dict:
+    """Fill multiple form fields at once. fields = {selector: value}.
+    Optionally click submit_selector after filling.
+    Returns per-field success dict.
+    """
+    results: dict[str, bool] = {}
+    for selector, value in fields.items():
+        ok = await fill_input(selector, value)
+        results[selector] = ok
+        await asyncio.sleep(0.1)
+    if submit_selector:
+        results["_submit"] = await click_selector(submit_selector)
+    return results
+
+
+async def select_option(selector: str, value: Optional[str] = None,
+                         label: Optional[str] = None, index: Optional[int] = None) -> bool:
+    """Select an option in a <select> element by value, label, or index."""
+    if value is not None:
+        expr = f"(()=>{{const e=document.querySelector({json.dumps(selector)});if(!e)return false;e.value={json.dumps(value)};e.dispatchEvent(new Event('change',{{bubbles:true}}));return true}})()"
+    elif label is not None:
+        expr = f"(()=>{{const e=document.querySelector({json.dumps(selector)});if(!e)return false;const opts=Array.from(e.options);const o=opts.find(o=>o.text.trim().toLowerCase().includes({json.dumps(label.lower())}));if(!o)return false;e.value=o.value;e.dispatchEvent(new Event('change',{{bubbles:true}}));return true}})()"
+    elif index is not None:
+        expr = f"(()=>{{const e=document.querySelector({json.dumps(selector)});if(!e||{index}>=e.options.length)return false;e.selectedIndex={index};e.dispatchEvent(new Event('change',{{bubbles:true}}));return true}})()"
+    else:
+        return False
+    result = await js(expr)
+    return bool(result)
+
+
+# ── Scroll to element ─────────────────────────────────────────────────────────
+
+async def scroll_to(selector: str, block: str = "center") -> bool:
+    """Scroll element into view."""
+    expr = (
+        f"(()=>{{const e=document.querySelector({json.dumps(selector)});"
+        f"if(!e)return false;e.scrollIntoView({{behavior:'smooth',block:{json.dumps(block)}}});return true}})()"
+    )
+    return bool(await js(expr))
+
+
+# ── Hover ────────────────────────────────────────────────────────────────────
+
+async def hover(selector: str) -> bool:
+    """Mouse-hover over an element (triggers :hover CSS and mouseover events)."""
+    expr = (
+        "(()=>{const e=document.querySelector("
+        + json.dumps(selector)
+        + ");if(!e)return null;const r=e.getBoundingClientRect();"
+        "return{x:r.left+r.width/2,y:r.top+r.height/2,visible:r.width>0}})()"
+    )
+    coords = await js(expr)
+    if not coords or not coords.get("visible"):
+        return False
+    await cdp("Input.dispatchMouseEvent", type="mouseMoved", x=coords["x"], y=coords["y"])
+    return True
+
+
 __all__ = [
     "cdp", "drain_events",
     "goto_url", "page_info", "wait_for_load",
-    "click_at_xy", "type_text", "press_key", "scroll",
-    "click_selector", "fill_input",
+    "wait_for_selector", "wait_for_text", "wait_for_network_idle",
+    "click_at_xy", "type_text", "press_key", "scroll", "scroll_to", "hover",
+    "click_selector", "fill_input", "click_by_text", "fill_form", "select_option",
     "capture_screenshot", "screenshot_b64",
     "list_tabs", "current_tab", "switch_tab", "new_tab", "close_tab",
     "ensure_real_tab", "iframe_target",
     "js", "dispatch_key", "upload_file", "extract_text", "get_dom_snapshot",
     "handle_dialog",
+    "get_cookies", "set_cookie", "delete_cookies", "clear_all_cookies",
+    "enable_request_interception", "disable_request_interception",
+    "get_intercepted_requests", "fulfill_request", "continue_request",
+    "drag_and_drop",
+    "set_viewport", "reset_viewport", "DEVICE_PRESETS",
+    "export_pdf",
+    "get_accessibility_tree", "find_by_role", "find_by_text_content",
+    "query_shadow", "click_shadow",
+    "get_local_storage", "set_local_storage", "clear_local_storage",
     "http_get",
     "list_domain_skills", "list_interaction_skills", "read_skill",
 ]

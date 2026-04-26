@@ -11,7 +11,13 @@ type Props = {
 }
 
 const BABEL_CDN = 'https://unpkg.com/@babel/standalone@7.24.7/babel.min.js'
-const TAILWIND_CDN = 'https://cdn.tailwindcss.com'
+const TAILWIND_CDN_ORIGIN = 'https://cdn.tailwindcss.com'
+// Route Tailwind through backend proxy (avoids ERR_NAME_NOT_RESOLVED in null-origin iframes).
+// Falls back to direct CDN via onerror if proxy unavailable.
+const _proxyBase = typeof window !== 'undefined' ? window.location.origin : ''
+const TAILWIND_CDN = _proxyBase
+  ? `${_proxyBase}/api/cdn-proxy?url=${encodeURIComponent(TAILWIND_CDN_ORIGIN)}`
+  : TAILWIND_CDN_ORIGIN
 
 /** Extract bare package specifiers from import statements (excludes react / react-dom). */
 function extractExternalPackages(source: string): string[] {
@@ -48,7 +54,7 @@ function buildReactSrcDoc(artifact: ArtifactV2Type): string {
 <script>
   window.tailwind = { config: { darkMode: 'class' } };
 </script>
-<script src="${TAILWIND_CDN}"></script>
+<script src="${TAILWIND_CDN}" onerror="if(this.src!=='${TAILWIND_CDN_ORIGIN}'){var s=document.createElement('script');s.src='${TAILWIND_CDN_ORIGIN}';document.head.appendChild(s);}"></script>
 <script src="${BABEL_CDN}"></script>
 <script>
 window.addEventListener('error', function(e) {

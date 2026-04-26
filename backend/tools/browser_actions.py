@@ -404,6 +404,365 @@ class BrowserDialogTool(BaseTool):
             return _err(str(exc))
 
 
+# ── browser_wait ──────────────────────────────────────────────────────────────
+
+class BrowserWaitTool(BaseTool):
+    name = "browser_wait"
+    description = (
+        "Wait until a CSS selector is visible, text appears on page, or network goes idle. "
+        "Use BEFORE clicking dynamic content that may not be rendered yet. "
+        "Returns true if condition met, false on timeout."
+    )
+    input_schema = {
+        "type": "object",
+        "properties": {
+            "condition": {"type": "string", "enum": ["selector", "text", "network_idle"],
+                          "description": "What to wait for"},
+            "value": {"type": "string", "description": "CSS selector or text string to wait for"},
+            "timeout": {"type": "number", "default": 10, "description": "Seconds"},
+        },
+        "required": ["condition"],
+    }
+
+    async def execute(self, condition: str, value: str = "", timeout: float = 10, **_) -> ToolResult:
+        try:
+            await _ensure_daemon()
+            from browser.helpers import wait_for_selector, wait_for_text, wait_for_network_idle
+            if condition == "selector":
+                ok = await wait_for_selector(value, timeout=timeout)
+            elif condition == "text":
+                ok = await wait_for_text(value, timeout=timeout)
+            elif condition == "network_idle":
+                ok = await wait_for_network_idle(timeout=timeout)
+            else:
+                return _err(f"Unknown condition: {condition}")
+            return _ok({"met": ok}, f"Condition '{condition}' {'met' if ok else 'timed out'}")
+        except Exception as exc:
+            return _err(str(exc))
+
+
+# ── browser_find ───────────────────────────────────────────────────────────────
+
+class BrowserFindTool(BaseTool):
+    name = "browser_find"
+    description = (
+        "Find elements by text content, ARIA role, or accessibility name. "
+        "More robust than CSS selectors for dynamic UIs. "
+        "Returns coordinates — pass to browser_click x/y to click."
+    )
+    input_schema = {
+        "type": "object",
+        "properties": {
+            "by": {"type": "string", "enum": ["text", "role", "label"],
+                   "description": "'text' = visible text, 'role' = ARIA role, 'label' = aria-label"},
+            "value": {"type": "string", "description": "Text, role name, or aria-label to find"},
+            "click": {"type": "boolean", "default": False, "description": "Click element immediately if found"},
+        },
+        "required": ["by", "value"],
+    }
+
+    async def execute(self, by: str, value: str, click: bool = False, **_) -> ToolResult:
+        try:
+            await _ensure_daemon()
+            from browser.helpers import find_by_text_content, find_by_role, click_by_text, click_at_xy
+            if by == "text":
+                if click:
+                    ok = await click_by_text(value)
+                    return _ok({"clicked": ok}, f"{'Clicked' if ok else 'Not found'}: '{value}'")
+                coords = await find_by_text_content(value)
+                if not coords:
+                    return _ok({"found": False}, f"Text '{value}' not found")
+                return _ok(coords, f"Found at ({coords.get('x')}, {coords.get('y')})")
+            elif by in ("role", "label"):
+                node = await find_by_role(value)
+                if not node:
+                    return _ok({"found": False}, f"Role '{value}' not found")
+                return _ok(node, f"Found ARIA node: {node.get('name', {}).get('value', '?')}")
+            return _err(f"Unknown 'by': {by}")
+        except Exception as exc:
+            return _err(str(exc))
+
+
+# ── browser_cookies ────────────────────────────────────────────────────────────
+
+class BrowserCookiesTool(BaseTool):
+    name = "browser_cookies"
+    description = (
+        "Get, set, delete, or clear browser cookies. "
+        "Use for managing auth tokens, session state, and login persistence."
+    )
+    input_schema = {
+        "type": "object",
+        "properties": {
+            "action": {"type": "string", "enum": ["get", "set", "delete", "clear"],
+                       "description": "Operation"},
+            "name": {"type": "string", "description": "Cookie name (for set/delete)"},
+            "value": {"type": "string", "description": "Cookie value (for set)"},
+            "domain": {"type": "string", "description": "Cookie domain (optional)"},
+            "url": {"type": "string", "description": "Filter by URL (for get)"},
+        },
+        "required": ["action"],
+    }
+
+    async def execute(self, action: str, name: str = "", value: str = "",
+                      domain: str = "", url: str = "", **_) -> ToolResult:
+        try:
+            await _ensure_daemon()
+            from browser.helpers import get_cookies, set_cookie, delete_cookies, clear_all_cookies
+            if action == "get":
+                cookies = await get_cookies([url] if url else None)
+                return _ok(cookies, _json.dumps(cookies, default=str)[:3000])
+            if action == "set":
+                if not name:
+                    return _err("name required for set")
+                ok = await set_cookie(name=name, value=value, domain=domain or "")
+                return _ok({"set": ok}, f"Cookie '{name}' {'set' if ok else 'failed'}")
+            if action == "delete":
+                if not name:
+                    return _err("name required for delete")
+                await delete_cookies(name=name, url=url, domain=domain)
+                return _ok({"deleted": True}, f"Deleted cookie '{name}'")
+            if action == "clear":
+                await clear_all_cookies()
+                return _ok({"cleared": True}, "All cookies cleared")
+            return _err(f"Unknown action: {action}")
+        except Exception as exc:
+            return _err(str(exc))
+
+
+# ── browser_network ────────────────────────────────────────────────────────────
+
+class BrowserNetworkTool(BaseTool):
+    name = "browser_network"
+    description = (
+        "Intercept, mock, or inspect network requests. "
+        "Enable interception → navigate → get_intercepted → fulfill (mock) or continue. "
+        "Powerful for testing error states, mocking APIs, blocking ads/trackers."
+    )
+    input_schema = {
+        "type": "object",
+        "properties": {
+            "action": {"type": "string",
+                       "enum": ["enable", "disable", "get_intercepted", "fulfill", "continue"],
+                       "description": "Operation"},
+            "url_patterns": {"type": "array", "items": {"type": "string"},
+                             "description": "URL glob patterns to intercept (for enable)"},
+            "request_id": {"type": "string", "description": "Request ID from get_intercepted"},
+            "status": {"type": "integer", "default": 200, "description": "HTTP status for fulfill"},
+            "body": {"type": "string", "default": "{}", "description": "Response body for fulfill"},
+            "content_type": {"type": "string", "default": "application/json"},
+        },
+        "required": ["action"],
+    }
+
+    async def execute(self, action: str, url_patterns: list | None = None,
+                      request_id: str = "", status: int = 200,
+                      body: str = "{}", content_type: str = "application/json", **_) -> ToolResult:
+        try:
+            await _ensure_daemon()
+            from browser.helpers import (enable_request_interception, disable_request_interception,
+                                          get_intercepted_requests, fulfill_request, continue_request)
+            if action == "enable":
+                await enable_request_interception(url_patterns)
+                return _ok({"enabled": True}, f"Intercepting: {url_patterns or ['*']}")
+            if action == "disable":
+                await disable_request_interception()
+                return _ok({"disabled": True}, "Interception disabled")
+            if action == "get_intercepted":
+                reqs = await get_intercepted_requests()
+                return _ok(reqs, f"{len(reqs)} intercepted requests")
+            if action == "fulfill":
+                if not request_id:
+                    return _err("request_id required")
+                await fulfill_request(request_id, status=status, body=body, content_type=content_type)
+                return _ok({"fulfilled": True}, f"Fulfilled with {status}")
+            if action == "continue":
+                if not request_id:
+                    return _err("request_id required")
+                await continue_request(request_id)
+                return _ok({"continued": True}, "Request continued")
+            return _err(f"Unknown action: {action}")
+        except Exception as exc:
+            return _err(str(exc))
+
+
+# ── browser_viewport ───────────────────────────────────────────────────────────
+
+class BrowserViewportTool(BaseTool):
+    name = "browser_viewport"
+    description = (
+        "Change viewport size / device emulation. "
+        "Use preset 'mobile', 'tablet', 'desktop', 'desktop-hd' or set custom width/height. "
+        "Resets with preset='reset'. Great for responsive testing."
+    )
+    input_schema = {
+        "type": "object",
+        "properties": {
+            "preset": {"type": "string", "enum": ["mobile", "tablet", "desktop", "desktop-hd", "reset"],
+                       "description": "Device preset"},
+            "width": {"type": "integer", "description": "Custom width px"},
+            "height": {"type": "integer", "description": "Custom height px"},
+            "mobile": {"type": "boolean", "default": False},
+        },
+    }
+
+    async def execute(self, preset: str = "", width: int = 1280, height: int = 800,
+                      mobile: bool = False, **_) -> ToolResult:
+        try:
+            await _ensure_daemon()
+            from browser.helpers import set_viewport, reset_viewport
+            if preset == "reset":
+                await reset_viewport()
+                return _ok({"reset": True}, "Viewport reset to default")
+            await set_viewport(width=width, height=height, mobile=mobile,
+                               preset=preset if preset else None)
+            return _ok({"width": width, "height": height, "preset": preset},
+                       f"Viewport: {preset or f'{width}x{height}'}")
+        except Exception as exc:
+            return _err(str(exc))
+
+
+# ── browser_pdf ────────────────────────────────────────────────────────────────
+
+class BrowserPdfTool(BaseTool):
+    name = "browser_pdf"
+    description = (
+        "Export the current page as a PDF file. "
+        "Returns the on-disk path. Great for reports, documentation, and receipts."
+    )
+    input_schema = {
+        "type": "object",
+        "properties": {
+            "landscape": {"type": "boolean", "default": False},
+            "print_background": {"type": "boolean", "default": True},
+            "paper_format": {"type": "string", "default": "A4", "enum": ["A4", "Letter"]},
+        },
+    }
+
+    async def execute(self, landscape: bool = False, print_background: bool = True,
+                      paper_format: str = "A4", **_) -> ToolResult:
+        try:
+            await _ensure_daemon()
+            from browser.helpers import export_pdf
+            path = await export_pdf(landscape=landscape, print_background=print_background,
+                                     paper_format=paper_format)
+            return _ok({"path": path}, f"PDF saved to {path}")
+        except Exception as exc:
+            return _err(str(exc))
+
+
+# ── browser_form ───────────────────────────────────────────────────────────────
+
+class BrowserFormTool(BaseTool):
+    name = "browser_form"
+    description = (
+        "Fill a form, select dropdown options, or hover over elements. "
+        "Actions: fill_form (dict of selector→value), select (dropdown), hover, scroll_to."
+    )
+    input_schema = {
+        "type": "object",
+        "properties": {
+            "action": {"type": "string",
+                       "enum": ["fill_form", "select", "hover", "scroll_to"],
+                       "description": "Form operation"},
+            "selector": {"type": "string", "description": "CSS selector"},
+            "fields": {"type": "object",
+                       "description": "For fill_form: {selector: value} dict"},
+            "submit_selector": {"type": "string", "description": "For fill_form: submit button selector"},
+            "value": {"type": "string", "description": "For select: option value"},
+            "label": {"type": "string", "description": "For select: option label text"},
+            "index": {"type": "integer", "description": "For select: option index"},
+        },
+        "required": ["action"],
+    }
+
+    async def execute(self, action: str, selector: str = "", fields: dict | None = None,
+                      submit_selector: str = "", value: str = "", label: str = "",
+                      index: int | None = None, **_) -> ToolResult:
+        try:
+            await _ensure_daemon()
+            from browser.helpers import fill_form, select_option, hover, scroll_to
+            if action == "fill_form":
+                results = await fill_form(fields or {}, submit_selector or None)
+                return _ok(results, f"Filled {len(fields or {})} fields")
+            if action == "select":
+                ok = await select_option(selector, value=value or None,
+                                          label=label or None,
+                                          index=index)
+                return _ok({"selected": ok}, f"Select {'done' if ok else 'failed'}")
+            if action == "hover":
+                ok = await hover(selector)
+                return _ok({"hovered": ok}, f"Hover {'done' if ok else 'failed'}")
+            if action == "scroll_to":
+                ok = await scroll_to(selector)
+                return _ok({"scrolled": ok}, f"Scroll {'done' if ok else 'failed'}")
+            return _err(f"Unknown action: {action}")
+        except Exception as exc:
+            return _err(str(exc))
+
+
+# ── browser_storage ─────────────────────────────────────────────────────────────
+
+class BrowserStorageTool(BaseTool):
+    name = "browser_storage"
+    description = (
+        "Read, write, or clear browser localStorage. "
+        "Use for persisting login tokens, preferences, or session data."
+    )
+    input_schema = {
+        "type": "object",
+        "properties": {
+            "action": {"type": "string", "enum": ["get", "set", "clear"],
+                       "description": "Operation"},
+            "key": {"type": "string", "description": "Storage key"},
+            "value": {"type": "string", "description": "Value for set"},
+        },
+        "required": ["action"],
+    }
+
+    async def execute(self, action: str, key: str = "", value: str = "", **_) -> ToolResult:
+        try:
+            await _ensure_daemon()
+            from browser.helpers import get_local_storage, set_local_storage, clear_local_storage
+            if action == "get":
+                v = await get_local_storage(key)
+                return _ok({"key": key, "value": v}, str(v))
+            if action == "set":
+                await set_local_storage(key, value)
+                return _ok({"set": True}, f"localStorage[{key!r}] = {value!r}")
+            if action == "clear":
+                await clear_local_storage()
+                return _ok({"cleared": True}, "localStorage cleared")
+            return _err(f"Unknown action: {action}")
+        except Exception as exc:
+            return _err(str(exc))
+
+
+# ── browser_drag ───────────────────────────────────────────────────────────────
+
+class BrowserDragTool(BaseTool):
+    name = "browser_drag"
+    description = "Drag one element to another using CDP native drag events. Use for sortable lists, Kanban boards, file uploads via drag."
+    input_schema = {
+        "type": "object",
+        "properties": {
+            "from_selector": {"type": "string", "description": "Element to drag"},
+            "to_selector": {"type": "string", "description": "Drop target"},
+            "hold_ms": {"type": "number", "default": 100, "description": "Hold time before drop (ms)"},
+        },
+        "required": ["from_selector", "to_selector"],
+    }
+
+    async def execute(self, from_selector: str, to_selector: str, hold_ms: float = 100, **_) -> ToolResult:
+        try:
+            await _ensure_daemon()
+            from browser.helpers import drag_and_drop
+            ok = await drag_and_drop(from_selector, to_selector, hold_ms=hold_ms)
+            return _ok({"dragged": ok}, f"Drag {'done' if ok else 'failed'}")
+        except Exception as exc:
+            return _err(str(exc))
+
+
 # Public list — wired into tools/__init__.py
 BROWSER_ACTION_TOOLS: list[BaseTool] = [
     BrowserOpenTool(),
@@ -418,4 +777,14 @@ BROWSER_ACTION_TOOLS: list[BaseTool] = [
     BrowserTabsTool(),
     BrowserSkillTool(),
     BrowserDialogTool(),
+    # New powerful tools
+    BrowserWaitTool(),
+    BrowserFindTool(),
+    BrowserCookiesTool(),
+    BrowserNetworkTool(),
+    BrowserViewportTool(),
+    BrowserPdfTool(),
+    BrowserFormTool(),
+    BrowserStorageTool(),
+    BrowserDragTool(),
 ]

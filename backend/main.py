@@ -42,6 +42,7 @@ from api.tts import router as tts_router
 from api.conference import router as conference_router
 from api.antivibe import router as antivibe_router
 from api.hermes_features import router as hermes_router
+from api.cdn_proxy import router as cdn_proxy_router
 from api.browser_admin import router as browser_router
 from observability.audit import log_audit_event
 from observability.request_context import clear_request_id, set_request_id
@@ -118,6 +119,7 @@ app.include_router(artifacts_router)
 app.include_router(conference_router)
 app.include_router(antivibe_router)
 app.include_router(hermes_router)
+app.include_router(cdn_proxy_router)
 app.include_router(browser_router, prefix="/api")
 
 

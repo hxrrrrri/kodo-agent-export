@@ -89,6 +89,10 @@ function readThemeColors() {
     text1: v('--text-1') ?? '#a8a8b8',
     text2: v('--text-2') ?? '#606070',
     border: v('--border') ?? '#2a2a32',
+    // borderBright: lighter visible border for artifact component outlines.
+    // Uses --border-bright if available, otherwise a soft transparent white
+    // that looks good on any dark background.
+    borderBright: v('--border-bright') ?? 'rgba(255,255,255,0.14)',
     accent: v('--accent') ?? '#ff4d21',
   }
 }

@@ -41,11 +41,13 @@ export default function App() {
 ## Rules
 - Close every fence with a bare ` ``` ` on its own line.
 - HTML: Use `<script src="...">`. Tailwind: `<script src="https://cdn.tailwindcss.com"></script>`.
-- UI Theme (MANDATORY): Host background is `#0f0f13`. Blend in:
-  - `html, body { background: transparent; margin: 0; }`
-  - Use dark colors: `#0d1117`, `#1a1a2e`, `rgba(255,255,255,0.08)`.
-  - NEVER use `white` backgrounds.
-  - Text: `#e0e0e8`. Borders: `rgba(255,255,255,0.1)`.
+- UI Theme (MANDATORY — Claude-style blending):
+  - `html, body { background: transparent !important; margin: 0; }` — host chat bg shows through.
+  - Component cards/panels: use `#111114` or `#1a1a1f` backgrounds (NOT white, NOT #0f0f13).
+  - Every card/panel MUST have `border: 1px solid rgba(255,255,255,0.14)` — subtle grey outline.
+  - Text: `#e0e0e8`. Secondary: `#a8a8b8`. Borders: `rgba(255,255,255,0.14)`.
+  - NEVER use `white`, `#f5f5f5`, or any light color on body/root.
+  - Example card: `background:#111114; border:1px solid rgba(255,255,255,0.14); border-radius:12px; padding:16px`
 """.strip()
 
 
