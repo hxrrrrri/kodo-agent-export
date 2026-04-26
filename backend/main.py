@@ -29,6 +29,7 @@ from api.chat import router as chat_router
 from api.collab import router as collab_router
 from api.cron import router as cron_router
 from api.doctor import router as doctor_router
+from api.gateway import router as gateway_router
 from api.marketplace import router as marketplace_router
 from api.prompts import router as prompts_router
 from api.krawlx import router as krawlx_router
@@ -105,6 +106,7 @@ app.include_router(chat_router)
 app.include_router(webhooks_router, prefix="/api")
 app.include_router(bridge_router)
 app.include_router(providers_router)
+app.include_router(gateway_router)
 app.include_router(doctor_router)
 app.include_router(profiles_router)
 app.include_router(tts_router)

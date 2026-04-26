@@ -23,6 +23,22 @@ type ProvidersStatusResponse = {
   providers: ProviderRow[]
 }
 
+type GatewayStatusResponse = {
+  status: string
+  api_auth_enabled: boolean
+  request_id_enabled: boolean
+  permission_mode: string
+  router_mode: string
+  router_strategy: string
+  primary_provider: string
+  provider: string | null
+  model: string
+  audit_log_file: string
+  usage_log_file: string
+  telemetry_disabled: boolean
+  providers: Record<string, boolean>
+}
+
 type ProviderProfile = {
   provider: string
   model: string
@@ -149,6 +165,7 @@ function latencyColor(latency: number | null): string {
 export function ProviderPanel() {
   const sessionId = useChatStore((state) => state.sessionId)
   const [status, setStatus] = useState<ProvidersStatusResponse | null>(null)
+  const [gatewayStatus, setGatewayStatus] = useState<GatewayStatusResponse | null>(null)
   const [profiles, setProfiles] = useState<ProviderProfile[]>([])
   const [activeProfile, setActiveProfile] = useState<ProviderProfile | null>(null)
   const [checks, setChecks] = useState<DoctorCheck[]>([])
@@ -241,6 +258,17 @@ export function ProviderPanel() {
     if (typeof window === 'undefined') return '/api/webhooks/trigger'
     return `${window.location.origin}/api/webhooks/trigger`
   }, [])
+
+  const loadGatewayStatus = async () => {
+    try {
+      const res = await fetch('/api/gateway/status', { headers: buildApiHeaders() })
+      if (!res.ok) throw new Error(await parseApiError(res))
+      const payload = (await res.json()) as GatewayStatusResponse
+      setGatewayStatus(payload)
+    } catch (e) {
+      setError(String(e))
+    }
+  }
 
   const loadStatus = async () => {
     try {
@@ -583,6 +611,7 @@ export function ProviderPanel() {
   }
 
   useEffect(() => {
+    void loadGatewayStatus()
     void loadStatus()
     void loadDiscovery()
     void loadProfiles()
@@ -593,6 +622,7 @@ export function ProviderPanel() {
 
   useEffect(() => {
     const timer = window.setInterval(() => {
+      void loadGatewayStatus()
       void loadStatus()
       void loadDiscovery()
       void loadProfiles()
@@ -624,6 +654,70 @@ export function ProviderPanel() {
           {error}
         </div>
       )}
+
+      <section style={{ marginBottom: 12 }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
+          <div style={{ fontSize: 10, color: 'var(--text-2)', letterSpacing: '0.1em' }}>GATEWAY</div>
+          <button
+            onClick={() => void loadGatewayStatus()}
+            style={{
+              border: '1px solid var(--border)',
+              background: 'var(--bg-2)',
+              color: 'var(--text-1)',
+              borderRadius: 'var(--radius)',
+              padding: '3px 6px',
+              fontSize: 10,
+              display: 'flex',
+              alignItems: 'center',
+              gap: 4,
+              cursor: 'pointer',
+            }}
+          >
+            <RefreshCw size={10} /> REFRESH
+          </button>
+        </div>
+
+        <div style={{
+          border: '1px solid var(--border)',
+          borderRadius: 'var(--radius)',
+          background: 'var(--bg-2)',
+          padding: '8px 10px',
+          display: 'grid',
+          gap: 4,
+          fontSize: 11,
+        }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+            <span style={{ color: 'var(--text-2)' }}>Status</span>
+            <span style={{ color: gatewayStatus?.status === 'ok' ? 'var(--green)' : 'var(--red)', textTransform: 'uppercase' }}>
+              {gatewayStatus?.status || 'unknown'}
+            </span>
+          </div>
+          <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+            <span style={{ color: 'var(--text-2)' }}>Provider</span>
+            <span style={{ color: 'var(--text-0)', textTransform: 'uppercase' }}>{gatewayStatus?.provider || gatewayStatus?.primary_provider || 'none'}</span>
+          </div>
+          <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+            <span style={{ color: 'var(--text-2)' }}>Model</span>
+            <span style={{ color: 'var(--text-1)' }}>{gatewayStatus?.model || '-'}</span>
+          </div>
+          <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+            <span style={{ color: 'var(--text-2)' }}>Router</span>
+            <span style={{ color: 'var(--text-1)' }}>{gatewayStatus?.router_mode || '-'} / {gatewayStatus?.router_strategy || '-'}</span>
+          </div>
+          <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+            <span style={{ color: 'var(--text-2)' }}>Auth</span>
+            <span style={{ color: gatewayStatus?.api_auth_enabled ? 'var(--yellow)' : 'var(--green)' }}>
+              {gatewayStatus?.api_auth_enabled ? 'enabled' : 'disabled'}
+            </span>
+          </div>
+          <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+            <span style={{ color: 'var(--text-2)' }}>Telemetry</span>
+            <span style={{ color: gatewayStatus?.telemetry_disabled ? 'var(--yellow)' : 'var(--green)' }}>
+              {gatewayStatus?.telemetry_disabled ? 'disabled' : 'enabled'}
+            </span>
+          </div>
+        </div>
+      </section>
 
       <section style={{ marginBottom: 12 }}>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>

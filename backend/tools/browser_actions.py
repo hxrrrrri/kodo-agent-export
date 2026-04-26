@@ -49,33 +49,68 @@ def _err(msg: str) -> ToolResult:
 class BrowserOpenTool(BaseTool):
     name = "browser_open"
     description = (
-        "Start the browser (if needed) and navigate to a URL. Returns the page "
-        "title, URL, and a list of relevant domain-skill files for this site. "
-        "Use this as the FIRST tool when working with a website."
+        "Navigate to a URL. Auto-starts browser if needed. "
+        "Returns page info AND automatically includes the most relevant domain skill "
+        "content so you know exactly how to interact with the site next. "
+        "ALWAYS call this first. Then follow the skill instructions in the result."
     )
     input_schema = {
         "type": "object",
         "properties": {
             "url": {"type": "string", "description": "Full URL including https://"},
-            "wait_for_load": {"type": "boolean", "default": True, "description": "Wait for the page to finish loading"},
+            "query": {"type": "string", "default": "", "description": "Optional: what you want to DO on this site (e.g. 'search for a song', 'buy item'). Used to pick the best skill file."},
+            "wait_for_load": {"type": "boolean", "default": True, "description": "Wait for the page to fully load before returning"},
         },
         "required": ["url"],
     }
 
-    async def execute(self, url: str, wait_for_load: bool = True, **_) -> ToolResult:
+    async def execute(self, url: str, query: str = "", wait_for_load: bool = True, **_) -> ToolResult:
         try:
             await _ensure_daemon()
-            from browser.helpers import goto_url, wait_for_load as wfl, page_info
+            from browser.helpers import goto_url, wait_for_load as wfl, page_info, list_domain_skills, read_skill
             r = await goto_url(url)
             if wait_for_load:
                 await wfl(timeout=15.0)
             info = await page_info()
-            return _ok(
-                {"navigated": r, "page": info},
-                f"Opened {url}\nTitle: {info.get('title', '?')}\nDomain skills: {', '.join(r.get('domain_skills', []) or ['(none)'])}",
+
+            domain = r.get("domain", "")
+            skills = r.get("domain_skills", []) or []
+
+            # Auto-load the most relevant skill file to guide the agent's next actions
+            skill_content = ""
+            if domain and skills:
+                # Pick best skill based on query keywords, else first one
+                chosen = skills[0]
+                if query:
+                    q_lower = query.lower()
+                    for s in skills:
+                        sname = s.lower().replace("-", " ").replace(".md", "")
+                        if any(w in sname for w in q_lower.split()):
+                            chosen = s
+                            break
+                content = read_skill(domain, chosen)
+                if content:
+                    skill_content = f"\n\n## Domain skill loaded: {chosen}\n{content[:3000]}"
+
+            title = info.get("title", "?")
+            summary = (
+                f"Navigated to: {url}\n"
+                f"Page title: {title}\n"
+                f"Available skills: {', '.join(skills) or '(none)'}"
+                + skill_content
             )
+            return _ok({"navigated": r, "page": info, "skill_content": skill_content}, summary)
         except Exception as exc:
             return _err(str(exc))
+
+    def prompt(self) -> str:
+        return (
+            "Use browser_open as the FIRST step for any web task. "
+            "Pass the `query` parameter to describe your goal (e.g. 'search and play a song'). "
+            "The tool returns a domain skill with exact selectors — follow those instructions "
+            "for the site rather than guessing. After browser_open, call browser_screenshot "
+            "to confirm the page loaded correctly before interacting."
+        )
 
 
 # ── browser_screenshot ───────────────────────────────────────────────────────
@@ -763,6 +798,341 @@ class BrowserDragTool(BaseTool):
             return _err(str(exc))
 
 
+# ── browser_batch (speed) ─────────────────────────────────────────────────────
+
+class BrowserBatchTool(BaseTool):
+    name = "browser_batch"
+    description = (
+        "Execute multiple browser actions in ONE tool call. Much faster than calling "
+        "each tool separately. Actions run sequentially in order. "
+        "Steps: list of {action, params} objects. "
+        "Actions: navigate, click, type, press_key, scroll, wait_selector, wait_text, js, extract, screenshot."
+    )
+    input_schema = {
+        "type": "object",
+        "properties": {
+            "steps": {
+                "type": "array",
+                "description": "Sequence of browser actions to execute in order",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "action": {"type": "string", "enum": ["navigate","click","type","press_key","scroll","wait_selector","wait_text","js","extract","screenshot","hover","select"]},
+                        "url": {"type": "string"},
+                        "selector": {"type": "string"},
+                        "text": {"type": "string"},
+                        "key": {"type": "string"},
+                        "expression": {"type": "string"},
+                        "timeout": {"type": "number"},
+                        "dy": {"type": "number"},
+                        "label": {"type": "string"},
+                        "value": {"type": "string"},
+                    },
+                    "required": ["action"],
+                },
+            },
+            "stop_on_error": {"type": "boolean", "default": False, "description": "Stop batch if any step fails"},
+        },
+        "required": ["steps"],
+    }
+
+    async def execute(self, steps: list, stop_on_error: bool = False, **_) -> ToolResult:
+        try:
+            await _ensure_daemon()
+            from browser.helpers import (
+                goto_url, wait_for_load, click_selector, click_by_text, type_text,
+                press_key, scroll, wait_for_selector, wait_for_text, js,
+                extract_text, capture_screenshot, hover, select_option,
+            )
+            results = []
+            for i, step in enumerate(steps):
+                action = step.get("action", "")
+                try:
+                    if action == "navigate":
+                        r = await goto_url(step["url"])
+                        await wait_for_load(timeout=step.get("timeout", 12.0))
+                        results.append({"step": i, "action": action, "ok": True, "url": step["url"]})
+                    elif action == "click":
+                        if step.get("text"):
+                            ok = await click_by_text(step["text"])
+                        else:
+                            ok = await click_selector(step["selector"])
+                        results.append({"step": i, "action": action, "ok": ok})
+                    elif action == "type":
+                        await type_text(step["text"])
+                        results.append({"step": i, "action": action, "ok": True})
+                    elif action == "press_key":
+                        await press_key(step.get("key", "Enter"))
+                        results.append({"step": i, "action": action, "ok": True})
+                    elif action == "scroll":
+                        await scroll(400, 300, dy=step.get("dy", -300))
+                        results.append({"step": i, "action": action, "ok": True})
+                    elif action == "wait_selector":
+                        ok = await wait_for_selector(step["selector"], timeout=step.get("timeout", 10.0))
+                        results.append({"step": i, "action": action, "ok": ok})
+                        if not ok and stop_on_error:
+                            break
+                    elif action == "wait_text":
+                        ok = await wait_for_text(step["text"], timeout=step.get("timeout", 10.0))
+                        results.append({"step": i, "action": action, "ok": ok})
+                    elif action == "js":
+                        val = await js(step["expression"])
+                        results.append({"step": i, "action": action, "ok": True, "value": val})
+                    elif action == "extract":
+                        text = await extract_text(step.get("selector", "body"))
+                        results.append({"step": i, "action": action, "ok": True, "text": text[:500]})
+                    elif action == "screenshot":
+                        path = await capture_screenshot()
+                        results.append({"step": i, "action": action, "ok": True, "path": path})
+                    elif action == "hover":
+                        ok = await hover(step["selector"])
+                        results.append({"step": i, "action": action, "ok": ok})
+                    elif action == "select":
+                        ok = await select_option(step["selector"], value=step.get("value"), label=step.get("label"))
+                        results.append({"step": i, "action": action, "ok": ok})
+                    else:
+                        results.append({"step": i, "action": action, "ok": False, "error": f"Unknown action: {action}"})
+                except Exception as e:
+                    results.append({"step": i, "action": action, "ok": False, "error": str(e)})
+                    if stop_on_error:
+                        break
+            ok_count = sum(1 for r in results if r.get("ok"))
+            return _ok(results, f"Batch: {ok_count}/{len(results)} steps succeeded")
+        except Exception as exc:
+            return _err(str(exc))
+
+
+# ── browser_macro (record + replay) ───────────────────────────────────────────
+
+import json as _json
+import os as _os
+import time as _time
+from pathlib import Path as _Path
+
+_MACRO_DIR = _Path(_os.path.expanduser("~")) / ".kodo" / "browser-macros"
+
+
+class BrowserMacroTool(BaseTool):
+    name = "browser_macro"
+    description = (
+        "Save and replay browser automation scripts (macros). "
+        "save: store a named sequence of steps. "
+        "run: execute a saved macro by name. "
+        "list: show all saved macros. "
+        "delete: remove a macro. "
+        "Great for repetitive tasks: login flows, daily checks, form fills."
+    )
+    input_schema = {
+        "type": "object",
+        "properties": {
+            "action": {"type": "string", "enum": ["save", "run", "list", "delete", "show"]},
+            "name": {"type": "string", "description": "Macro name (alphanumeric + hyphens)"},
+            "steps": {"type": "array", "description": "Steps to save (same format as browser_batch)"},
+            "description": {"type": "string", "description": "Human description of what the macro does"},
+        },
+        "required": ["action"],
+    }
+
+    async def execute(self, action: str, name: str = "", steps: list | None = None,
+                      description: str = "", **_) -> ToolResult:
+        try:
+            _MACRO_DIR.mkdir(parents=True, exist_ok=True)
+            if action == "list":
+                macros = []
+                for f in sorted(_MACRO_DIR.glob("*.json")):
+                    try:
+                        d = _json.loads(f.read_text())
+                        macros.append({"name": f.stem, "description": d.get("description", ""), "steps": len(d.get("steps", []))})
+                    except Exception:
+                        pass
+                return _ok(macros, "\n".join(f"• {m['name']}: {m['description']} ({m['steps']} steps)" for m in macros) or "(no macros saved)")
+            if not name:
+                return _err("name required")
+            path = _MACRO_DIR / f"{name}.json"
+            if action == "save":
+                if not steps:
+                    return _err("steps required for save")
+                path.write_text(_json.dumps({"name": name, "description": description, "steps": steps, "saved": _time.time()}, indent=2))
+                return _ok({"saved": str(path)}, f"Macro '{name}' saved ({len(steps)} steps)")
+            if action == "show":
+                if not path.exists():
+                    return _err(f"Macro '{name}' not found")
+                return _ok(_json.loads(path.read_text()), path.read_text()[:2000])
+            if action == "delete":
+                if path.exists():
+                    path.unlink()
+                return _ok({"deleted": True}, f"Macro '{name}' deleted")
+            if action == "run":
+                if not path.exists():
+                    return _err(f"Macro '{name}' not found. Use action=list to see available macros.")
+                macro = _json.loads(path.read_text())
+                # Delegate to BrowserBatchTool
+                batch = BrowserBatchTool()
+                return await batch.execute(steps=macro["steps"], stop_on_error=False)
+            return _err(f"Unknown action: {action}")
+        except Exception as exc:
+            return _err(str(exc))
+
+
+# ── browser_monitor (watch page for changes) ───────────────────────────────────
+
+class BrowserMonitorTool(BaseTool):
+    name = "browser_monitor"
+    description = (
+        "Watch a page element and wait until its content changes or matches a pattern. "
+        "Use for: price drops, ticket availability, score updates, stock changes, form confirmations. "
+        "Polls the selector's text every `interval` seconds for up to `timeout` seconds."
+    )
+    input_schema = {
+        "type": "object",
+        "properties": {
+            "selector": {"type": "string", "description": "CSS selector to watch"},
+            "until_contains": {"type": "string", "default": "", "description": "Stop when text contains this string"},
+            "until_changes": {"type": "boolean", "default": False, "description": "Stop when text changes from initial value"},
+            "interval": {"type": "number", "default": 2, "description": "Poll interval in seconds"},
+            "timeout": {"type": "number", "default": 60, "description": "Max wait in seconds"},
+        },
+        "required": ["selector"],
+    }
+
+    async def execute(self, selector: str, until_contains: str = "",
+                      until_changes: bool = False, interval: float = 2,
+                      timeout: float = 60, **_) -> ToolResult:
+        try:
+            await _ensure_daemon()
+            from browser.helpers import extract_text
+            import asyncio
+            deadline = _time.time() + timeout
+            initial = await extract_text(selector)
+            polls = 0
+            while _time.time() < deadline:
+                await asyncio.sleep(interval)
+                polls += 1
+                current = await extract_text(selector)
+                if until_contains and until_contains.lower() in current.lower():
+                    return _ok({"triggered": True, "text": current, "polls": polls},
+                               f"Match found after {polls} polls: '{current[:200]}'")
+                if until_changes and current != initial:
+                    return _ok({"triggered": True, "old": initial, "new": current, "polls": polls},
+                               f"Changed after {polls} polls: '{initial[:100]}' → '{current[:100]}'")
+            return _ok({"triggered": False, "polls": polls, "current": initial},
+                       f"Timeout after {polls} polls. No change detected.")
+        except Exception as exc:
+            return _err(str(exc))
+
+
+# ── browser_scrape_structured (extract data by schema) ─────────────────────────
+
+class BrowserScrapeStructuredTool(BaseTool):
+    name = "browser_scrape"
+    description = (
+        "Extract structured data from the current page using a field→selector mapping. "
+        "Pass a schema dict where keys are field names and values are CSS selectors. "
+        "Returns clean structured JSON. Handles lists, single values, and attributes. "
+        "Ideal for: product pages, listings, tables, search results."
+    )
+    input_schema = {
+        "type": "object",
+        "properties": {
+            "schema": {
+                "type": "object",
+                "description": "Dict of field→selector. Prefix selector with '@attr:' for attribute, 'list:' for multiple items. e.g. {\"price\": \"span.price\", \"images\": \"list:img@src\", \"link\": \"a@href\"}",
+            },
+            "base_selector": {"type": "string", "default": "", "description": "Repeat schema for each element matching this selector (for lists of items)"},
+            "limit": {"type": "integer", "default": 20, "description": "Max items when using base_selector"},
+        },
+        "required": ["schema"],
+    }
+
+    async def execute(self, schema: dict, base_selector: str = "", limit: int = 20, **_) -> ToolResult:
+        try:
+            await _ensure_daemon()
+            from browser.helpers import js
+
+            def build_field_expr(sel: str) -> str:
+                """Build JS expression for a field selector."""
+                if sel.startswith("list:"):
+                    inner = sel[5:]
+                    if "@" in inner:
+                        css, attr = inner.rsplit("@", 1)
+                        return f"Array.from(document.querySelectorAll({_json.dumps(css)})).map(e=>e.getAttribute({_json.dumps(attr)})||'').filter(Boolean)"
+                    else:
+                        return f"Array.from(document.querySelectorAll({_json.dumps(inner)})).map(e=>(e.innerText||e.textContent||'').trim())"
+                elif "@" in sel and not sel.startswith("["):
+                    css, attr = sel.rsplit("@", 1)
+                    return f"(document.querySelector({_json.dumps(css)})||{{}}).getAttribute?.({_json.dumps(attr)})||''"
+                else:
+                    return f"(document.querySelector({_json.dumps(sel)})||{{}}).innerText||''"
+
+            if not base_selector:
+                # Single page extraction
+                expr_parts = [f"{_json.dumps(k)}: ({build_field_expr(v)}).toString().trim()" for k, v in schema.items()]
+                expr = f"JSON.stringify({{" + ",".join(expr_parts) + f"}})"
+                result = await js(expr)
+                data = _json.loads(result) if result else {}
+                return _ok(data, _json.dumps(data, indent=2, ensure_ascii=False)[:4000])
+            else:
+                # List extraction
+                items_js_parts = [f"{_json.dumps(k)}: (() => {{" for k in schema.keys()]
+                # Build per-item extraction
+                field_js = ", ".join([
+                    f"{_json.dumps(k)}: (el.querySelector({_json.dumps(v if not v.startswith('list:') and '@' not in v else v.split('@')[0].lstrip('list:'))}) || {{}}).innerText || ''"
+                    for k, v in schema.items()
+                ])
+                expr = (
+                    f"JSON.stringify(Array.from(document.querySelectorAll({_json.dumps(base_selector)})).slice(0,{limit}).map(el=>({{" +
+                    field_js + f"}}))"
+                )
+                result = await js(expr)
+                data = _json.loads(result) if result else []
+                return _ok(data, f"{len(data)} items extracted\n" + _json.dumps(data[:5], indent=2, ensure_ascii=False)[:3000])
+        except Exception as exc:
+            return _err(str(exc))
+
+
+# ── browser_stealth (anti-bot bypass) ─────────────────────────────────────────
+
+class BrowserStealthTool(BaseTool):
+    name = "browser_stealth"
+    description = (
+        "Apply stealth settings to avoid bot detection on sites like LinkedIn, Indeed, etc. "
+        "Spoofs user-agent, hides navigator.webdriver flag, randomises mouse movements. "
+        "Call BEFORE navigating to a protected site."
+    )
+    input_schema = {
+        "type": "object",
+        "properties": {
+            "user_agent": {"type": "string", "default": "", "description": "Custom user-agent (leave blank for realistic Chrome default)"},
+            "hide_webdriver": {"type": "boolean", "default": True},
+            "randomise_viewport": {"type": "boolean", "default": True},
+        },
+    }
+
+    async def execute(self, user_agent: str = "", hide_webdriver: bool = True,
+                      randomise_viewport: bool = True, **_) -> ToolResult:
+        try:
+            await _ensure_daemon()
+            from browser.helpers import cdp, js, set_viewport
+            import random
+            ua = user_agent or (
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/124.0.0.0 Safari/537.36"
+            )
+            await cdp("Network.setUserAgentOverride", userAgent=ua)
+            if hide_webdriver:
+                await cdp("Page.addScriptToEvaluateOnNewDocument",
+                          source="Object.defineProperty(navigator,'webdriver',{get:()=>undefined})")
+                await js("Object.defineProperty(navigator,'webdriver',{get:()=>undefined})")
+            if randomise_viewport:
+                w = random.choice([1280, 1366, 1440, 1920])
+                h = random.choice([768, 800, 900, 1080])
+                await set_viewport(width=w, height=h)
+            return _ok({"ua": ua, "stealth": True}, f"Stealth mode applied. UA: {ua[:60]}...")
+        except Exception as exc:
+            return _err(str(exc))
+
+
 # Public list — wired into tools/__init__.py
 BROWSER_ACTION_TOOLS: list[BaseTool] = [
     BrowserOpenTool(),
@@ -777,14 +1147,23 @@ BROWSER_ACTION_TOOLS: list[BaseTool] = [
     BrowserTabsTool(),
     BrowserSkillTool(),
     BrowserDialogTool(),
-    # New powerful tools
+    # Wait / find / interact
     BrowserWaitTool(),
     BrowserFindTool(),
+    # Data / cookies / storage
     BrowserCookiesTool(),
+    BrowserStorageTool(),
+    BrowserScrapeStructuredTool(),
+    # Network / viewport / PDF
     BrowserNetworkTool(),
     BrowserViewportTool(),
     BrowserPdfTool(),
+    # Forms / drag / stealth
     BrowserFormTool(),
-    BrowserStorageTool(),
     BrowserDragTool(),
+    BrowserStealthTool(),
+    # Speed & automation
+    BrowserBatchTool(),
+    BrowserMacroTool(),
+    BrowserMonitorTool(),
 ]
