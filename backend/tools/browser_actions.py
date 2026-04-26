@@ -798,6 +798,120 @@ class BrowserDragTool(BaseTool):
             return _err(str(exc))
 
 
+# ── browser_play_youtube ─────────────────────────────────────────────────────
+
+class BrowserPlayYoutubeTool(BaseTool):
+    name = "browser_play_youtube"
+    description = (
+        "Search YouTube and play the first matching video. Handles cookie banners, "
+        "sign-in prompts, and autoplay policy automatically. "
+        "This is a single-tool replacement for a 10-step manual flow."
+    )
+    input_schema = {
+        "type": "object",
+        "properties": {
+            "query": {"type": "string", "description": "Song or video to search for, e.g. 'nenjin ezhuth x sita kalyanam'"},
+            "result_index": {"type": "integer", "default": 0, "description": "Which search result to click (0 = first)"},
+        },
+        "required": ["query"],
+    }
+
+    async def execute(self, query: str, result_index: int = 0, **_) -> ToolResult:
+        import asyncio
+        import urllib.parse
+        try:
+            await _ensure_daemon()
+            from browser.helpers import (
+                goto_url, wait_for_selector, click_selector, js, page_info,
+                wait_for_load,
+            )
+
+            # Step 1: Navigate directly to search results (faster than typing in box)
+            encoded = urllib.parse.quote(query)
+            await goto_url(f"https://www.youtube.com/results?search_query={encoded}")
+
+            # Step 2: Dismiss cookie consent (various locales)
+            for sel in [
+                "button[aria-label*='Accept']",
+                ".eom-buttons button:last-child",
+                "form[action*='consent'] button",
+                "button.VfPpkd-LgbsSe[jsname='V67aGc']",
+            ]:
+                await js(f"document.querySelector({_json.dumps(sel)})?.click()")
+            await asyncio.sleep(0.5)
+
+            # Step 3: Wait for video results
+            found = await wait_for_selector("ytd-video-renderer", timeout=12)
+            if not found:
+                return _err("No YouTube search results loaded. Check network or try again.")
+
+            # Step 4: Click the Nth result
+            results_selector = f"ytd-video-renderer a#video-title"
+            if result_index == 0:
+                clicked = await click_selector(results_selector)
+            else:
+                clicked = bool(await js(
+                    f"(()=>{{const els=document.querySelectorAll('ytd-video-renderer a#video-title');"
+                    f"if(els[{result_index}]){{els[{result_index}].click();return true;}}return false;}})()"
+                ))
+            if not clicked:
+                return _err("Could not click search result. YouTube may have changed its layout.")
+
+            # Step 5: Wait for watch page to load
+            watch_loaded = await wait_for_selector("ytd-watch-flexy,#player-container", timeout=15)
+            if not watch_loaded:
+                return _err("Video page did not load within 15 seconds.")
+            await asyncio.sleep(1.5)  # allow player JS to initialise
+
+            # Step 6: Dismiss interstitials on watch page
+            for sel in [
+                "button[aria-label*='No thanks']",
+                "#dismiss-button button",
+                "ytd-button-renderer#dismiss-button button",
+                "tp-yt-paper-dialog button:last-child",
+                ".ytp-ad-skip-button",  # skip ad if shown
+            ]:
+                await js(f"document.querySelector({_json.dumps(sel)})?.click()")
+            await asyncio.sleep(0.5)
+
+            # Step 7: Skip ad if present
+            await js("document.querySelector('.ytp-ad-skip-button-modern')?.click()")
+            await js("document.querySelector('.ytp-skip-ad-button')?.click()")
+
+            # Step 8: Click play button (MUST be a real CDP click — not video.play())
+            # video.play() is blocked by autoplay policy; CDP mouse click bypasses it.
+            play_clicked = await click_selector(".ytp-play-button[aria-label*='Play']")
+            if not play_clicked:
+                play_clicked = await click_selector(".ytp-play-button")
+            if not play_clicked:
+                # Last resort: click centre of player
+                await click_selector("#movie_player")
+
+            # Step 9: Verify video is playing
+            await asyncio.sleep(1.0)
+            is_playing = await js(
+                "(()=>{const v=document.querySelector('video');"
+                "return v?(!v.paused&&!v.ended&&v.currentTime>0):false;})()"
+            )
+
+            info = await page_info()
+            title = info.get("title", "?").replace(" - YouTube", "").strip()
+
+            return _ok(
+                {"playing": bool(is_playing), "title": title, "url": info.get("url"), "query": query},
+                f"{'▶ Now playing' if is_playing else '⚠ Opened (check browser)'}: {title}"
+            )
+        except Exception as exc:
+            return _err(str(exc))
+
+    def prompt(self) -> str:
+        return (
+            "Use browser_play_youtube whenever the user asks to play a song, video, or music on YouTube. "
+            "It handles search, consent dialogs, ad skipping, and clicking play automatically. "
+            "Never attempt a manual YouTube flow when this tool is available."
+        )
+
+
 # ── browser_batch (speed) ─────────────────────────────────────────────────────
 
 class BrowserBatchTool(BaseTool):
@@ -868,12 +982,15 @@ class BrowserBatchTool(BaseTool):
                         await scroll(400, 300, dy=step.get("dy", -300))
                         results.append({"step": i, "action": action, "ok": True})
                     elif action == "wait_selector":
-                        ok = await wait_for_selector(step["selector"], timeout=step.get("timeout", 10.0))
-                        results.append({"step": i, "action": action, "ok": ok})
+                        t = min(float(step.get("timeout", 10.0)), 30.0)  # cap at 30s
+                        ok = await wait_for_selector(step["selector"], timeout=t)
+                        results.append({"step": i, "action": action, "ok": ok, "found": ok})
                         if not ok and stop_on_error:
                             break
+                        # Non-fatal: continue even if not found unless stop_on_error
                     elif action == "wait_text":
-                        ok = await wait_for_text(step["text"], timeout=step.get("timeout", 10.0))
+                        t = min(float(step.get("timeout", 10.0)), 30.0)
+                        ok = await wait_for_text(step["text"], timeout=t)
                         results.append({"step": i, "action": action, "ok": ok})
                     elif action == "js":
                         val = await js(step["expression"])
@@ -1166,4 +1283,6 @@ BROWSER_ACTION_TOOLS: list[BaseTool] = [
     BrowserBatchTool(),
     BrowserMacroTool(),
     BrowserMonitorTool(),
+    # Domain-specific
+    BrowserPlayYoutubeTool(),
 ]
