@@ -28,6 +28,7 @@ SUPPORTED_PROVIDERS = {
     "codex",
     "ollama",
     "atomic-chat",
+    "nvidia",
 }
 
 _DEFAULT_DOTENV_PATH = Path(__file__).resolve().parents[1] / ".env"
@@ -43,7 +44,7 @@ def _env_or_override(request: Request, key: str) -> str:
     value = str(overrides.get(key, "")).strip()
     if value:
         return value
-    return os.getenv(key, "").strip()
+    return os.getenv(key, "").strip().strip("'\"")
 
 
 def _provider_configured(provider: str, request: Request) -> bool:
@@ -68,6 +69,8 @@ def _provider_configured(provider: str, request: Request) -> bool:
         return bool(os.getenv("OLLAMA_BASE_URL", "").strip())
     if name == "atomic-chat":
         return bool(os.getenv("ATOMIC_CHAT_BASE_URL", "").strip())
+    if name == "nvidia":
+        return bool(_env_or_override(request, "NVIDIA_API_KEY"))
     return False
 
 
@@ -137,6 +140,9 @@ def _default_model_for_provider(provider: str) -> str:
         return "llama3"
     if name == "atomic-chat":
         return "default"
+    if name == "nvidia":
+        # Fixed default model ID to a valid NIM model
+        return "meta/llama-3.1-8b-instruct"
     return ""
 
 
@@ -207,6 +213,7 @@ async def discover_providers_endpoint(request: Request):
             "deepseek": bool(_env_or_override(request, "DEEPSEEK_API_KEY")),
             "groq": bool(_env_or_override(request, "GROQ_API_KEY")),
             "firecrawl": bool(_env_or_override(request, "FIRECRAWL_API_KEY")),
+            "nvidia": bool(_env_or_override(request, "NVIDIA_API_KEY")),
         },
     }
 
@@ -220,6 +227,7 @@ async def providers_status_endpoint(request: Request):
         primary_provider = os.getenv("PRIMARY_PROVIDER", "anthropic").strip().lower() or "anthropic"
         candidates = [
             primary_provider,
+            "nvidia",
             "anthropic",
             "openai",
             "gemini",
@@ -242,7 +250,7 @@ async def providers_status_endpoint(request: Request):
                 provider = candidate
                 break
 
-        model = os.getenv("MODEL", "").strip() or _default_model_for_provider(provider)
+        model = os.getenv("MODEL", "").strip().strip("'\"") or _default_model_for_provider(provider)
         return {
             "mode": "fixed",
             "strategy": "fixed",
@@ -293,11 +301,24 @@ async def ping_provider(provider_name: str, request: Request):
     require_api_auth(request)
     await enforce_rate_limit(request, MEMORY_RATE_LIMITER, "providers_ping")
 
+    target = provider_name.strip().lower()
+
+    if target == "nvidia":
+        from providers.nvidia_provider import test_nvidia_connection
+        res = await test_nvidia_connection(timeout=10.0, api_key=_env_or_override(request, "NVIDIA_API_KEY"))
+        if not res.get("ok"):
+            raise HTTPException(status_code=502, detail=res.get("error", "NVIDIA ping failed"))
+        return {
+            "provider": "nvidia",
+            "healthy": True,
+            "latency_ms": res.get("latency_ms", 0),
+            "error_rate": 0.0,
+        }
+
     if not smart_router_enabled():
         raise HTTPException(status_code=400, detail="Smart router mode is not enabled")
 
     router_instance = await get_smart_router()
-    target = provider_name.strip().lower()
     provider = next((item for item in router_instance.providers if item.name == target), None)
     if provider is None:
         raise HTTPException(status_code=404, detail="Provider not found")
@@ -337,6 +358,20 @@ async def switch_provider_endpoint(body: ProviderSwitchRequest, request: Request
             status_code=400,
             detail=f"Could not resolve model for provider '{provider}'.",
         )
+
+    # Validate NVIDIA connection before switching
+    if provider == "nvidia":
+        from providers.nvidia_provider import test_nvidia_connection
+        res = await test_nvidia_connection(
+            model=resolved_model,
+            timeout=10.0,
+            api_key=_env_or_override(request, "NVIDIA_API_KEY"),
+        )
+        if not res.get("ok"):
+            raise HTTPException(
+                status_code=502,
+                detail=f"Failed to connect to NVIDIA NIM. Error: {res.get('error')}",
+            )
 
     _set_runtime_setting("PRIMARY_PROVIDER", provider, persist=body.persist)
     _set_runtime_setting("MODEL", resolved_model, persist=body.persist)
@@ -481,3 +516,132 @@ async def openrouter_models_endpoint(request: Request):
 
     models.sort(key=lambda x: str(x.get("id", "")))
     return {"models": models, "count": len(models)}
+
+
+class NvidiaSetupRequest(BaseModel):
+    api_key: str | None = Field(default=None, max_length=200)
+    model: str | None = Field(default=None, max_length=200)
+    session_id: str | None = Field(default=None, max_length=128)
+    persist: bool = Field(default=True)
+
+
+async def _nvidia_setup_status(request: Request) -> dict[str, object]:
+    api_key = _env_or_override(request, "NVIDIA_API_KEY")
+    configured = bool(api_key)
+
+    models: list[str] = []
+    recommended: str | None = None
+
+    if configured:
+        try:
+            from providers.nvidia_provider import list_nvidia_models
+            models = await list_nvidia_models(api_key=api_key)
+            if models:
+                recommended = models[0]
+        except Exception:
+            pass
+
+    return {
+        "configured": configured,
+        "models": models,
+        "recommended_model": recommended,
+        "active_model": os.getenv("MODEL", "").strip().strip("'\"") or None,
+    }
+
+
+@router.get("/nvidia/models")
+async def nvidia_models_endpoint(request: Request):
+    """Fetch all available models from NVIDIA API."""
+    require_api_auth(request)
+    await enforce_rate_limit(request, MEMORY_RATE_LIMITER, "providers_nvidia_models")
+
+    api_key = _env_or_override(request, "NVIDIA_API_KEY")
+    if not api_key:
+        raise HTTPException(status_code=400, detail="NVIDIA_API_KEY not configured")
+
+    try:
+        from providers.nvidia_provider import list_nvidia_models
+        models = await list_nvidia_models(api_key=api_key)
+        return {"models": models, "count": len(models)}
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Failed to fetch NVIDIA models: {exc}") from exc
+
+
+@router.get("/nvidia/setup")
+async def nvidia_setup_status_endpoint(request: Request):
+    require_api_auth(request)
+    await enforce_rate_limit(request, MEMORY_RATE_LIMITER, "providers_nvidia_setup_status")
+    return await _nvidia_setup_status(request)
+
+
+@router.post("/nvidia/setup")
+async def nvidia_setup_endpoint(body: NvidiaSetupRequest, request: Request):
+    require_api_auth(request)
+    await enforce_rate_limit(request, MEMORY_RATE_LIMITER, "providers_nvidia_setup")
+
+    if body.api_key:
+        _set_runtime_setting("NVIDIA_API_KEY", body.api_key.strip(), persist=body.persist)
+
+    selected_model = str(body.model or "").strip()
+    
+    # Validate connection before proceeding
+    from providers.nvidia_provider import test_nvidia_connection
+    res = await test_nvidia_connection(
+        model=selected_model or None,
+        timeout=15.0,
+        api_key=_env_or_override(request, "NVIDIA_API_KEY"),
+    )
+    if not res.get("ok"):
+        raise HTTPException(
+            status_code=502,
+            detail=f"Connection test failed: {res.get('error', 'Unknown error')}"
+        )
+
+    models: list[str] = []
+    try:
+        from providers.nvidia_provider import list_nvidia_models
+        models = await list_nvidia_models(api_key=_env_or_override(request, "NVIDIA_API_KEY"))
+    except Exception:
+        pass
+
+    if not selected_model and models:
+        selected_model = models[0]
+    if not selected_model:
+        selected_model = _default_model_for_provider("nvidia")
+
+    _set_runtime_setting("PRIMARY_PROVIDER", "nvidia", persist=body.persist)
+    _set_runtime_setting("MODEL", selected_model, persist=body.persist)
+    _set_runtime_setting("BIG_MODEL", selected_model, persist=body.persist)
+    _set_runtime_setting("SMALL_MODEL", selected_model, persist=body.persist)
+    _set_runtime_setting("ROUTER_MODE", "fixed", persist=body.persist)
+
+    profile_name = "quick-nvidia"
+    profile = ProviderProfile.from_dict(
+        {
+            "name": profile_name,
+            "provider": "nvidia",
+            "model": selected_model,
+            "goal": "balanced",
+            "base_url": "https://integrate.api.nvidia.com/v1",
+            "api_key": None,
+        }
+    )
+    await profile_manager.save_profile(profile)
+    await profile_manager.activate_profile(profile_name)
+
+    session_id = str(body.session_id or "").strip()
+    if session_id:
+        await memory_manager.update_session_metadata(
+            session_id,
+            {"model_override": selected_model},
+            create_if_missing=True,
+        )
+
+    status = await _nvidia_setup_status(request)
+    return {
+        "provider": "nvidia",
+        "model": selected_model,
+        "profile": profile_name,
+        "persisted": bool(body.persist),
+        **status,
+    }

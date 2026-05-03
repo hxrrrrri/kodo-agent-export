@@ -6,7 +6,7 @@ from .base import BaseTool, ToolResult
 
 class SkillListTool(BaseTool):
     name = "skill_list"
-    description = "List bundled skills available for specialized workflows."
+    description = "List project, custom, and bundled skills available for specialized workflows."
     input_schema = {
         "type": "object",
         "properties": {},

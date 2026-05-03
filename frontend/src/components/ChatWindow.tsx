@@ -1232,6 +1232,10 @@ export function ChatWindow({ editorOpen, onToggleEditor }: ChatWindowProps) {
         draftBeforeHistoryRef.current = ''
       }
 
+      // Force scroll to bottom whenever user sends a message
+      shouldAutoScrollRef.current = true
+      bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
+
       sendMessage(finalMsg, imagePayload, attachmentBlocks, getSendStreamHandlers())
     } catch (error) {
       setAttachmentError(String(error))
@@ -2033,6 +2037,19 @@ export function ChatWindow({ editorOpen, onToggleEditor }: ChatWindowProps) {
     () => THEME_OPTIONS.find((option) => option.key === theme) || THEME_OPTIONS[0],
     [theme],
   )
+  // Page up/down scroll button style
+  const navScrollBtn: React.CSSProperties = {
+    width: 32, height: 32,
+    display: 'flex', alignItems: 'center', justifyContent: 'center',
+    background: 'var(--bg-2)',
+    border: '1px solid var(--border)',
+    borderRadius: 8,
+    color: 'var(--text-2)',
+    cursor: 'pointer',
+    transition: 'all 0.15s',
+    boxShadow: '0 2px 8px rgba(0,0,0,0.25)',
+  }
+
   const selectedHeaderButtonStyle = {
     background: 'var(--accent-dim)',
     borderColor: 'var(--accent)',
@@ -3331,6 +3348,43 @@ export function ChatWindow({ editorOpen, onToggleEditor }: ChatWindowProps) {
 
         <div ref={bottomRef} />
         </div>{/* end centered wrapper */}
+      </div>
+
+      {/* ── Scroll navigation (Claude-style page up/down + go-to-bottom) ── */}
+      <div style={{
+        position: 'absolute',
+        right: 18,
+        bottom: 120,
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 6,
+        zIndex: 20,
+      }}>
+        {/* Page Up */}
+        <button
+          type="button"
+          title="Scroll to top (Page Up)"
+          onClick={() => messageListRef.current?.scrollTo({ top: 0, behavior: 'smooth' })}
+          style={navScrollBtn}
+        >
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+            <polyline points="18 15 12 9 6 15" />
+          </svg>
+        </button>
+        {/* Page Down / Go to bottom */}
+        <button
+          type="button"
+          title="Scroll to bottom"
+          onClick={() => {
+            shouldAutoScrollRef.current = true
+            bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
+          }}
+          style={navScrollBtn}
+        >
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+            <polyline points="6 9 12 15 18 9" />
+          </svg>
+        </button>
       </div>
 
       {showTerminal && (

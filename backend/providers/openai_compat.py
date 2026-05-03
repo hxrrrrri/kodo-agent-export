@@ -1,9 +1,29 @@
+"""
+OpenAI-compatible chat completion client.
+
+Supports any provider that implements the /v1/chat/completions endpoint:
+NVIDIA NIM, Ollama, Groq, OpenRouter, DeepSeek, OpenAI, etc.
+
+Includes retry with exponential backoff for transient failures.
+"""
+
 from __future__ import annotations
 
+import asyncio
 import json
+import logging
+import time
 from typing import Any, AsyncIterator
 
 from privacy import build_httpx_async_client
+
+logger = logging.getLogger(__name__)
+
+# Retry configuration
+MAX_RETRIES = 3
+RETRY_BASE_DELAY = 1.0
+RETRY_MAX_DELAY = 10.0
+RETRYABLE_STATUS_CODES = {429, 500, 502, 503, 504}
 
 
 async def _stream_chat_chunks(
@@ -52,17 +72,26 @@ async def openai_compat_chat(
     tools: list[dict[str, Any]] | None = None,
     stream: bool = False,
     max_tokens: int = 8192,
+    temperature: float | None = None,
+    top_p: float | None = None,
     timeout: float = 120.0,
     extra_headers: dict[str, str] | None = None,
+    max_retries: int = MAX_RETRIES,
 ) -> dict[str, Any] | AsyncIterator[str]:
+    """Call an OpenAI-compatible chat completion endpoint.
+
+    Includes retry with exponential backoff for transient failures (429, 5xx).
+    Supports temperature, top_p, and max_tokens parameters.
+    """
     base = base_url.rstrip("/")
     url = f"{base}/chat/completions"
 
     headers = {
         "Content-Type": "application/json",
     }
-    if api_key.strip():
-        headers["Authorization"] = f"Bearer {api_key.strip()}"
+    clean_key = api_key.strip().strip("'\"")
+    if clean_key:
+        headers["Authorization"] = f"Bearer {clean_key}"
 
     if "openrouter.ai" in base:
         headers.setdefault("HTTP-Referer", "http://localhost")
@@ -77,6 +106,10 @@ async def openai_compat_chat(
         "max_tokens": int(max_tokens),
         "stream": bool(stream),
     }
+    if temperature is not None:
+        payload["temperature"] = float(temperature)
+    if top_p is not None:
+        payload["top_p"] = float(top_p)
     if tools:
         payload["tools"] = tools
         payload["tool_choice"] = "auto"
@@ -84,11 +117,67 @@ async def openai_compat_chat(
     if stream:
         return _stream_chat_chunks(url=url, headers=headers, payload=payload, timeout=timeout)
 
-    async with build_httpx_async_client(timeout=timeout, headers=headers) as client:
-        response = await client.post(url, json=payload)
-        response.raise_for_status()
-        data = response.json()
+    # Non-streaming: retry with exponential backoff
+    import httpx
 
+    last_error: Exception | None = None
+    for attempt in range(max_retries + 1):
+        try:
+            async with build_httpx_async_client(timeout=timeout, headers=headers) as client:
+                response = await client.post(url, json=payload)
+
+                if response.status_code < 300:
+                    data = response.json()
+                    return _parse_response(data, model)
+
+                # Retryable?
+                if response.status_code in RETRYABLE_STATUS_CODES and attempt < max_retries:
+                    delay = min(RETRY_BASE_DELAY * (2 ** attempt), RETRY_MAX_DELAY)
+                    logger.warning(
+                        "OpenAI-compat %s %s (attempt %d/%d), retry in %.1fs",
+                        url, response.status_code, attempt + 1, max_retries + 1, delay,
+                    )
+                    await asyncio.sleep(delay)
+                    continue
+
+                # Non-retryable error
+                response.raise_for_status()
+
+        except (httpx.ConnectError, httpx.TimeoutException, httpx.ConnectTimeout) as e:
+            last_error = e
+            if attempt < max_retries:
+                delay = min(RETRY_BASE_DELAY * (2 ** attempt), RETRY_MAX_DELAY)
+                logger.warning(
+                    "OpenAI-compat connection error (attempt %d/%d): %s, retry in %.1fs",
+                    attempt + 1, max_retries + 1, type(e).__name__, delay,
+                )
+                await asyncio.sleep(delay)
+                continue
+            raise RuntimeError(
+                f"Connection failed after {max_retries + 1} attempts: {e}"
+            ) from e
+        except httpx.HTTPStatusError as e:
+            raise RuntimeError(
+                f"API error {e.response.status_code}: {e.response.text[:300]}"
+            ) from e
+        except RuntimeError:
+            raise
+        except Exception as e:
+            last_error = e
+            if attempt < max_retries:
+                delay = min(RETRY_BASE_DELAY * (2 ** attempt), RETRY_MAX_DELAY)
+                await asyncio.sleep(delay)
+                continue
+            raise
+
+    raise RuntimeError(
+        f"OpenAI-compat request failed after {max_retries + 1} attempts"
+        + (f": {last_error}" if last_error else "")
+    )
+
+
+def _parse_response(data: dict[str, Any], model: str) -> dict[str, Any]:
+    """Parse an OpenAI-compatible chat completion response into our standard format."""
     choices = data.get("choices", []) if isinstance(data, dict) else []
     first = choices[0] if isinstance(choices, list) and choices else {}
     message = first.get("message") if isinstance(first, dict) else {}

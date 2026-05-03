@@ -6,7 +6,7 @@ from .base import BaseTool, ToolResult
 
 class SkillGetTool(BaseTool):
     name = "skill_get"
-    description = "Get a bundled skill document by name."
+    description = "Get a project, custom, or bundled skill document by name."
     input_schema = {
         "type": "object",
         "properties": {

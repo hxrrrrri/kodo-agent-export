@@ -4,6 +4,8 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import {
   DESIGN_STUDIO_STORAGE_KEY,
   DesignStudio,
+  buildDesignSystemPrompt,
+  buildKodoDesignModePrompt,
   buildPromptPlanItems,
   buildHandoffPrompt,
   buildDesignFileTree,
@@ -150,6 +152,41 @@ describe('DesignStudio helpers', () => {
     expect(plan.length).toBeGreaterThanOrEqual(4)
     expect(plan[0]).toMatch(/Understand goals and constraints/i)
     expect(plan.join('\n')).toMatch(/Pinterest clone homepage/i)
+  })
+
+  it('builds mode-specific design intelligence prompts', () => {
+    const appPrompt = buildKodoDesignModePrompt('app')
+
+    expect(appPrompt).toContain('Kodo Design Mode: App Prototype')
+    expect(appPrompt).toMatch(/clickable app prototype/i)
+    expect(appPrompt).toMatch(/Avoid AI-looking defaults/i)
+  })
+
+  it('builds advanced design-system prompts with fidelity and preset context', () => {
+    const prompt = buildDesignSystemPrompt({
+      brandName: 'Acme',
+      presetId: 'claude-warm',
+      fidelity: 'production',
+      direction: 'editorial-monocle',
+      surface: 'saas-landing',
+      motion: 'subtle',
+      deviceFrame: 'browser-chrome',
+      audience: 'developer founders',
+      scale: 'landing page plus pricing',
+      brandAssets: 'logo.svg and product screenshot',
+      primaryColor: '#c96442',
+      secondaryColor: '#141413',
+      accentColor: '#c96442',
+      fontFamily: 'Georgia, serif',
+      borderRadius: 'md',
+      style: 'minimal',
+      customRules: 'No fake metrics.',
+    })
+
+    expect(prompt).toContain('Fidelity: production')
+    expect(prompt).toContain('Claude Warm Editorial')
+    expect(prompt).toContain('Editorial Monocle')
+    expect(prompt).toContain('developer founders')
   })
 
   it('encodes and decodes share payloads', () => {

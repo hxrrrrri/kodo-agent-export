@@ -3,7 +3,7 @@ Browser daemon admin endpoints.
 
 Exposes a singleton BrowserDaemon to:
 - Start/stop the headed Chrome instance
-- Stream the latest screenshot for the BrowserPanel UI
+- Stream the latest screenshot for browser automation clients
 - Stream the structured action log (live agent activity feed)
 - Read domain/interaction skills
 

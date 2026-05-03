@@ -19,3 +19,6 @@ networkx>=3.2,<4
 watchdog>=4.0.0,<6
 fastmcp>=0.1.0,<2
 firecrawl-py>=1.0.0
+slack-sdk>=3.0.0
+pyautogui>=0.9.54
+Pillow>=10.0.0

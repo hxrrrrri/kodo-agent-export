@@ -38,7 +38,7 @@ class Provider:
     def api_key(self) -> str:
         if not self.api_key_env:
             return ""
-        return os.getenv(self.api_key_env, "").strip()
+        return os.getenv(self.api_key_env, "").strip().strip("'\"")
 
     @property
     def is_configured(self) -> bool:
@@ -76,6 +76,16 @@ def _env_model(name: str, default: str) -> str:
     return value or default
 
 
+def _provider_model(provider: str, size: str, default: str) -> str:
+    normalized = provider.upper().replace("-", "_")
+    specific = os.getenv(f"{normalized}_{size.upper()}_MODEL", "").strip()
+    if specific:
+        return specific
+    if os.getenv("PRIMARY_PROVIDER", "").strip().lower() == provider:
+        return _env_model(f"{size.upper()}_MODEL", os.getenv("MODEL", "").strip() or default)
+    return default
+
+
 def build_default_providers() -> list[Provider]:
     ollama_base = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434").rstrip("/")
     atomic_base = os.getenv("ATOMIC_CHAT_BASE_URL", "http://127.0.0.1:1337").rstrip("/")
@@ -86,8 +96,8 @@ def build_default_providers() -> list[Provider]:
             ping_url="https://api.openai.com/v1/models",
             api_key_env="OPENAI_API_KEY",
             cost_per_1k_tokens=0.002,
-            big_model=_env_model("BIG_MODEL", "gpt-4o"),
-            small_model=_env_model("SMALL_MODEL", "gpt-4o-mini"),
+            big_model=_provider_model("openai", "big", "gpt-4o"),
+            small_model=_provider_model("openai", "small", "gpt-4o-mini"),
             base_url="https://api.openai.com/v1",
         ),
         Provider(
@@ -95,8 +105,8 @@ def build_default_providers() -> list[Provider]:
             ping_url="https://generativelanguage.googleapis.com/v1/models",
             api_key_env="GEMINI_API_KEY",
             cost_per_1k_tokens=0.0005,
-            big_model=_env_model("BIG_MODEL", "gemini-2.5-pro"),
-            small_model=_env_model("SMALL_MODEL", "gemini-2.0-flash"),
+            big_model=_provider_model("gemini", "big", "gemini-2.5-pro"),
+            small_model=_provider_model("gemini", "small", "gemini-2.0-flash"),
             base_url="https://generativelanguage.googleapis.com/v1beta",
             ping_headers={"x-goog-api-key": os.getenv("GEMINI_API_KEY", "")},
         ),
@@ -105,8 +115,8 @@ def build_default_providers() -> list[Provider]:
             ping_url=f"{ollama_base}/api/tags",
             api_key_env="",
             cost_per_1k_tokens=0.0,
-            big_model=_env_model("BIG_MODEL", "llama3.1:8b"),
-            small_model=_env_model("SMALL_MODEL", "llama3.1:8b"),
+            big_model=_provider_model("ollama", "big", "llama3.1:8b"),
+            small_model=_provider_model("ollama", "small", "llama3.1:8b"),
             base_url=f"{ollama_base}/v1",
         ),
         Provider(
@@ -114,8 +124,8 @@ def build_default_providers() -> list[Provider]:
             ping_url=f"{atomic_base}/v1/models",
             api_key_env="",
             cost_per_1k_tokens=0.0,
-            big_model=_env_model("BIG_MODEL", "llama3.1:8b"),
-            small_model=_env_model("SMALL_MODEL", "llama3.1:8b"),
+            big_model=_provider_model("atomic-chat", "big", "llama3.1:8b"),
+            small_model=_provider_model("atomic-chat", "small", "llama3.1:8b"),
             base_url=f"{atomic_base}/v1",
         ),
         Provider(
@@ -123,8 +133,8 @@ def build_default_providers() -> list[Provider]:
             ping_url="https://models.github.ai/inference/models",
             api_key_env="GITHUB_MODELS_TOKEN",
             cost_per_1k_tokens=0.001,
-            big_model=_env_model("BIG_MODEL", "openai/gpt-4.1"),
-            small_model=_env_model("SMALL_MODEL", "openai/gpt-4.1-mini"),
+            big_model=_provider_model("github-models", "big", "openai/gpt-4.1"),
+            small_model=_provider_model("github-models", "small", "openai/gpt-4.1-mini"),
             base_url="https://models.github.ai/inference",
         ),
         Provider(
@@ -132,8 +142,8 @@ def build_default_providers() -> list[Provider]:
             ping_url="https://api.openai.com/v1/models",
             api_key_env="CODEX_API_KEY",
             cost_per_1k_tokens=0.001,
-            big_model=_env_model("BIG_MODEL", "o4-mini"),
-            small_model=_env_model("SMALL_MODEL", "gpt-4o-mini"),
+            big_model=_provider_model("codex", "big", "o4-mini"),
+            small_model=_provider_model("codex", "small", "gpt-4o-mini"),
             base_url="https://api.openai.com/v1",
         ),
         Provider(
@@ -159,9 +169,18 @@ def build_default_providers() -> list[Provider]:
             ping_url="https://openrouter.ai/api/v1/models",
             api_key_env="OPENROUTER_API_KEY",
             cost_per_1k_tokens=0.001,
-            big_model="anthropic/claude-sonnet-4-6",
-            small_model="google/gemma-3-4b-it",
+            big_model=_provider_model("openrouter", "big", "anthropic/claude-sonnet-4-6"),
+            small_model=_provider_model("openrouter", "small", "google/gemma-3-4b-it"),
             base_url="https://openrouter.ai/api/v1",
+        ),
+        Provider(
+            name="nvidia",
+            ping_url="https://integrate.api.nvidia.com/v1/models",
+            api_key_env="NVIDIA_API_KEY",
+            cost_per_1k_tokens=0.001,
+            big_model=_provider_model("nvidia", "big", "meta/llama-3.1-8b-instruct"),
+            small_model=_provider_model("nvidia", "small", "meta/llama-3.1-8b-instruct"),
+            base_url="https://integrate.api.nvidia.com/v1",
         ),
     ]
 

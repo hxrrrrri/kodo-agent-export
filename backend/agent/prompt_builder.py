@@ -4,6 +4,7 @@ from caveman import build_mode_prompt as build_caveman_mode_prompt
 from caveman import normalize_mode as normalize_caveman_mode
 from memory.manager import memory_manager
 from privacy import feature_enabled
+from project_context import build_project_context_prompt
 
 BASE_SYSTEM_PROMPT = """You are KODO, an autonomous software engineering agent.
 
@@ -15,8 +16,12 @@ Core contract:
 
 Execution quality bar:
 - Prefer concrete evidence over assumptions.
+- For non-trivial work, surface important assumptions, tradeoffs, and success criteria before committing to an approach.
+- Prefer the simplest implementation that satisfies the request; avoid speculative features and abstractions.
 - If something fails, diagnose root cause and retry with a safer alternative.
 - Protect user work: avoid destructive operations unless explicitly requested.
+- Keep every changed line traceable to the user's goal; mention unrelated cleanup opportunities instead of performing them.
+- Verify behavior changes with focused tests or reproducible checks whenever feasible.
 - Keep progress visible with concise status updates while working.
 
 Output style:
@@ -76,6 +81,10 @@ async def build_system_prompt(
     memory_context = await memory_manager.load_memory(project_dir)
     if memory_context:
         sections.append(memory_context)
+
+    project_context = build_project_context_prompt(project_dir)
+    if project_context:
+        sections.append(project_context)
 
     if feature_enabled("CAVEMAN", default="0"):
         normalized_caveman_mode = normalize_caveman_mode(caveman_mode)

@@ -28,6 +28,7 @@ from api.bridge import router as bridge_router
 from api.chat import router as chat_router
 from api.collab import router as collab_router
 from api.cron import router as cron_router
+from api.design import router as design_router
 from api.doctor import router as doctor_router
 from api.gateway import router as gateway_router
 from api.marketplace import router as marketplace_router
@@ -117,6 +118,7 @@ app.include_router(marketplace_router, prefix="/api")
 app.include_router(skills_admin_router)
 app.include_router(collab_router)
 app.include_router(cron_router, prefix="/api")
+app.include_router(design_router)
 app.include_router(artifacts_router)
 app.include_router(conference_router)
 app.include_router(antivibe_router)

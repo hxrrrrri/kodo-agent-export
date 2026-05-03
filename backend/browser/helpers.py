@@ -43,7 +43,7 @@ async def _daemon():
     from api.browser_admin import get_daemon
     d = await get_daemon()
     if not d.is_running:
-        raise RuntimeError("Browser is not started. Open the Browser panel and click Start.")
+        await d.start()
     return d
 
 
@@ -70,9 +70,18 @@ async def drain_events() -> list[dict]:
 
 # ── Skills lookup ────────────────────────────────────────────────────────────
 
+_SPECIAL_DOMAIN_MAP = {
+    "web.whatsapp.com": "whatsapp",
+}
+
+
 def _domain_for_url(url: str) -> str:
     host = (urlparse(url).hostname or "").removeprefix("www.")
-    return host.split(".")[0] if host else ""
+    if not host:
+        return ""
+    if host in _SPECIAL_DOMAIN_MAP:
+        return _SPECIAL_DOMAIN_MAP[host]
+    return host.split(".")[0]
 
 
 def list_domain_skills(domain: str) -> list[str]:

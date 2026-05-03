@@ -1,0 +1,23 @@
+{
+  "version": 1,
+  "model": "provider-neutral",
+  "permissions": {
+    "filesystem": "project-scoped",
+    "shell": "verify-before-destructive",
+    "network": "explicit-when-needed"
+  },
+  "context": {
+    "includeProjectRules": true,
+    "includeProjectSkillsIndex": true,
+    "includeProjectAgentsIndex": true,
+    "includeProjectCommandsIndex": true
+  },
+  "hooks": {
+    "PostToolUse": {
+      "description": "Reserved for deterministic validation hooks after edits."
+    },
+    "PreCompact": {
+      "description": "Reserved for saving project state before context compaction."
+    }
+  }
+}

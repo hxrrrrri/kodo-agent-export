@@ -134,7 +134,7 @@ class BrowserDaemon:
                     "--disable-features=PrivacySandboxSettings4",
                 ]
                 # Detach from parent so it survives backend restarts cleanly
-                creationflags = 0x00000008 if os.name == "nt" else 0  # DETACHED_PROCESS
+                creationflags = 0x08000000 if os.name == "nt" else 0  # CREATE_NO_WINDOW
                 self._process = subprocess.Popen(
                     args,
                     stdout=subprocess.DEVNULL,

@@ -19,3 +19,6 @@ async def test_system_prompt_explicitly_authorizes_tools(monkeypatch):
     assert "including filesystem read/write/edit" in lowered
     assert "mcp tools" in lowered
     assert "do not claim you lack permission" in lowered
+    assert "success criteria" in lowered
+    assert "simplest implementation" in lowered
+    assert "every changed line traceable" in lowered

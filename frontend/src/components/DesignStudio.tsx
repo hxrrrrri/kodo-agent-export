@@ -28,6 +28,31 @@ const MAX_PERSISTED_MESSAGE_FILE_CHARS = 200000
 type DeviceMode = 'desktop' | 'tablet' | 'mobile'
 type ViewMode = 'preview' | 'code' | 'split' | 'editor'
 type ShareAccess = 'view' | 'comment' | 'edit'
+export type DesignMode = 'web' | 'app' | 'deck' | 'motion' | 'infographic' | 'critique'
+type DesignFidelity = 'wireframe' | 'high-fidelity' | 'production'
+type DesignDirection = 'auto' | 'editorial-monocle' | 'modern-minimal' | 'warm-soft' | 'tech-utility' | 'brutalist-experimental'
+type DesignSurface =
+  | 'auto'
+  | 'saas-landing'
+  | 'dashboard'
+  | 'pricing'
+  | 'docs'
+  | 'blog'
+  | 'commerce'
+  | 'portfolio'
+  | 'mobile-onboarding'
+  | 'email'
+  | 'social-carousel'
+  | 'poster'
+  | 'admin-tool'
+type DesignMotion = 'none' | 'subtle' | 'expressive' | 'cinematic'
+type DeviceFrame = 'auto' | 'none' | 'iphone-15-pro' | 'android-pixel' | 'ipad-pro' | 'macbook' | 'browser-chrome'
+type ProjectCreateDraft = {
+  name?: string
+  mode?: DesignMode
+  presetId?: string
+  fidelity?: DesignFidelity
+}
 
 const DEVICE_WIDTHS: Record<DeviceMode, string> = {
   desktop: '100%', tablet: '768px', mobile: '390px',
@@ -35,6 +60,743 @@ const DEVICE_WIDTHS: Record<DeviceMode, string> = {
 
 const DEVICE_HEIGHTS: Record<DeviceMode, string | number> = {
   desktop: '100%', tablet: 700, mobile: 760,
+}
+
+const DESIGN_MODES: Record<DesignMode, {
+  label: string
+  shortLabel: string
+  intent: string
+  deliverable: string
+  prompt: string
+}> = {
+  web: {
+    label: 'Web Design',
+    shortLabel: 'WEB',
+    intent: 'high-fidelity websites, product pages, dashboards, landing pages, docs, portfolios, and commerce experiences',
+    deliverable: 'responsive HTML/CSS/JS with polished desktop and mobile layouts',
+    prompt: [
+      'Build a complete responsive web experience.',
+      'Design the first viewport around the actual product, offer, or workflow, not a generic marketing shell.',
+      'Use clear information architecture, real copy, strong hierarchy, restrained motion, and meaningful interaction states.',
+      'For SaaS or operational tools, prefer dense but organized UI over oversized hero cards.',
+    ].join('\n'),
+  },
+  app: {
+    label: 'App Prototype',
+    shortLabel: 'APP',
+    intent: 'clickable iOS, Android, tablet, and desktop app prototypes',
+    deliverable: 'multi-screen prototype in one HTML file with real navigation state',
+    prompt: [
+      'Build a clickable app prototype, not a static poster.',
+      'Include realistic device framing only when it helps the product story.',
+      'Default to an overview board with 4-7 screens unless the user asks for one flow; each screen needs product-specific information density.',
+      'Wire real interactions with stateful JavaScript: tab changes, screen transitions, toggles, filters, forms, and selected states.',
+    ].join('\n'),
+  },
+  deck: {
+    label: 'Slide Deck',
+    shortLabel: 'DECK',
+    intent: 'presentation decks, pitch decks, keynote-style narratives, and browser-presented slides',
+    deliverable: '16:9 HTML deck with slide navigation, speaker notes, and export-friendly dimensions',
+    prompt: [
+      'Build an HTML slide deck, not a scrolling web page.',
+      'Use 1920x1080 slide frames, varied slide archetypes, strong editorial rhythm, and large readable type.',
+      'Include speaker notes in data attributes or hidden note panels so the deck can be presented.',
+      'Use 1-indexed slide labels and keep each slide focused on one idea.',
+    ].join('\n'),
+  },
+  motion: {
+    label: 'Motion',
+    shortLabel: 'MOTION',
+    intent: 'HTML motion design, launch animations, explainer scenes, and short product videos',
+    deliverable: 'time-based HTML animation with replay controls and recording-ready canvas/stage',
+    prompt: [
+      'Build a time-based motion piece with a clear beginning, middle, and ending.',
+      'Define a visible timeline, scene phases, and replay controls.',
+      'Use CSS variables and JavaScript timing helpers for consistent easing; prefer purposeful motion over constant movement.',
+      'Every text beat must stay readable long enough to understand.',
+    ].join('\n'),
+  },
+  infographic: {
+    label: 'Infographic',
+    shortLabel: 'INFO',
+    intent: 'editorial infographics, data visualizations, explainers, reports, and print-grade visual systems',
+    deliverable: 'single-page visual artifact with precise layout and export-friendly composition',
+    prompt: [
+      'Build a finished infographic, not a dashboard.',
+      'Use a precise editorial grid, strong typographic contrast, labeled data, and a clear reading path.',
+      'If data is missing, make assumptions explicit inside the artifact and use realistic placeholder values.',
+      'Favor SVG charts and semantic labels over decorative icons.',
+    ].join('\n'),
+  },
+  critique: {
+    label: 'Critique',
+    shortLabel: 'REVIEW',
+    intent: 'expert review, design QA, accessibility audit, and redesign recommendations',
+    deliverable: 'visual critique dashboard with scores, keep/fix list, and applied redesign proposal when possible',
+    prompt: [
+      'Produce a rigorous design critique artifact.',
+      'Score the design on philosophy coherence, hierarchy, craft, usability, accessibility, and originality.',
+      'Separate Keep, Fix, and Quick Wins, then include a concrete improved version or patch when source exists.',
+      'Ground every critique in observable UI details rather than generic taste claims.',
+    ].join('\n'),
+  },
+}
+
+interface DesignSystemPreset {
+  id: string
+  label: string
+  category: string
+  colors: string[]
+  displayFont: string
+  bodyFont: string
+  summary: string
+  prompt: string
+}
+
+const DESIGN_SYSTEM_PRESETS: DesignSystemPreset[] = [
+  {
+    id: 'neutral-modern',
+    label: 'Neutral Modern',
+    category: 'Starter',
+    colors: ['#fafafa', '#ffffff', '#111827', '#6b7280', '#2563eb'],
+    displayFont: 'Inter, system-ui, sans-serif',
+    bodyFont: 'Inter, system-ui, sans-serif',
+    summary: 'Quiet modern software UI with clean spacing, strong hierarchy, and restrained blue accent.',
+    prompt: 'Use neutral surfaces, compact hierarchy, hairline borders, practical product screenshots, and one restrained blue accent. Avoid decorative gradients.',
+  },
+  {
+    id: 'claude-warm',
+    label: 'Claude Warm Editorial',
+    category: 'AI & LLM',
+    colors: ['#f5f4ed', '#faf9f5', '#141413', '#5e5d59', '#c96442'],
+    displayFont: 'Georgia, Iowan Old Style, serif',
+    bodyFont: 'system-ui, -apple-system, Segoe UI, sans-serif',
+    summary: 'Parchment canvas, serif headlines, terracotta accent, warm neutral editorial rhythm.',
+    prompt: 'Use warm parchment backgrounds, Georgia-style serif display type, terracotta accent, warm neutrals only, soft ring borders, and essay-like section pacing. Avoid cool blue-gray palettes.',
+  },
+  {
+    id: 'linear-minimal',
+    label: 'Linear Minimal',
+    category: 'Developer Tools',
+    colors: ['#fbfbfc', '#ffffff', '#171717', '#737373', '#5e6ad2'],
+    displayFont: 'Inter, system-ui, sans-serif',
+    bodyFont: 'Inter, system-ui, sans-serif',
+    summary: 'Precise product UI with crisp borders, compact typography, and one violet-blue accent.',
+    prompt: 'Use tight software-native spacing, one saturated accent, subtle panels, status pills, keyboardable controls, and product-first composition. No oversized marketing illustrations.',
+  },
+  {
+    id: 'vercel-mono',
+    label: 'Vercel Mono',
+    category: 'Developer Tools',
+    colors: ['#ffffff', '#fafafa', '#000000', '#666666', '#000000'],
+    displayFont: 'Geist, Inter, system-ui, sans-serif',
+    bodyFont: 'Geist, Inter, system-ui, sans-serif',
+    summary: 'Black-and-white developer aesthetic with strong type, command surfaces, and exact spacing.',
+    prompt: 'Use monochrome surfaces, exact 1px borders, command-line and deployment metaphors, sharp contrast, and restrained interaction polish. Do not add color unless it communicates state.',
+  },
+  {
+    id: 'stripe-gradient',
+    label: 'Stripe Product',
+    category: 'Fintech',
+    colors: ['#f6f9fc', '#ffffff', '#0a2540', '#425466', '#635bff'],
+    displayFont: 'Inter, system-ui, sans-serif',
+    bodyFont: 'Inter, system-ui, sans-serif',
+    summary: 'Fintech polish with layered product surfaces, careful gradients, and data-rich UI.',
+    prompt: 'Use financial-product clarity, layered cards, precise data examples, rich but controlled gradients, diagonal rhythm when useful, and trust-building copy.',
+  },
+  {
+    id: 'apple-glass',
+    label: 'Apple Glass',
+    category: 'Consumer',
+    colors: ['#f5f5f7', '#ffffff', '#1d1d1f', '#6e6e73', '#0071e3'],
+    displayFont: 'SF Pro Display, system-ui, sans-serif',
+    bodyFont: 'SF Pro Text, system-ui, sans-serif',
+    summary: 'Premium consumer layout with large product imagery, calm surfaces, and cinematic pacing.',
+    prompt: 'Use product-first hero composition, large clear media, calm gray surfaces, precise copy, generous whitespace, and restrained blue CTAs. No fake device renders.',
+  },
+  {
+    id: 'airbnb-warm',
+    label: 'Airbnb Warm',
+    category: 'Marketplace',
+    colors: ['#fff8f6', '#ffffff', '#222222', '#717171', '#ff385c'],
+    displayFont: 'Circular, Inter, system-ui, sans-serif',
+    bodyFont: 'Circular, Inter, system-ui, sans-serif',
+    summary: 'Human marketplace UI with warm cards, photography-forward layout, and friendly interactions.',
+    prompt: 'Use human-centered copy, warm whitespace, photography-led cards, rounded but disciplined controls, and clear booking/filter interactions.',
+  },
+  {
+    id: 'notion-editorial',
+    label: 'Notion Editorial',
+    category: 'Productivity',
+    colors: ['#fbfbfa', '#ffffff', '#2f3437', '#787774', '#2383e2'],
+    displayFont: 'Inter, system-ui, sans-serif',
+    bodyFont: 'Inter, system-ui, sans-serif',
+    summary: 'Document-native product design with database cues, blocks, and quiet utility.',
+    prompt: 'Use document blocks, database rows, calm neutral surfaces, sparse icons, and content hierarchy that feels editable and structured.',
+  },
+  {
+    id: 'supabase-dev',
+    label: 'Supabase Dev',
+    category: 'Backend & Data',
+    colors: ['#0f1512', '#151f1a', '#f8fafc', '#8b949e', '#3ecf8e'],
+    displayFont: 'Inter, system-ui, sans-serif',
+    bodyFont: 'Inter, system-ui, sans-serif',
+    summary: 'Dark developer dashboard with database objects, green signal color, and terminal confidence.',
+    prompt: 'Use dark database-native UI, green success accents, schema/table metaphors, code snippets, tabular density, and clear developer onboarding flow.',
+  },
+  {
+    id: 'figma-creative',
+    label: 'Figma Creative',
+    category: 'Design Tools',
+    colors: ['#ffffff', '#f5f5f5', '#1f1f1f', '#6b7280', '#a259ff'],
+    displayFont: 'Inter, system-ui, sans-serif',
+    bodyFont: 'Inter, system-ui, sans-serif',
+    summary: 'Creative tool surface with palettes, layers, collaborative cursors, and expressive controls.',
+    prompt: 'Use canvas metaphors, layer panels, swatches, selection outlines, collaborative presence, and playful but purposeful accent use.',
+  },
+  {
+    id: 'github-utility',
+    label: 'GitHub Utility',
+    category: 'Developer Tools',
+    colors: ['#0d1117', '#161b22', '#f0f6fc', '#8b949e', '#2f81f7'],
+    displayFont: 'system-ui, -apple-system, Segoe UI, sans-serif',
+    bodyFont: 'system-ui, -apple-system, Segoe UI, sans-serif',
+    summary: 'Dense engineering UI with repos, diffs, checks, issues, and exact state treatment.',
+    prompt: 'Use dense engineering information, diff/check/status patterns, tabular lists, issue labels, monospace code, and exact empty/error states.',
+  },
+  {
+    id: 'shopify-commerce',
+    label: 'Shopify Commerce',
+    category: 'Commerce',
+    colors: ['#f3f6ef', '#ffffff', '#1f2d1f', '#60705c', '#008060'],
+    displayFont: 'Inter, system-ui, sans-serif',
+    bodyFont: 'Inter, system-ui, sans-serif',
+    summary: 'Merchant-first commerce system with trustworthy green accents and operational panels.',
+    prompt: 'Use merchant operations language, commerce metrics, product grids, inventory/order states, trustworthy green accents, and practical workflow density.',
+  },
+  {
+    id: 'magazine-bold',
+    label: 'Magazine Bold',
+    category: 'Editorial',
+    colors: ['#f8f1e8', '#fffaf2', '#111111', '#6a5b4f', '#d13f22'],
+    displayFont: 'Georgia, Times New Roman, serif',
+    bodyFont: 'Inter, system-ui, sans-serif',
+    summary: 'Large serif headlines, editorial spreads, pull quotes, and strong visual pacing.',
+    prompt: 'Use magazine spread composition, oversized serif headlines, pull quotes, asymmetric columns, captions, and one decisive image or data figure.',
+  },
+  {
+    id: 'neo-brutal',
+    label: 'Neo Brutal',
+    category: 'Experimental',
+    colors: ['#fffdf2', '#ffffff', '#111111', '#333333', '#ff4d00'],
+    displayFont: 'Arial Black, Impact, system-ui, sans-serif',
+    bodyFont: 'ui-monospace, SFMono-Regular, Menlo, monospace',
+    summary: 'Hard borders, loud type, minimal radius, and intentionally assertive composition.',
+    prompt: 'Use strong black borders, almost no radius, loud display type, asymmetric grids, visible structure, and one hot accent. No soft shadows or glass.',
+  },
+  {
+    id: 'luxury-premium',
+    label: 'Luxury Premium',
+    category: 'Luxury',
+    colors: ['#0b0a08', '#17130f', '#f7efe4', '#b7a58d', '#c8a45d'],
+    displayFont: 'Didot, Bodoni 72, Georgia, serif',
+    bodyFont: 'Avenir Next, Inter, system-ui, sans-serif',
+    summary: 'Dark premium surfaces, refined serif type, gold restraint, and high-end spacing.',
+    prompt: 'Use dark premium surfaces, elegant serif display type, gold used sparingly, cinematic product focus, and restrained copy. Avoid busy card grids.',
+  },
+  {
+    id: 'japanese-minimal',
+    label: 'Japanese Minimal',
+    category: 'Editorial',
+    colors: ['#f7f3ea', '#fffdf8', '#20201d', '#706a60', '#9b2c1f'],
+    displayFont: 'Hiragino Mincho ProN, Yu Mincho, Georgia, serif',
+    bodyFont: 'system-ui, -apple-system, Segoe UI, sans-serif',
+    summary: 'Quiet asymmetry, paper texture cues, sparse accents, and refined negative space.',
+    prompt: 'Use asymmetry, quiet paper-like surfaces, sparse warm accent, calm vertical rhythm, and labels/captions that feel typeset rather than decorated.',
+  },
+  {
+    id: 'cyberpunk-neon',
+    label: 'Cyberpunk Neon',
+    category: 'Futuristic',
+    colors: ['#070812', '#111827', '#e5faff', '#7dd3fc', '#00f5d4'],
+    displayFont: 'Orbitron, Rajdhani, system-ui, sans-serif',
+    bodyFont: 'Inter, system-ui, sans-serif',
+    summary: 'Futuristic panels, neon accents, kinetic data, and dark sci-fi atmosphere.',
+    prompt: 'Use neon accents with restraint, dark high-contrast panels, scanline or HUD motifs only when useful, kinetic data modules, and cinematic lighting. Avoid generic purple gradients.',
+  },
+  {
+    id: 'openai-research',
+    label: 'OpenAI Research',
+    category: 'AI & LLM',
+    colors: ['#f7f7f2', '#ffffff', '#111111', '#6b6962', '#10a37f'],
+    displayFont: 'Sohne, Inter, system-ui, sans-serif',
+    bodyFont: 'Sohne, Inter, system-ui, sans-serif',
+    summary: 'Research-product clarity with quiet neutrals, confident copy, and minimal green signal.',
+    prompt: 'Use research-lab restraint, clean prose, neutral layouts, sparse green accents, careful diagrams, and accessible product examples. Avoid sci-fi AI cliches.',
+  },
+  {
+    id: 'anthropic-editorial',
+    label: 'Anthropic Editorial',
+    category: 'AI & LLM',
+    colors: ['#f3efe7', '#fbfaf7', '#191714', '#6f6860', '#d97757'],
+    displayFont: 'Tiempos, Georgia, serif',
+    bodyFont: 'Inter, system-ui, sans-serif',
+    summary: 'Warm research editorial with serif scale, measured spacing, and muted clay accent.',
+    prompt: 'Use warm paper surfaces, serif-led hierarchy, calm product framing, measured copy, and clay accents. Keep the layout humane and not dashboard-heavy.',
+  },
+  {
+    id: 'cursor-agentic',
+    label: 'Cursor Agentic',
+    category: 'Developer Tools',
+    colors: ['#0c0d10', '#15171c', '#f4f4f5', '#9ca3af', '#7c3aed'],
+    displayFont: 'Inter, system-ui, sans-serif',
+    bodyFont: 'JetBrains Mono, ui-monospace, monospace',
+    summary: 'Coding-agent workbench with command surfaces, diffs, composer states, and purple signal.',
+    prompt: 'Use developer-agent UI patterns: editors, diffs, command bars, file trees, context chips, and precise status feedback. Purple is a signal, not a background wash.',
+  },
+  {
+    id: 'raycast-command',
+    label: 'Raycast Command',
+    category: 'Productivity',
+    colors: ['#111113', '#1c1c21', '#f5f5f7', '#a1a1aa', '#ff6363'],
+    displayFont: 'Inter, system-ui, sans-serif',
+    bodyFont: 'Inter, system-ui, sans-serif',
+    summary: 'Fast command-center UI with keyboard-first lists, hotkeys, and crisp dark surfaces.',
+    prompt: 'Use command palette structure, keyboard hints, dense list rows, crisp icons, strong empty states, and fast interaction affordances.',
+  },
+  {
+    id: 'webflow-creator',
+    label: 'Webflow Creator',
+    category: 'Design Tools',
+    colors: ['#0b0d18', '#111827', '#f8fafc', '#94a3b8', '#4353ff'],
+    displayFont: 'Inter, system-ui, sans-serif',
+    bodyFont: 'Inter, system-ui, sans-serif',
+    summary: 'Creator-platform polish with canvas, component panels, site previews, and blue energy.',
+    prompt: 'Use creator-tool patterns: canvas previews, component controls, publishing states, responsive breakpoints, and practical visual polish.',
+  },
+  {
+    id: 'canva-playful',
+    label: 'Canva Playful',
+    category: 'Design Tools',
+    colors: ['#f8fbff', '#ffffff', '#1f2937', '#64748b', '#00c4cc'],
+    displayFont: 'Inter, system-ui, sans-serif',
+    bodyFont: 'Inter, system-ui, sans-serif',
+    summary: 'Accessible creative workspace with friendly color, template grids, and approachable controls.',
+    prompt: 'Use template-first creative UI, friendly controls, colorful accents, approachable language, and clear preview/edit affordances. Keep it structured, not childish.',
+  },
+  {
+    id: 'miro-workshop',
+    label: 'Miro Workshop',
+    category: 'Collaboration',
+    colors: ['#fff8d8', '#ffffff', '#1f2937', '#6b7280', '#ffd02f'],
+    displayFont: 'Inter, system-ui, sans-serif',
+    bodyFont: 'Inter, system-ui, sans-serif',
+    summary: 'Collaborative board energy with sticky-note semantics, workshop flows, and yellow accent.',
+    prompt: 'Use board/collaboration metaphors, sticky notes, voting, cursors, facilitation controls, and optimistic yellow accents with disciplined layout.',
+  },
+  {
+    id: 'framer-motion',
+    label: 'Framer Motion',
+    category: 'Design Tools',
+    colors: ['#050506', '#111116', '#f6f7fb', '#9ca3af', '#0099ff'],
+    displayFont: 'Inter, system-ui, sans-serif',
+    bodyFont: 'Inter, system-ui, sans-serif',
+    summary: 'High-motion creator site aesthetic with crisp dark canvas and blue interaction cues.',
+    prompt: 'Use motion-aware composition, timeline/state metaphors, sharp product previews, and precise interaction copy. Avoid animated clutter.',
+  },
+  {
+    id: 'spotify-audio',
+    label: 'Spotify Audio',
+    category: 'Media',
+    colors: ['#0b0b0b', '#181818', '#ffffff', '#b3b3b3', '#1db954'],
+    displayFont: 'Circular, Inter, system-ui, sans-serif',
+    bodyFont: 'Circular, Inter, system-ui, sans-serif',
+    summary: 'Audio-first dark interface with strong playlists, media rows, and green playback signal.',
+    prompt: 'Use audio/media hierarchy, album grids, playback controls, queue states, dark surfaces, and green only for active listening or primary action.',
+  },
+  {
+    id: 'pinterest-discovery',
+    label: 'Pinterest Discovery',
+    category: 'Social & Media',
+    colors: ['#ffffff', '#f7f7f7', '#111111', '#767676', '#e60023'],
+    displayFont: 'Inter, system-ui, sans-serif',
+    bodyFont: 'Inter, system-ui, sans-serif',
+    summary: 'Visual discovery grids with masonry rhythm, save flows, and decisive red actions.',
+    prompt: 'Use masonry/image discovery, intent chips, save/share states, visual-first cards, and concise overlays. Avoid generic symmetrical card grids.',
+  },
+  {
+    id: 'nike-performance',
+    label: 'Nike Performance',
+    category: 'Consumer',
+    colors: ['#f5f5f5', '#ffffff', '#111111', '#666666', '#fa5400'],
+    displayFont: 'Helvetica Neue, Arial Black, system-ui, sans-serif',
+    bodyFont: 'Helvetica Neue, Inter, system-ui, sans-serif',
+    summary: 'Performance retail with bold type, product motion, and high-contrast orange energy.',
+    prompt: 'Use athlete/product-first imagery, bold type, confident contrast, product specs, drops, and motion cues. Keep CTAs hard-working and direct.',
+  },
+  {
+    id: 'tesla-product',
+    label: 'Tesla Product',
+    category: 'Automotive',
+    colors: ['#f4f4f4', '#ffffff', '#171a20', '#5c5e62', '#e82127'],
+    displayFont: 'Inter, system-ui, sans-serif',
+    bodyFont: 'Inter, system-ui, sans-serif',
+    summary: 'Minimal automotive product storytelling with clean specs and direct purchase flows.',
+    prompt: 'Use product-first composition, specs, configurator states, clean photo zones, and restrained red for action/status. Avoid decorative car cliches.',
+  },
+  {
+    id: 'bmw-premium',
+    label: 'BMW Premium',
+    category: 'Automotive',
+    colors: ['#f6f7f8', '#ffffff', '#101820', '#6b7280', '#1c69d4'],
+    displayFont: 'Inter, system-ui, sans-serif',
+    bodyFont: 'Inter, system-ui, sans-serif',
+    summary: 'Premium mobility UI with precision grids, cool neutrals, and confident blue.',
+    prompt: 'Use premium automotive restraint, clear configurator/state flows, technical specs, immersive media, and precise blue accents.',
+  },
+  {
+    id: 'nvidia-ai',
+    label: 'NVIDIA AI',
+    category: 'Enterprise AI',
+    colors: ['#0b0f0a', '#111a10', '#f7fee7', '#9ca3af', '#76b900'],
+    displayFont: 'Inter, system-ui, sans-serif',
+    bodyFont: 'Inter, system-ui, sans-serif',
+    summary: 'AI infrastructure design with black-green contrast, technical diagrams, and enterprise trust.',
+    prompt: 'Use technical diagrams, GPU/infrastructure metaphors, enterprise proof, dark surfaces, and green as a performance signal.',
+  },
+  {
+    id: 'ibm-carbon',
+    label: 'IBM Carbon',
+    category: 'Enterprise',
+    colors: ['#f4f4f4', '#ffffff', '#161616', '#6f6f6f', '#0f62fe'],
+    displayFont: 'IBM Plex Sans, Inter, system-ui, sans-serif',
+    bodyFont: 'IBM Plex Sans, Inter, system-ui, sans-serif',
+    summary: 'Enterprise grid discipline with Carbon-like spacing, data density, and blue action states.',
+    prompt: 'Use enterprise information architecture, strong grid, data tables, precise forms, accessibility-first states, and IBM Plex-style type rhythm.',
+  },
+  {
+    id: 'material-google',
+    label: 'Google Material',
+    category: 'Platform',
+    colors: ['#f8fafd', '#ffffff', '#1f1f1f', '#5f6368', '#1a73e8'],
+    displayFont: 'Google Sans, Roboto, system-ui, sans-serif',
+    bodyFont: 'Roboto, Inter, system-ui, sans-serif',
+    summary: 'Material-style product UI with clear elevation, system components, and blue primary actions.',
+    prompt: 'Use Material interaction states, clear elevation hierarchy, accessible forms, navigation rails, and practical Google-style system behavior.',
+  },
+  {
+    id: 'microsoft-fluent',
+    label: 'Microsoft Fluent',
+    category: 'Platform',
+    colors: ['#f5f5f5', '#ffffff', '#1b1a19', '#605e5c', '#0078d4'],
+    displayFont: 'Segoe UI, Inter, system-ui, sans-serif',
+    bodyFont: 'Segoe UI, Inter, system-ui, sans-serif',
+    summary: 'Fluent productivity UI with panes, ribbons, command bars, and enterprise blue.',
+    prompt: 'Use productivity panes, command bars, contextual menus, dense tables, accessible focus states, and Fluent-style spacing.',
+  },
+  {
+    id: 'atlassian-team',
+    label: 'Atlassian Team',
+    category: 'Collaboration',
+    colors: ['#f7f8f9', '#ffffff', '#172b4d', '#626f86', '#0c66e4'],
+    displayFont: 'Inter, system-ui, sans-serif',
+    bodyFont: 'Inter, system-ui, sans-serif',
+    summary: 'Team software UI with work items, boards, status colors, and practical hierarchy.',
+    prompt: 'Use work-management flows, boards, issue states, breadcrumbs, compact lists, and sensible team collaboration affordances.',
+  },
+  {
+    id: 'mailchimp-friendly',
+    label: 'Mailchimp Friendly',
+    category: 'Marketing',
+    colors: ['#ffe01b', '#fff8dc', '#241c15', '#6b5d4d', '#007c89'],
+    displayFont: 'Cooper Black, Georgia, serif',
+    bodyFont: 'Inter, system-ui, sans-serif',
+    summary: 'Friendly marketing tooling with yellow identity, playful serif type, and practical campaign UI.',
+    prompt: 'Use campaign-builder patterns, friendly copy, warm yellow accents, helpful empty states, and tasteful illustration only when it supports workflow.',
+  },
+  {
+    id: 'dropbox-work',
+    label: 'Dropbox Work',
+    category: 'Productivity',
+    colors: ['#f7f5f2', '#ffffff', '#1e1919', '#736c64', '#0061ff'],
+    displayFont: 'Sharp Grotesk, Inter, system-ui, sans-serif',
+    bodyFont: 'Atlas Grotesk, Inter, system-ui, sans-serif',
+    summary: 'File/workspace system with crisp blue actions, organized content, and collaboration details.',
+    prompt: 'Use file/workspace metaphors, sharing permissions, previews, folders, collaboration status, and crisp blue primary actions.',
+  },
+  {
+    id: 'wise-fintech',
+    label: 'Wise Fintech',
+    category: 'Fintech',
+    colors: ['#f5f6ef', '#ffffff', '#163300', '#51624a', '#9fe870'],
+    displayFont: 'Inter, system-ui, sans-serif',
+    bodyFont: 'Inter, system-ui, sans-serif',
+    summary: 'Money-transfer clarity with lime action, transparent comparisons, and trust-first copy.',
+    prompt: 'Use transparent pricing/comparison modules, calculator controls, trust cues, lime as primary action, and no vague financial claims.',
+  },
+  {
+    id: 'revolut-finance',
+    label: 'Revolut Finance',
+    category: 'Fintech',
+    colors: ['#f7f7fb', '#ffffff', '#101828', '#667085', '#191cff'],
+    displayFont: 'Inter, system-ui, sans-serif',
+    bodyFont: 'Inter, system-ui, sans-serif',
+    summary: 'Consumer finance app polish with cards, balances, security, and confident blue.',
+    prompt: 'Use banking/card flows, balance states, transaction lists, security cues, and confident app-first product presentation.',
+  },
+  {
+    id: 'coinbase-crypto',
+    label: 'Coinbase Crypto',
+    category: 'Fintech',
+    colors: ['#f7f8fa', '#ffffff', '#0a0b0d', '#5b616e', '#0052ff'],
+    displayFont: 'Inter, system-ui, sans-serif',
+    bodyFont: 'Inter, system-ui, sans-serif',
+    summary: 'Crypto-finance clarity with asset tables, portfolio states, and strict blue trust.',
+    prompt: 'Use asset tables, portfolio cards, price deltas, verification states, compliance copy, and restrained blue action patterns.',
+  },
+  {
+    id: 'duolingo-playful',
+    label: 'Duolingo Playful',
+    category: 'Education',
+    colors: ['#f7fff0', '#ffffff', '#1f2937', '#6b7280', '#58cc02'],
+    displayFont: 'Inter, system-ui, sans-serif',
+    bodyFont: 'Inter, system-ui, sans-serif',
+    summary: 'Learning app energy with progress loops, achievements, and friendly green feedback.',
+    prompt: 'Use lesson/progress loops, streaks, levels, friendly microcopy, and green success states. Keep the interface usable for real learning.',
+  },
+  {
+    id: 'theverge-editorial',
+    label: 'The Verge Editorial',
+    category: 'Editorial',
+    colors: ['#0b0b0f', '#17171f', '#ffffff', '#a1a1aa', '#e2127a'],
+    displayFont: 'Georgia, Times New Roman, serif',
+    bodyFont: 'Inter, system-ui, sans-serif',
+    summary: 'Tech publication energy with bold editorial rhythm, dark contrast, and hot magenta.',
+    prompt: 'Use editorial tech-magazine hierarchy, strong headlines, issue/date metadata, media modules, and hot accent sparingly.',
+  },
+  {
+    id: 'wired-magazine',
+    label: 'WIRED Magazine',
+    category: 'Editorial',
+    colors: ['#f5f2ec', '#ffffff', '#111111', '#555555', '#e31b23'],
+    displayFont: 'Helvetica Neue, Arial Black, system-ui, sans-serif',
+    bodyFont: 'Georgia, Times New Roman, serif',
+    summary: 'High-contrast magazine system with bold covers, red rules, and analytical storytelling.',
+    prompt: 'Use magazine cover/spread discipline, bold headline locks, captions, red rules, and strong article packaging.',
+  },
+  {
+    id: 'runwayml-cinematic',
+    label: 'Runway Cinematic',
+    category: 'Media AI',
+    colors: ['#050505', '#111111', '#f5f5f5', '#8a8a8a', '#d7ff5f'],
+    displayFont: 'Inter, system-ui, sans-serif',
+    bodyFont: 'Inter, system-ui, sans-serif',
+    summary: 'Cinematic AI creation UI with black canvas, timeline controls, and acid highlight.',
+    prompt: 'Use cinematic media creation patterns, timelines, prompt controls, gallery previews, render states, and neon-lime accents with restraint.',
+  },
+  {
+    id: 'huggingface-community',
+    label: 'Hugging Face Community',
+    category: 'AI & LLM',
+    colors: ['#fff8e7', '#ffffff', '#1f2937', '#6b7280', '#ffcc4d'],
+    displayFont: 'Inter, system-ui, sans-serif',
+    bodyFont: 'Inter, system-ui, sans-serif',
+    summary: 'Open AI community UI with model cards, datasets, approachable yellow, and technical metadata.',
+    prompt: 'Use model/dataset cards, community metadata, benchmarks, tabs, tags, and approachable yellow accents without turning technical content into cartoons.',
+  },
+  {
+    id: 'posthog-analytics',
+    label: 'PostHog Analytics',
+    category: 'Analytics',
+    colors: ['#fff7ed', '#ffffff', '#1c1917', '#78716c', '#f97316'],
+    displayFont: 'Inter, system-ui, sans-serif',
+    bodyFont: 'Inter, system-ui, sans-serif',
+    summary: 'Product analytics with event pipelines, charts, feature flags, and orange builder energy.',
+    prompt: 'Use analytics dashboards, event streams, funnels, flags, compact charts, and orange as a product-builder signal.',
+  },
+  {
+    id: 'sentry-ops',
+    label: 'Sentry Ops',
+    category: 'Developer Tools',
+    colors: ['#120f1f', '#1d1830', '#f8fafc', '#a8a3b8', '#6f42c1'],
+    displayFont: 'Inter, system-ui, sans-serif',
+    bodyFont: 'Inter, system-ui, sans-serif',
+    summary: 'Observability UI with issues, traces, releases, severity, and pragmatic dark panels.',
+    prompt: 'Use observability patterns, error grouping, traces, releases, severity badges, and operational workflows with clear escalation paths.',
+  },
+  {
+    id: 'mintlify-docs',
+    label: 'Mintlify Docs',
+    category: 'Developer Docs',
+    colors: ['#f8fafc', '#ffffff', '#0f172a', '#64748b', '#16a34a'],
+    displayFont: 'Inter, system-ui, sans-serif',
+    bodyFont: 'Inter, system-ui, sans-serif',
+    summary: 'Modern developer docs with sidebar IA, code tabs, API examples, and green freshness.',
+    prompt: 'Use docs-native layout, search, sidebar navigation, code tabs, API examples, callouts, and responsive reading surfaces.',
+  },
+  {
+    id: 'resend-email',
+    label: 'Resend Email',
+    category: 'Developer Tools',
+    colors: ['#fafafa', '#ffffff', '#111111', '#737373', '#000000'],
+    displayFont: 'Geist, Inter, system-ui, sans-serif',
+    bodyFont: 'Geist, Inter, system-ui, sans-serif',
+    summary: 'Email infrastructure minimalism with black-white precision, logs, and deliverability states.',
+    prompt: 'Use email developer patterns, logs, DNS records, API snippets, delivery states, and black-white minimal precision.',
+  },
+  {
+    id: 'shadcn-system',
+    label: 'shadcn System',
+    category: 'Component Systems',
+    colors: ['#fafafa', '#ffffff', '#09090b', '#71717a', '#18181b'],
+    displayFont: 'Inter, system-ui, sans-serif',
+    bodyFont: 'Inter, system-ui, sans-serif',
+    summary: 'Composable component library style with neutral tokens, slots, variants, and exact states.',
+    prompt: 'Use component-system thinking, variants, tokens, neutral surfaces, crisp controls, accessible focus rings, and copy that feels implementation-ready.',
+  },
+  {
+    id: 'xiaohongshu-social',
+    label: 'Xiaohongshu Social',
+    category: 'Social & Commerce',
+    colors: ['#ffffff', '#f5f5f5', '#303034', '#8a8a8f', '#ff2442'],
+    displayFont: 'PingFang SC, Inter, system-ui, sans-serif',
+    bodyFont: 'PingFang SC, Inter, system-ui, sans-serif',
+    summary: 'Lifestyle social commerce with white canvas, red engagement states, and image-led feeds.',
+    prompt: 'Use image-led social commerce, tabs, engagement states, creator metadata, clean white surfaces, and red only for active/action states.',
+  },
+]
+
+const DESIGN_DIRECTIONS: Record<DesignDirection, {
+  label: string
+  summary: string
+  colors: string[]
+  displayFont: string
+  bodyFont: string
+  references: string[]
+  prompt: string
+}> = {
+  auto: {
+    label: 'Auto',
+    summary: 'Let Kodo choose based on the brief and selected design system.',
+    colors: ['#6366f1', '#06b6d4', '#111827'],
+    displayFont: 'Inter, system-ui, sans-serif',
+    bodyFont: 'Inter, system-ui, sans-serif',
+    references: ['Brief-led', 'Best fit', '3 directions'],
+    prompt: 'Choose the most fitting direction from the brief and design system. If the brief is vague, show three distinct directions before committing.',
+  },
+  'editorial-monocle': {
+    label: 'Editorial Monocle',
+    summary: 'Print-magazine hierarchy, serif display, borders, and restrained warm accent.',
+    colors: ['#f7f1e7', '#ffffff', '#211f1a', '#b4532d'],
+    displayFont: 'Georgia, Iowan Old Style, serif',
+    bodyFont: 'Inter, system-ui, sans-serif',
+    references: ['Monocle', 'The Financial Times', 'NYT Magazine'],
+    prompt: 'Use magazine-like pacing, serif display type, one warm accent, visible editorial structure, captions, pull quotes, and confident whitespace.',
+  },
+  'modern-minimal': {
+    label: 'Modern Minimal',
+    summary: 'Linear/Vercel-like precision with monochrome surfaces and one clear accent.',
+    colors: ['#ffffff', '#f8fafc', '#111827', '#4f46e5'],
+    displayFont: 'Inter, system-ui, sans-serif',
+    bodyFont: 'Inter, system-ui, sans-serif',
+    references: ['Linear', 'Vercel', 'Notion 2024'],
+    prompt: 'Use precise software-native spacing, hairline borders, minimal chrome, compact UI, and one saturated accent for action/state only.',
+  },
+  'warm-soft': {
+    label: 'Warm Soft',
+    summary: 'Cream surfaces, gentle radii, serif-led warmth, and human product language.',
+    colors: ['#fbf4ea', '#fffaf3', '#271f1b', '#c75f3f'],
+    displayFont: 'Georgia, Iowan Old Style, serif',
+    bodyFont: 'system-ui, -apple-system, Segoe UI, sans-serif',
+    references: ['Stripe pre-2020', 'Headspace', 'Claude'],
+    prompt: 'Use warm cream surfaces, soft corners, friendly editorial rhythm, gentle accents, and product imagery or honest placeholders.',
+  },
+  'tech-utility': {
+    label: 'Tech Utility',
+    summary: 'Dense engineering UI with tables, states, code, charts, and tabular numerics.',
+    colors: ['#f8fafc', '#ffffff', '#111827', '#16a34a'],
+    displayFont: 'Inter, system-ui, sans-serif',
+    bodyFont: 'ui-monospace, SFMono-Regular, Menlo, monospace',
+    references: ['GitHub', 'Supabase', 'Sentry'],
+    prompt: 'Use dense but organized information, tabular numerics, status pills, code/terminal blocks, tight controls, and utility-first hierarchy.',
+  },
+  'brutalist-experimental': {
+    label: 'Brutalist Experimental',
+    summary: 'Hard borders, oversized type, asymmetric grid, and deliberate edge.',
+    colors: ['#fffdf2', '#ffffff', '#111111', '#ff3b00'],
+    displayFont: 'Arial Black, Impact, system-ui, sans-serif',
+    bodyFont: 'ui-monospace, SFMono-Regular, Menlo, monospace',
+    references: ['Brutalist web', 'MSCHF', 'Are.na'],
+    prompt: 'Use strong borders, minimal radius, oversized type, asymmetric layout, visible grid, underlined links, and almost no shadows.',
+  },
+}
+
+const DESIGN_SURFACES: Record<DesignSurface, string> = {
+  auto: 'Infer the best surface from the user brief.',
+  'saas-landing': 'SaaS/product landing page with product-first hero, features, proof, pricing or CTA.',
+  dashboard: 'Analytics or admin dashboard with high information density, filters, charts, tables, and states.',
+  pricing: 'Standalone pricing and plan comparison with billing toggles, proof, FAQs, and conversion focus.',
+  docs: 'Documentation page with navigation, search, code samples, content hierarchy, and developer trust.',
+  blog: 'Editorial article or publication layout with reading rhythm, pull quotes, media, and author metadata.',
+  commerce: 'Commerce experience with product grid/detail, filters, cart states, trust signals, and checkout cues.',
+  portfolio: 'Portfolio or personal site with work samples, credibility, case studies, and contact path.',
+  'mobile-onboarding': 'Mobile onboarding flow with multiple screens, progress, CTAs, and realistic app state.',
+  email: 'Email marketing artifact with table-safe mental model, single-column hierarchy, hero, CTA, and footer.',
+  'social-carousel': 'Social carousel with multiple square cards, connected narrative, and platform-ready composition.',
+  poster: 'Poster or campaign visual with strong typographic lockup and print-ready composition.',
+  'admin-tool': 'Operational tool UI with side navigation, dense lists, workflows, empty/error/loading states.',
+}
+
+const FIDELITY_PROMPTS: Record<DesignFidelity, string> = {
+  wireframe: 'Work as a wireframe/structure pass: grayscale, labeled blocks, honest placeholders, clear flow, minimal decoration, fast feedback.',
+  'high-fidelity': 'Work as a high-fidelity design pass: polished type, layout, real copy, responsive states, accessible contrast, and production-quality visual decisions.',
+  production: 'Work as a production-polish pass: implementation-ready HTML/CSS/JS, precise spacing, interaction states, performance-conscious motion, and a final QA pass.',
+}
+
+const MOTION_PROMPTS: Record<DesignMotion, string> = {
+  none: 'Use no decorative animation; include only necessary UI state transitions.',
+  subtle: 'Use subtle motion for hover, focus, reveal, and state changes; keep it restrained and accessible.',
+  expressive: 'Use expressive micro-interactions and section transitions that reinforce the product story.',
+  cinematic: 'Use staged, timeline-aware motion and replay controls when appropriate; maintain readability and reduce-motion fallback.',
+}
+
+const DEVICE_FRAME_PROMPTS: Record<DeviceFrame, string> = {
+  auto: 'Use a device frame only when it improves the artifact.',
+  none: 'Do not wrap the design in a device frame.',
+  'iphone-15-pro': 'For mobile previews, show an iPhone 15 Pro-style frame with Dynamic Island, status bar, rounded screen, and home indicator.',
+  'android-pixel': 'For mobile previews, show an Android Pixel-style frame with punch-hole camera and Android navigation affordance.',
+  'ipad-pro': 'For tablet previews, show an iPad Pro-style frame and tablet-appropriate layout density.',
+  macbook: 'For desktop app previews, show a MacBook-style frame only if showcasing product screens.',
+  'browser-chrome': 'For website previews, use a browser chrome frame only when presenting a screenshot-style showcase.',
+}
+
+function normalizeDesignMode(value: unknown): DesignMode {
+  return value === 'app' || value === 'deck' || value === 'motion' || value === 'infographic' || value === 'critique'
+    ? value
+    : 'web'
+}
+
+export function buildKodoDesignModePrompt(mode: DesignMode): string {
+  const def = DESIGN_MODES[mode]
+  return [
+    `Kodo Design Mode: ${def.label}`,
+    `Intent: ${def.intent}.`,
+    `Expected deliverable: ${def.deliverable}.`,
+    '',
+    'Universal creative rules:',
+    '- Work like a senior product designer using HTML as the production medium.',
+    '- Start from existing context: uploaded screenshots, code, brand rules, product facts, and user constraints outrank generic intuition.',
+    '- If a specific brand, product, person, technology, release, or current fact is mentioned, use available web/search tools before making factual claims.',
+    '- For branded work, use a core asset protocol: logo, product images, UI screenshots, colors, fonts, and source links. If assets are missing, state assumptions inside the artifact and design honest placeholders instead of fake product silhouettes.',
+    '- If the brief is vague, generate three meaningfully different design directions in the artifact, each with a short rationale and a clear recommendation.',
+    '- Avoid AI-looking defaults: purple-blue hero gradients, emoji-as-icons, fake glass cards everywhere, generic SaaS blobs, random orbit decorations, lorem ipsum, stock-like dark blur backgrounds, and CSS-only fake product renders.',
+    '- Use real content, concrete product-specific details, responsive constraints, accessible contrast, keyboard/focus states, and clear empty/error/loading states where relevant.',
+    '- Every generated artifact must look deliberate enough to present to a design lead without apologizing for AI output.',
+    '',
+    'Mode-specific rules:',
+    def.prompt,
+  ].join('\n')
 }
 
 export interface DesignFile {
@@ -93,6 +855,7 @@ interface PersistedDesignStudioState {
   history: HistoryEntry[]
   inlineComments: InlineComment[]
   projectContext: string
+  designMode: DesignMode
   shareAccess: ShareAccess
   device: DeviceMode
   viewMode: ViewMode
@@ -114,6 +877,15 @@ export interface DesignFileTreeNode {
 
 interface DesignSystemConfig {
   brandName: string
+  presetId: string
+  fidelity: DesignFidelity
+  direction: DesignDirection
+  surface: DesignSurface
+  motion: DesignMotion
+  deviceFrame: DeviceFrame
+  audience: string
+  scale: string
+  brandAssets: string
   primaryColor: string
   secondaryColor: string
   accentColor: string
@@ -134,6 +906,7 @@ interface DesignProject {
   history: HistoryEntry[]
   inlineComments: InlineComment[]
   projectContext: string
+  designMode: DesignMode
   shareAccess: ShareAccess
   device: DeviceMode
   viewMode: ViewMode
@@ -371,6 +1144,7 @@ function loadPersistedDesignStudioState(): PersistedDesignStudioState | null {
     const shareAccess: ShareAccess = parsed.shareAccess === 'view' || parsed.shareAccess === 'comment'
       ? parsed.shareAccess
       : 'edit'
+    const designMode = normalizeDesignMode(parsed.designMode)
     const projectContext = typeof parsed.projectContext === 'string' ? parsed.projectContext : ''
     const expandedFolders = (() => {
       if (!parsed.expandedFolders || typeof parsed.expandedFolders !== 'object') return {}
@@ -388,6 +1162,7 @@ function loadPersistedDesignStudioState(): PersistedDesignStudioState | null {
       history: history.slice(-MAX_PERSISTED_HISTORY),
       inlineComments,
       projectContext,
+      designMode,
       shareAccess,
       device,
       viewMode,
@@ -767,12 +1542,13 @@ function applyToolStartEventToDesignFiles(
 
 
 const STARTERS = [
-  { icon: 'LAND', label: 'Landing page', prompt: 'Build a stunning SaaS landing page with hero, features grid, pricing, and CTA — modern dark theme' },
-  { icon: 'DASH', label: 'Dashboard', prompt: 'Create a responsive admin dashboard with sidebar nav, KPI cards, charts (use SVG), and dark mode' },
-  { icon: 'GRID', label: 'Product grid', prompt: 'Design a product card grid with hover animations, filters, and cart — e-commerce style' },
-  { icon: 'PORT', label: 'Portfolio', prompt: 'Build a developer portfolio page with glassmorphism, animated hero, project cards, and contact form' },
-  { icon: 'PRICE', label: 'Pricing table', prompt: 'Create an animated pricing table with 3 tiers, feature comparison, toggle, highlighted plan' },
-  { icon: 'BLOG', label: 'Blog', prompt: 'Design a minimal blog layout with header, article cards, sidebar, and dark/light mode toggle' },
+  { icon: 'DIR', label: '3 directions', prompt: 'Create three distinct design directions for a modern AI product homepage. Show them side by side with rationale, tradeoffs, and a recommendation.' },
+  { icon: 'DASH', label: 'Dashboard', prompt: 'Create a dense but calm analytics dashboard for an operations team with real metrics, filters, table states, SVG charts, alerts, and keyboard-focusable controls.' },
+  { icon: 'APP', label: 'App prototype', prompt: 'Design a clickable habit tracker app prototype with 6 screens, realistic data, navigation state, charts, streaks, settings, and polished mobile interactions.' },
+  { icon: 'DECK', label: 'Pitch deck', prompt: 'Create a 10-slide product pitch deck for an AI workflow tool with varied slide layouts, speaker notes, data slides, and a strong visual system.' },
+  { icon: 'MOVE', label: 'Motion piece', prompt: 'Build a 20-second HTML product launch animation with scene phases, replay controls, readable text beats, and recording-ready layout.' },
+  { icon: 'INFO', label: 'Infographic', prompt: 'Create a print-quality infographic explaining how autonomous agents plan, use tools, verify results, and hand off artifacts.' },
+  { icon: 'REV', label: 'Critique', prompt: 'Review the current design with a scored critique across hierarchy, craft, usability, accessibility, originality, and provide a concrete improved version.' },
 ]
 
 // ─── Project Storage ─────────────────────────────────────────────────────────
@@ -866,6 +1642,7 @@ function loadProjectFromStorage(id: string): DesignProject | null {
       history,
       inlineComments: Array.isArray(parsed.inlineComments) ? parsed.inlineComments : [],
       projectContext: typeof parsed.projectContext === 'string' ? parsed.projectContext : '',
+      designMode: normalizeDesignMode(parsed.designMode),
       shareAccess: parsed.shareAccess === 'view' || parsed.shareAccess === 'comment' ? parsed.shareAccess : 'edit',
       device: parsed.device === 'tablet' || parsed.device === 'mobile' ? parsed.device : 'desktop',
       viewMode: parsed.viewMode === 'code' || parsed.viewMode === 'split' || parsed.viewMode === 'editor' ? parsed.viewMode : 'preview',
@@ -906,7 +1683,7 @@ function blankProject(name = 'New Design'): DesignProject {
     id: genId(), name, createdAt: Date.now(), updatedAt: Date.now(),
     messages: [], files: [], selectedFileId: null, history: [],
     inlineComments: [], projectContext: '', shareAccess: 'edit',
-    device: 'desktop', viewMode: 'preview',
+    designMode: 'web', device: 'desktop', viewMode: 'preview',
     fileTreeW: 200, chatW: 340, splitCodeW: 50, fileTreeOpen: true, expandedFolders: {},
   }
 }
@@ -925,6 +1702,7 @@ function migrateOldDesignData(): void {
     project.history = persisted.history
     project.inlineComments = persisted.inlineComments
     project.projectContext = persisted.projectContext
+    project.designMode = persisted.designMode
     project.shareAccess = persisted.shareAccess
     saveProjectToStorage(project)
     localStorage.removeItem('kodo.design-studio.state.v1')
@@ -936,7 +1714,11 @@ function migrateOldDesignData(): void {
 const DS_DESIGN_SYSTEM_KEY = 'kodo.ds.designSystem.v1'
 
 const DEFAULT_DESIGN_SYSTEM: DesignSystemConfig = {
-  brandName: '', primaryColor: '#6366f1', secondaryColor: '#8b5cf6',
+  brandName: '', presetId: 'neutral-modern',
+  fidelity: 'high-fidelity', direction: 'auto', surface: 'auto',
+  motion: 'subtle', deviceFrame: 'auto',
+  audience: '', scale: '', brandAssets: '',
+  primaryColor: '#6366f1', secondaryColor: '#8b5cf6',
   accentColor: '#06b6d4', fontFamily: 'Inter, system-ui, sans-serif',
   borderRadius: 'md', style: 'minimal', customRules: '',
 }
@@ -945,7 +1727,16 @@ function loadDesignSystem(): DesignSystemConfig {
   try {
     const raw = localStorage.getItem(DS_DESIGN_SYSTEM_KEY)
     if (!raw) return { ...DEFAULT_DESIGN_SYSTEM }
-    return { ...DEFAULT_DESIGN_SYSTEM, ...JSON.parse(raw) }
+    const parsed = { ...DEFAULT_DESIGN_SYSTEM, ...JSON.parse(raw) } as DesignSystemConfig
+    return {
+      ...parsed,
+      presetId: DESIGN_SYSTEM_PRESETS.some((preset) => preset.id === parsed.presetId) ? parsed.presetId : DEFAULT_DESIGN_SYSTEM.presetId,
+      fidelity: parsed.fidelity === 'wireframe' || parsed.fidelity === 'production' ? parsed.fidelity : 'high-fidelity',
+      direction: Object.keys(DESIGN_DIRECTIONS).includes(parsed.direction) ? parsed.direction : 'auto',
+      surface: Object.keys(DESIGN_SURFACES).includes(parsed.surface) ? parsed.surface : 'auto',
+      motion: parsed.motion === 'none' || parsed.motion === 'expressive' || parsed.motion === 'cinematic' ? parsed.motion : 'subtle',
+      deviceFrame: Object.keys(DEVICE_FRAME_PROMPTS).includes(parsed.deviceFrame) ? parsed.deviceFrame : 'auto',
+    }
   } catch { return { ...DEFAULT_DESIGN_SYSTEM } }
 }
 
@@ -953,10 +1744,22 @@ function saveDesignSystem(ds: DesignSystemConfig): void {
   try { localStorage.setItem(DS_DESIGN_SYSTEM_KEY, JSON.stringify(ds)) } catch { /* */ }
 }
 
-function buildDesignSystemPrompt(ds: DesignSystemConfig): string {
-  if (!ds.brandName && !ds.customRules && ds.primaryColor === DEFAULT_DESIGN_SYSTEM.primaryColor) return ''
-  const lines: string[] = ['Design System:']
+export function buildDesignSystemPrompt(ds: DesignSystemConfig): string {
+  const preset = DESIGN_SYSTEM_PRESETS.find((row) => row.id === ds.presetId) || DESIGN_SYSTEM_PRESETS[0]
+  const direction = DESIGN_DIRECTIONS[ds.direction] || DESIGN_DIRECTIONS.auto
+  const lines: string[] = ['Kodo Creative Brief and Design System:']
+  lines.push(`- Fidelity: ${ds.fidelity} — ${FIDELITY_PROMPTS[ds.fidelity]}`)
+  lines.push(`- Surface: ${ds.surface} — ${DESIGN_SURFACES[ds.surface]}`)
+  lines.push(`- Motion: ${ds.motion} — ${MOTION_PROMPTS[ds.motion]}`)
+  lines.push(`- Device frame: ${ds.deviceFrame} — ${DEVICE_FRAME_PROMPTS[ds.deviceFrame]}`)
+  lines.push(`- Design system preset: ${preset.label} (${preset.category}) — ${preset.summary}`)
+  lines.push(`- Preset rules: ${preset.prompt}`)
+  lines.push(`- Visual direction: ${direction.label} — ${direction.summary}`)
+  lines.push(`- Direction rules: ${direction.prompt}`)
   if (ds.brandName) lines.push(`- Brand: ${ds.brandName}`)
+  if (ds.audience) lines.push(`- Audience: ${ds.audience}`)
+  if (ds.scale) lines.push(`- Scope/scale: ${ds.scale}`)
+  if (ds.brandAssets) lines.push(`- Brand/context assets available: ${ds.brandAssets}`)
   lines.push(`- Primary color: ${ds.primaryColor}`)
   lines.push(`- Secondary color: ${ds.secondaryColor}`)
   lines.push(`- Accent color: ${ds.accentColor}`)
@@ -965,12 +1768,24 @@ function buildDesignSystemPrompt(ds: DesignSystemConfig): string {
   lines.push(`- Border radius: ${radii[ds.borderRadius]}`)
   lines.push(`- Visual style: ${ds.style}`)
   if (ds.customRules) lines.push(`- Rules: ${ds.customRules}`)
+  lines.push('- Discovery discipline: if required context is missing, ask a compact batch of questions or render three directions instead of guessing one generic answer.')
   return lines.join('\n')
 }
 
 // ─── Sub-components ──────────────────────────────────────────────────────────
 
-function DragHandle({ onDrag, handleId }: { onDrag: (delta: number) => void; handleId?: string }) {
+function buildDesignSystemPresetPatch(presetId: string): Partial<DesignSystemConfig> {
+  const preset = DESIGN_SYSTEM_PRESETS.find((row) => row.id === presetId) || DESIGN_SYSTEM_PRESETS[0]
+  return {
+    presetId: preset.id,
+    primaryColor: preset.colors[4] || DEFAULT_DESIGN_SYSTEM.primaryColor,
+    secondaryColor: preset.colors[2] || DEFAULT_DESIGN_SYSTEM.secondaryColor,
+    accentColor: preset.colors[4] || DEFAULT_DESIGN_SYSTEM.accentColor,
+    fontFamily: preset.bodyFont,
+  }
+}
+
+function DragHandle({ onDrag, handleId, order }: { onDrag: (delta: number) => void; handleId?: string; order?: number }) {
   const dragging = useRef(false)
   const last = useRef(0)
 
@@ -999,6 +1814,7 @@ function DragHandle({ onDrag, handleId }: { onDrag: (delta: number) => void; han
         width: 5, flexShrink: 0, cursor: 'col-resize',
         background: 'var(--border)', transition: 'background 120ms',
         zIndex: 1,
+        order,
       }}
       onMouseEnter={e => { (e.target as HTMLDivElement).style.background = 'var(--accent)' }}
       onMouseLeave={e => { (e.target as HTMLDivElement).style.background = 'var(--border)' }}
@@ -1016,7 +1832,7 @@ interface ProjectPickerProps {
   onClose: () => void
 }
 
-function ProjectPicker({ projects, onOpen, onDelete, onCreate, onClose }: ProjectPickerProps) {
+export function ProjectPicker({ projects, onOpen, onDelete, onCreate, onClose }: ProjectPickerProps) {
   const [hoveredId, setHoveredId] = useState<string | null>(null)
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null)
 
@@ -1174,6 +1990,271 @@ function ProjectPicker({ projects, onOpen, onDelete, onCreate, onClose }: Projec
 
 // ─── Main component ──────────────────────────────────────────────────────────
 
+function OpenDesignProjectPicker({ projects, onOpen, onDelete, onCreate, onClose }: {
+  projects: ProjectSummary[]
+  onOpen: (id: string) => void
+  onDelete: (id: string) => void
+  onCreate: (draft?: ProjectCreateDraft) => void
+  onClose: () => void
+}) {
+  const [hoveredId, setHoveredId] = useState<string | null>(null)
+  const [confirmDelete, setConfirmDelete] = useState<string | null>(null)
+  const [mode, setMode] = useState<DesignMode>('web')
+  const [name, setName] = useState('')
+  const [presetId, setPresetId] = useState(DEFAULT_DESIGN_SYSTEM.presetId)
+  const [fidelity, setFidelity] = useState<DesignFidelity>('high-fidelity')
+  const selectedPreset = DESIGN_SYSTEM_PRESETS.find((preset) => preset.id === presetId) || DESIGN_SYSTEM_PRESETS[0]
+  const featuredPresets = DESIGN_SYSTEM_PRESETS.slice(0, 12)
+  const createLabel = projects.length === 0 ? 'Create your first design' : 'Create'
+  const createDraft = () => onCreate({ name: name.trim() || undefined, mode, presetId, fidelity })
+
+  return (
+    <div style={{
+      position: 'fixed',
+      inset: 0,
+      zIndex: 1001,
+      background: 'var(--bg-0)',
+      color: 'var(--text-0)',
+      display: 'flex',
+      flexDirection: 'column',
+    }}>
+      <div style={{
+        height: 52,
+        display: 'flex',
+        alignItems: 'center',
+        gap: 12,
+        padding: '0 18px',
+        borderBottom: '1px solid var(--border)',
+        background: 'var(--bg-1)',
+        flexShrink: 0,
+      }}>
+        <button type="button" onClick={onClose}
+          style={{ display: 'flex', alignItems: 'center', gap: 6, background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-2)', fontSize: 12, padding: '4px 8px', borderRadius: 6 }}>
+          <ArrowLeft size={14} /> Kodo
+        </button>
+        <div style={{ width: 1, height: 18, background: 'var(--border)' }} />
+        <div style={{ width: 22, height: 22, borderRadius: 7, border: '1px solid var(--border-bright)', display: 'grid', placeItems: 'center', background: 'var(--bg-2)' }}>
+          <Wand2 size={14} color="var(--accent)" />
+        </div>
+        <div>
+          <div style={{ fontSize: 14, fontWeight: 700, lineHeight: 1.1 }}>Kodo Design</div>
+          <div style={{ fontSize: 10, color: 'var(--text-2)', fontFamily: 'var(--font-mono)' }}>Research Preview</div>
+        </div>
+        <div style={{ flex: 1 }} />
+        <button type="button" onClick={createDraft}
+          style={{ display: 'flex', alignItems: 'center', gap: 6, background: 'var(--accent)', border: 'none', borderRadius: 8, color: '#fff', fontSize: 12, fontWeight: 700, padding: '7px 16px', cursor: 'pointer' }}>
+          <Plus size={14} /> New Design
+        </button>
+      </div>
+
+      <div style={{ flex: 1, minHeight: 0, display: 'flex', overflow: 'hidden' }}>
+        <aside style={{
+          width: 258,
+          flexShrink: 0,
+          borderRight: '1px solid var(--border)',
+          background: 'var(--bg-1)',
+          display: 'flex',
+          flexDirection: 'column',
+        }}>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 2, padding: '10px 10px 0', borderBottom: '1px solid var(--border)' }}>
+            {(Object.keys(DESIGN_MODES) as DesignMode[]).map((entry) => (
+              <button
+                key={entry}
+                type="button"
+                onClick={() => setMode(entry)}
+                style={{
+                  padding: '8px 6px',
+                  border: 'none',
+                  borderBottom: mode === entry ? '2px solid var(--accent)' : '2px solid transparent',
+                  background: mode === entry ? 'var(--bg-2)' : 'transparent',
+                  color: mode === entry ? 'var(--text-0)' : 'var(--text-2)',
+                  borderRadius: '6px 6px 0 0',
+                  fontSize: 11,
+                  fontWeight: 600,
+                  cursor: 'pointer',
+                }}
+              >
+                {DESIGN_MODES[entry].label.replace(' Design', '')}
+              </button>
+            ))}
+          </div>
+
+          <div style={{ padding: 14, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 14 }}>
+            <div>
+              <div style={{ fontSize: 10, color: 'var(--text-2)', fontFamily: 'var(--font-mono)', marginBottom: 6 }}>NEW {DESIGN_MODES[mode].shortLabel}</div>
+              <input
+                value={name}
+                onChange={(event) => setName(event.target.value)}
+                placeholder="Project name"
+                style={{ width: '100%', boxSizing: 'border-box', background: 'var(--bg-2)', border: '1px solid var(--border)', borderRadius: 7, color: 'var(--text-0)', padding: '8px 9px', fontSize: 12, outline: 'none' }}
+              />
+            </div>
+
+            <div>
+              <div style={{ fontSize: 10, color: 'var(--text-2)', fontFamily: 'var(--font-mono)', marginBottom: 6 }}>DESIGN SYSTEM</div>
+              <select
+                value={presetId}
+                onChange={(event) => setPresetId(event.target.value)}
+                style={{ width: '100%', background: 'var(--bg-2)', border: '1px solid var(--border)', borderRadius: 7, color: 'var(--text-0)', fontSize: 11, padding: '7px 8px', outline: 'none' }}
+              >
+                {DESIGN_SYSTEM_PRESETS.map((preset) => (
+                  <option key={preset.id} value={preset.id}>{preset.category} / {preset.label}</option>
+                ))}
+              </select>
+              <div style={{ display: 'flex', gap: 4, marginTop: 7 }}>
+                {selectedPreset.colors.map((color) => (
+                  <span key={color} title={color} style={{ height: 16, flex: 1, borderRadius: 4, background: color, border: '1px solid var(--border)' }} />
+                ))}
+              </div>
+              <div style={{ color: 'var(--text-2)', fontSize: 10, lineHeight: 1.45, marginTop: 6 }}>{selectedPreset.summary}</div>
+            </div>
+
+            <div>
+              <div style={{ fontSize: 10, color: 'var(--text-2)', fontFamily: 'var(--font-mono)', marginBottom: 6 }}>FIDELITY</div>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
+                {(['wireframe', 'high-fidelity'] as DesignFidelity[]).map((entry) => (
+                  <button
+                    key={entry}
+                    type="button"
+                    onClick={() => setFidelity(entry)}
+                    aria-pressed={fidelity === entry}
+                    style={{
+                      border: `1px solid ${fidelity === entry ? 'var(--accent)' : 'var(--border)'}`,
+                      background: fidelity === entry ? 'var(--accent-dim)' : 'var(--bg-2)',
+                      color: fidelity === entry ? 'var(--accent)' : 'var(--text-1)',
+                      borderRadius: 8,
+                      padding: 8,
+                      minHeight: 74,
+                      cursor: 'pointer',
+                      textAlign: 'center',
+                      display: 'flex',
+                      flexDirection: 'column',
+                      justifyContent: 'center',
+                      gap: 6,
+                    }}
+                  >
+                    <span style={{
+                      height: 34,
+                      borderRadius: 5,
+                      border: '1px solid var(--border)',
+                      display: 'grid',
+                      gridTemplateColumns: entry === 'wireframe' ? '1fr 1fr' : '1fr 1fr 1fr',
+                      gap: 4,
+                      padding: 5,
+                      background: 'var(--bg-1)',
+                    }}>
+                      <span style={{ borderRadius: 3, background: entry === 'wireframe' ? 'var(--bg-3)' : 'var(--accent)' }} />
+                      <span style={{ borderRadius: 3, background: 'var(--bg-3)' }} />
+                      {entry === 'high-fidelity' && <span style={{ borderRadius: 3, background: 'var(--text-2)' }} />}
+                    </span>
+                    <span style={{ fontSize: 10, fontWeight: 700 }}>{entry === 'wireframe' ? 'Wireframe' : 'High fidelity'}</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <button type="button" onClick={createDraft}
+              style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 7, width: '100%', padding: '9px 12px', border: 'none', borderRadius: 8, background: 'var(--accent)', color: '#fff', fontSize: 12, fontWeight: 700, cursor: 'pointer' }}>
+              <Plus size={13} /> {createLabel}
+            </button>
+            <div style={{ fontSize: 10, color: 'var(--text-2)', textAlign: 'center' }}>Local-first. Your projects stay in this browser.</div>
+          </div>
+        </aside>
+
+        <main style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', background: 'var(--bg-0)' }}>
+          <div style={{ height: 45, borderBottom: '1px solid var(--border)', display: 'flex', alignItems: 'center', padding: '0 22px', gap: 20 }}>
+            {['Designs', 'Examples', 'Design systems'].map((tab, index) => (
+              <button key={tab} type="button"
+                style={{ background: 'none', border: 'none', color: index === 0 ? 'var(--text-0)' : 'var(--text-2)', fontSize: 12, fontWeight: index === 0 ? 700 : 500, cursor: 'pointer' }}>
+                {tab}
+              </button>
+            ))}
+            <div style={{ flex: 1 }} />
+            <input
+              placeholder="Search..."
+              style={{ width: 220, background: 'var(--bg-1)', border: '1px solid var(--border)', borderRadius: 7, color: 'var(--text-1)', padding: '7px 9px', fontSize: 12, outline: 'none' }}
+            />
+          </div>
+
+          <div style={{ flex: 1, overflow: 'auto', padding: '24px 22px' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 18 }}>
+              <span style={{ padding: '5px 10px', borderRadius: 999, background: 'var(--text-0)', color: 'var(--bg-0)', fontSize: 11, fontWeight: 700 }}>Recent</span>
+              <span style={{ padding: '5px 10px', borderRadius: 999, border: '1px solid var(--border)', color: 'var(--text-2)', fontSize: 11 }}>Your designs</span>
+            </div>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(190px, 1fr))', gap: 14, marginBottom: 28 }}>
+              <button type="button" onClick={createDraft}
+                style={{ border: '1px dashed var(--border-bright)', background: 'var(--bg-1)', borderRadius: 8, minHeight: 132, color: 'var(--text-2)', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', flexDirection: 'column', gap: 8 }}>
+                <Plus size={20} />
+                <span style={{ fontSize: 12, fontWeight: 700 }}>New sketch</span>
+              </button>
+              {projects.map(p => (
+                <div
+                  key={p.id}
+                  style={{ borderRadius: 8, border: `1px solid ${hoveredId === p.id ? 'var(--accent)' : 'var(--border)'}`, background: 'var(--bg-1)', overflow: 'hidden', cursor: 'pointer', boxShadow: hoveredId === p.id ? '0 12px 40px rgba(0,0,0,0.22)' : 'none' }}
+                  onMouseEnter={() => setHoveredId(p.id)}
+                  onMouseLeave={() => setHoveredId(null)}
+                  onClick={() => onOpen(p.id)}
+                >
+                  <div style={{ height: 88, background: 'linear-gradient(135deg, var(--bg-2), var(--bg-3))', display: 'grid', placeItems: 'center' }}>
+                    <div style={{ width: 38, height: 42, borderRadius: 5, background: 'var(--bg-0)', border: '1px solid var(--border)', boxShadow: '0 8px 24px rgba(0,0,0,0.22)' }} />
+                  </div>
+                  <div style={{ padding: '9px 10px' }}>
+                    <div style={{ fontWeight: 700, fontSize: 12, color: 'var(--text-0)', marginBottom: 3, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{p.name}</div>
+                    <div style={{ fontSize: 10, color: 'var(--text-2)' }}>Updated {new Date(p.updatedAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}</div>
+                    <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 7 }}>
+                      {confirmDelete === p.id ? (
+                        <>
+                          <button type="button" onClick={e => { e.stopPropagation(); onDelete(p.id); setConfirmDelete(null) }} style={{ fontSize: 10, padding: '2px 6px', borderRadius: 4, border: 'none', background: '#ff4040', color: '#fff', cursor: 'pointer' }}>Delete</button>
+                          <button type="button" onClick={e => { e.stopPropagation(); setConfirmDelete(null) }} style={{ fontSize: 10, padding: '2px 6px', borderRadius: 4, border: 'none', background: 'transparent', color: 'var(--text-2)', cursor: 'pointer' }}>Cancel</button>
+                        </>
+                      ) : (
+                        <button type="button" onClick={e => { e.stopPropagation(); setConfirmDelete(p.id) }} style={{ background: 'transparent', border: 'none', color: 'var(--text-2)', cursor: 'pointer', display: 'flex', padding: 2 }} title="Delete design">
+                          <Trash2 size={12} />
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            <div style={{ fontSize: 10, letterSpacing: '0.1em', color: 'var(--text-2)', fontFamily: 'var(--font-mono)', marginBottom: 10 }}>DESIGN SYSTEMS</div>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(210px, 1fr))', gap: 10 }}>
+              {featuredPresets.map((preset) => (
+                <button
+                  key={preset.id}
+                  type="button"
+                  onClick={() => setPresetId(preset.id)}
+                  style={{
+                    textAlign: 'left',
+                    border: `1px solid ${presetId === preset.id ? 'var(--accent)' : 'var(--border)'}`,
+                    background: presetId === preset.id ? 'var(--accent-dim)' : 'var(--bg-1)',
+                    borderRadius: 8,
+                    padding: 10,
+                    color: 'var(--text-1)',
+                    cursor: 'pointer',
+                    display: 'flex',
+                    gap: 9,
+                    alignItems: 'center',
+                  }}
+                >
+                  <span style={{ width: 34, height: 34, display: 'grid', gridTemplateColumns: '1fr 1fr', borderRadius: 7, overflow: 'hidden', border: '1px solid var(--border)', flexShrink: 0 }}>
+                    {preset.colors.slice(0, 4).map((color) => <span key={color} style={{ background: color }} />)}
+                  </span>
+                  <span style={{ minWidth: 0 }}>
+                    <span style={{ display: 'block', fontSize: 12, fontWeight: 700, color: 'var(--text-0)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{preset.label}</span>
+                    <span style={{ display: 'block', fontSize: 10, color: 'var(--text-2)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{preset.category}</span>
+                  </span>
+                </button>
+              ))}
+            </div>
+          </div>
+        </main>
+      </div>
+    </div>
+  )
+}
+
 type Props = { onClose: () => void }
 
 export function DesignStudio({ onClose }: Props) {
@@ -1205,6 +2286,7 @@ export function DesignStudio({ onClose }: Props) {
   const [inlineComments, setInlineComments] = useState<InlineComment[]>([])
   const [commentMode, setCommentMode] = useState(false)
   const [projectContext, setProjectContext] = useState('')
+  const [designMode, setDesignMode] = useState<DesignMode>('web')
   const [shareAccess, setShareAccess] = useState<ShareAccess>('edit')
   const [hydrated, setHydrated] = useState(false)
   const [activeProjectId, setActiveProjectId] = useState<string | null>(null)
@@ -1237,6 +2319,7 @@ export function DesignStudio({ onClose }: Props) {
     setHistory(project.history)
     setInlineComments(project.inlineComments)
     setProjectContext(project.projectContext)
+    setDesignMode(project.designMode)
     setShareAccess(project.shareAccess)
     setDevice(project.device)
     setViewMode(project.viewMode)
@@ -1258,10 +2341,22 @@ export function DesignStudio({ onClose }: Props) {
     setLeftPanelTab('files')
   }, [applyProject])
 
-  const handleCreateProject = useCallback(() => {
-    const project = blankProject()
+  const handleCreateProject = useCallback((draft?: ProjectCreateDraft) => {
+    const project = blankProject(draft?.name || 'New Design')
+    if (draft?.mode) project.designMode = draft.mode
     saveProjectToStorage(project)
     applyProject(project)
+    if (draft?.mode) setDesignMode(draft.mode)
+    if (draft?.presetId || draft?.fidelity) {
+      const base = loadDesignSystem()
+      const next: DesignSystemConfig = {
+        ...base,
+        ...(draft?.presetId ? buildDesignSystemPresetPatch(draft.presetId) : {}),
+        fidelity: draft?.fidelity || base.fidelity,
+      }
+      setDesignSystem(next)
+      saveDesignSystem(next)
+    }
     setAllProjects(listProjectSummaries())
     setLeftPanelTab('files')
   }, [applyProject])
@@ -1275,6 +2370,7 @@ export function DesignStudio({ onClose }: Props) {
       setProjectCreatedAt(Date.now())
       setMessages([]); setFiles([]); setSelectedFileId(null)
       setHistory([]); setInlineComments([]); setProjectContext('')
+      setDesignMode('web')
       setPreviewHtml(null); setPlanItems([]); setError(null)
     }
   }, [activeProjectId])
@@ -1327,13 +2423,13 @@ export function DesignStudio({ onClose }: Props) {
       id: activeProjectId, name: projectName,
       createdAt: projectCreatedAt, updatedAt: Date.now(),
       messages, files, selectedFileId, history, inlineComments,
-      projectContext, shareAccess, device, viewMode,
+      projectContext, designMode, shareAccess, device, viewMode,
       fileTreeW, chatW, splitCodeW, fileTreeOpen, expandedFolders,
     }
     saveProjectToStorage(project)
     setAllProjects(listProjectSummaries())
   }, [hydrated, activeProjectId, projectName, projectCreatedAt, messages, files, selectedFileId,
-      history, inlineComments, projectContext, shareAccess, device, viewMode,
+      history, inlineComments, projectContext, designMode, shareAccess, device, viewMode,
       fileTreeW, chatW, splitCodeW, fileTreeOpen, expandedFolders])
 
   useEffect(() => { messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' }) }, [messages])
@@ -1384,13 +2480,13 @@ export function DesignStudio({ onClose }: Props) {
 
     const isFirst = messagesRef.current.length === 0
     const prefix = isFirst
-      ? `You are Kodo Design Studio — an expert UI/UX engineer and visual designer. Your goal is to produce stunning, production-quality web designs.
+      ? `You are Kodo Design Studio, an expert product designer, UX strategist, motion designer, and front-end craftsperson. Your goal is to produce original, production-quality visual work that does not look AI-generated.
 
-RESPONSE FORMAT — follow this exactly:
+RESPONSE FORMAT - follow this exactly:
 ## Plan
 1. [Specific component or section you will build]
 2. [Next component]
-(3–8 items, each concrete and descriptive — e.g. "Sticky nav with logo, links, and CTA button")
+(3-8 items, each concrete and descriptive - e.g. "Sticky nav with logo, links, and CTA button")
 
 Then output all code files immediately after the plan.
 
@@ -1398,16 +2494,16 @@ RULES:
 - Output HTML in \`\`\`html index.html code blocks. Embed all CSS inside <style> tags and all JS inside <script> tags.
 - You may also output separate \`\`\`css styles.css and \`\`\`js script.js blocks.
 - Never reference external files that are not included in your response.
-- Designs must be visually stunning, modern, pixel-perfect, and fully responsive.
+- Designs must be visually distinctive, modern, pixel-perfect, accessible, and fully responsive.
 - Use real placeholder content (no "Lorem ipsum"). Write realistic copy for the industry/use-case.
-- Animations, micro-interactions, and gradients are encouraged.
+- Animations and micro-interactions are encouraged only when they improve comprehension or perceived quality.
 - After the plan, output ONLY code blocks — no prose, no explanations, no commentary.
 - Do NOT write markdown text between code blocks.
 
 `
       : ''
 
-    const contextSections: string[] = []
+    const contextSections: string[] = [buildKodoDesignModePrompt(designMode)]
     if (projectContext.trim()) {
       contextSections.push(`Project context:\n${projectContext.trim()}`)
     }
@@ -1565,7 +2661,7 @@ RULES:
       setMessages(prev => prev.map(m => m.id === aid ? { ...m, isStreaming: false } : m))
       setIsLoading(false)
     }
-  }, [assets, designSystem, inlineComments, isLoading, projectContext, sessionId, shareAccess])
+  }, [assets, designMode, designSystem, inlineComments, isLoading, projectContext, sessionId, shareAccess])
 
   const handleVisualEditorSourceChange = useCallback((payload: VisualEditorSourcePayload) => {
     // Strip injected harness script so it isn't double-injected on reload
@@ -1673,6 +2769,38 @@ RULES:
     }, 350)
   }
 
+  const renderDesignExport = async (format: 'png' | 'pdf') => {
+    const html = previewHtml || (files.length > 0 ? buildPreviewHtml(files) : '')
+    if (!html.trim()) return
+    try {
+      const res = await fetch('/api/design/render', {
+        method: 'POST',
+        headers: buildApiHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify({
+          html,
+          format,
+          width: format === 'pdf' ? 1920 : 1440,
+          height: format === 'pdf' ? 1080 : 1000,
+          full_page: format === 'png',
+        }),
+      })
+      if (!res.ok) {
+        let detail = `${res.status} ${res.statusText}`
+        try { const data = await res.json(); detail = data.detail || detail } catch { /* */ }
+        throw new Error(detail)
+      }
+      const blob = await res.blob()
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = `kodo-design.${format}`
+      a.click()
+      URL.revokeObjectURL(url)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err))
+    }
+  }
+
   const cancelRequest = () => {
     abortRef.current?.abort()
     setIsLoading(false)
@@ -1730,6 +2858,20 @@ RULES:
   const selectedFile = files.find(f => f.id === selectedFileId) ?? files[0] ?? null
   const canEdit = shareAccess === 'edit'
   const canComment = shareAccess !== 'view'
+  const activePreset = useMemo(
+    () => DESIGN_SYSTEM_PRESETS.find((preset) => preset.id === designSystem.presetId) || DESIGN_SYSTEM_PRESETS[0],
+    [designSystem.presetId],
+  )
+  const updateDesignSystem = useCallback((patch: Partial<DesignSystemConfig>) => {
+    setDesignSystem((prev) => {
+      const next = { ...prev, ...patch }
+      saveDesignSystem(next)
+      return next
+    })
+  }, [])
+  const applyDesignSystemPreset = useCallback((presetId: string) => {
+    updateDesignSystem(buildDesignSystemPresetPatch(presetId))
+  }, [updateDesignSystem])
   const fileTree = useMemo(() => buildDesignFileTree(files), [files])
   const sessionEntries = useMemo(() => {
     const messageEntries: Array<{ id: string; prompt: string; files: DesignFile[]; timestamp?: number }> = []
@@ -1921,11 +3063,11 @@ RULES:
   }
 
   const requestVariations = () => {
-    void sendMessage('Show 3 significantly different layout alternatives for the current design. Keep content goals intact and explain the tradeoffs briefly.')
+    void sendMessage('Show 3 significantly different design directions for the current artifact. Vary layout, visual language, typography, interaction model, and information density. Keep content goals intact and include a recommendation.')
   }
 
   const requestAccessibilityReview = () => {
-    void sendMessage('Review the current design for accessibility issues (contrast, hierarchy, focus order, interactive targets, semantics) and then apply fixes directly in the generated files.')
+    void sendMessage('Run a craft and accessibility pass on the current design: contrast, hierarchy, focus order, target size, semantics, responsiveness, content specificity, and AI-looking visual defaults. Apply fixes directly in the generated files.')
   }
 
   const renderInlineCommentLayer = () => (
@@ -2093,7 +3235,7 @@ RULES:
   // Show project picker when no active project
   if (!activeProjectId) {
     return (
-      <ProjectPicker
+      <OpenDesignProjectPicker
         projects={allProjects}
         onOpen={handleOpenProject}
         onDelete={handleDeleteProject}
@@ -2236,6 +3378,44 @@ RULES:
         <button type="button" style={btn(showDesignSystem)} onClick={() => setShowDesignSystem(s => !s)} title="Design system">
           <Package size={11} />DS
         </button>
+        <select
+          value={designMode}
+          onChange={(event) => setDesignMode(normalizeDesignMode(event.target.value))}
+          title="Kodo design mode"
+          style={{
+            background: 'var(--bg-2)',
+            border: '1px solid var(--border)',
+            borderRadius: 6,
+            color: 'var(--text-1)',
+            fontSize: 10,
+            padding: '2px 7px',
+            fontFamily: 'var(--font-mono)',
+            maxWidth: 124,
+          }}
+        >
+          {(Object.keys(DESIGN_MODES) as DesignMode[]).map((mode) => (
+            <option key={mode} value={mode}>{DESIGN_MODES[mode].shortLabel}</option>
+          ))}
+        </select>
+        <select
+          value={designSystem.fidelity}
+          onChange={(event) => updateDesignSystem({ fidelity: event.target.value as DesignFidelity })}
+          title="Design fidelity"
+          style={{
+            background: 'var(--bg-2)',
+            border: '1px solid var(--border)',
+            borderRadius: 6,
+            color: 'var(--text-1)',
+            fontSize: 10,
+            padding: '2px 7px',
+            fontFamily: 'var(--font-mono)',
+            maxWidth: 116,
+          }}
+        >
+          <option value="wireframe">WIREFRAME</option>
+          <option value="high-fidelity">HI-FI</option>
+          <option value="production">PROD</option>
+        </select>
 
         <div style={{ flex: 1 }} />
 
@@ -2247,12 +3427,14 @@ RULES:
                 <button type="button" style={btn(false)} onClick={() => setRefreshKey(k => k + 1)} title="Refresh"><RefreshCw size={12} /></button>
                 <button type="button" style={btn(false)} onClick={openInTab} title="Open in new tab"><ExternalLink size={12} /></button>
                 <button type="button" style={btn(false)} onClick={downloadAll} title="Download HTML"><Download size={12} /></button>
+                <button type="button" style={btn(false)} onClick={() => void renderDesignExport('png')} title="Render PNG"><Eye size={12} /></button>
               </>
             )}
             {files.length > 0 && (
               <>
                 <button type="button" style={btn(false)} onClick={() => void downloadZip()} title="Download ZIP"><Package size={12} /></button>
                 <button type="button" style={btn(false)} onClick={exportPdf} title="Export PDF"><Printer size={12} /></button>
+                <button type="button" style={btn(false)} onClick={() => void renderDesignExport('pdf')} title="Render PDF"><FileIcon size={12} /></button>
                 <button type="button" style={btn(shareCopied)} onClick={() => void copyShareLink()} title="Copy share link"><Share2 size={12} />{shareCopied ? 'Copied' : 'Share'}</button>
                 <button type="button" style={btn(false)} onClick={handoffToLocalAgent} title="Handoff to local coding agent"><Send size={12} />Handoff</button>
               </>
@@ -2266,11 +3448,12 @@ RULES:
 
         {/* ── FILE TREE ─────────────────────────────────────────────────────── */}
         <div style={{
+          order: 4,
           width: fileTreeOpen ? fileTreeW : 36,
           minWidth: fileTreeOpen ? 140 : 36,
           flexShrink: 0,
           display: 'flex', flexDirection: 'column',
-          borderRight: '1px solid var(--border)',
+          borderLeft: '1px solid var(--border)',
           background: 'var(--bg-1)',
           transition: 'width 0.15s ease',
           overflow: 'hidden',
@@ -2324,6 +3507,200 @@ RULES:
           {fileTreeOpen && showDesignSystem && (
             <div style={{ flex: 1, overflowY: 'auto', padding: '10px', borderBottom: '1px solid var(--border)' }}>
               <div style={{ fontSize: 9, letterSpacing: '0.1em', color: 'var(--accent)', fontFamily: 'var(--font-mono)', marginBottom: 8, fontWeight: 700 }}>DESIGN SYSTEM</div>
+              <div style={{ marginBottom: 10 }}>
+                <div style={{ fontSize: 9, color: 'var(--text-2)', fontFamily: 'var(--font-mono)', marginBottom: 2 }}>Creative mode</div>
+                <select
+                  value={designMode}
+                  onChange={(event) => setDesignMode(normalizeDesignMode(event.target.value))}
+                  style={{ width: '100%', background: 'var(--bg-2)', border: '1px solid var(--border)', borderRadius: 4, color: 'var(--text-0)', fontSize: 10, padding: '3px 6px', outline: 'none', fontFamily: 'var(--font-mono)' }}
+                >
+                  {(Object.keys(DESIGN_MODES) as DesignMode[]).map((mode) => (
+                    <option key={mode} value={mode}>{DESIGN_MODES[mode].label}</option>
+                  ))}
+                </select>
+                <div style={{ fontSize: 9, color: 'var(--text-2)', lineHeight: 1.45, marginTop: 5 }}>
+                  {DESIGN_MODES[designMode].deliverable}
+                </div>
+              </div>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6, marginBottom: 10 }}>
+                <div>
+                  <div style={{ fontSize: 9, color: 'var(--text-2)', fontFamily: 'var(--font-mono)', marginBottom: 2 }}>Fidelity</div>
+                  <select
+                    value={designSystem.fidelity}
+                    onChange={(event) => updateDesignSystem({ fidelity: event.target.value as DesignFidelity })}
+                    style={{ width: '100%', background: 'var(--bg-2)', border: '1px solid var(--border)', borderRadius: 4, color: 'var(--text-0)', fontSize: 10, padding: '3px 6px', outline: 'none', fontFamily: 'var(--font-mono)' }}
+                  >
+                    <option value="wireframe">Wireframe</option>
+                    <option value="high-fidelity">High fidelity</option>
+                    <option value="production">Production</option>
+                  </select>
+                </div>
+                <div>
+                  <div style={{ fontSize: 9, color: 'var(--text-2)', fontFamily: 'var(--font-mono)', marginBottom: 2 }}>Surface</div>
+                  <select
+                    value={designSystem.surface}
+                    onChange={(event) => updateDesignSystem({ surface: event.target.value as DesignSurface })}
+                    style={{ width: '100%', background: 'var(--bg-2)', border: '1px solid var(--border)', borderRadius: 4, color: 'var(--text-0)', fontSize: 10, padding: '3px 6px', outline: 'none', fontFamily: 'var(--font-mono)' }}
+                  >
+                    {(Object.keys(DESIGN_SURFACES) as DesignSurface[]).map((surface) => (
+                      <option key={surface} value={surface}>{surface}</option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+              <div style={{ marginBottom: 10 }}>
+                <div style={{ fontSize: 9, color: 'var(--text-2)', fontFamily: 'var(--font-mono)', marginBottom: 2 }}>Design system library</div>
+                <select
+                  value={designSystem.presetId}
+                  onChange={(event) => applyDesignSystemPreset(event.target.value)}
+                  style={{ width: '100%', background: 'var(--bg-2)', border: '1px solid var(--border)', borderRadius: 4, color: 'var(--text-0)', fontSize: 10, padding: '3px 6px', outline: 'none', fontFamily: 'var(--font-mono)' }}
+                >
+                  {DESIGN_SYSTEM_PRESETS.map((preset) => (
+                    <option key={preset.id} value={preset.id}>{preset.category} / {preset.label}</option>
+                  ))}
+                </select>
+                <div style={{ display: 'flex', gap: 3, marginTop: 6 }}>
+                  {activePreset.colors.map((color) => (
+                    <span key={color} title={color} style={{ width: 18, height: 14, borderRadius: 3, background: color, border: '1px solid var(--border)', display: 'inline-block' }} />
+                  ))}
+                </div>
+                <div style={{ fontSize: 9, color: 'var(--text-2)', lineHeight: 1.45, marginTop: 5 }}>
+                  {activePreset.summary}
+                </div>
+                <div style={{ display: 'grid', gap: 5, marginTop: 8, maxHeight: 210, overflowY: 'auto', paddingRight: 2 }}>
+                  {DESIGN_SYSTEM_PRESETS.map((preset) => {
+                    const active = designSystem.presetId === preset.id
+                    return (
+                      <button
+                        key={preset.id}
+                        type="button"
+                        onClick={() => applyDesignSystemPreset(preset.id)}
+                        aria-pressed={active}
+                        style={{
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: 7,
+                          width: '100%',
+                          textAlign: 'left',
+                          border: `1px solid ${active ? 'var(--accent)' : 'var(--border)'}`,
+                          background: active ? 'var(--accent-dim)' : 'var(--bg-2)',
+                          color: 'var(--text-1)',
+                          borderRadius: 7,
+                          padding: 6,
+                          cursor: 'pointer',
+                        }}
+                      >
+                        <span style={{ width: 26, height: 26, display: 'grid', gridTemplateColumns: '1fr 1fr', borderRadius: 5, overflow: 'hidden', border: '1px solid var(--border)', flexShrink: 0 }}>
+                          {preset.colors.slice(0, 4).map((color) => <span key={color} style={{ background: color }} />)}
+                        </span>
+                        <span style={{ minWidth: 0, flex: 1 }}>
+                          <span style={{ display: 'block', fontSize: 10, fontWeight: 700, color: 'var(--text-0)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{preset.label}</span>
+                          <span style={{ display: 'block', fontSize: 8, color: 'var(--text-2)', fontFamily: 'var(--font-mono)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{preset.category}</span>
+                        </span>
+                        {active && <CheckSquare size={12} color="var(--accent)" />}
+                      </button>
+                    )
+                  })}
+                </div>
+              </div>
+              <div style={{ marginBottom: 10 }}>
+                <div style={{ fontSize: 9, color: 'var(--text-2)', fontFamily: 'var(--font-mono)', marginBottom: 2 }}>Visual direction</div>
+                <select
+                  value={designSystem.direction}
+                  onChange={(event) => updateDesignSystem({ direction: event.target.value as DesignDirection })}
+                  style={{ width: '100%', background: 'var(--bg-2)', border: '1px solid var(--border)', borderRadius: 4, color: 'var(--text-0)', fontSize: 10, padding: '3px 6px', outline: 'none', fontFamily: 'var(--font-mono)' }}
+                >
+                  {(Object.keys(DESIGN_DIRECTIONS) as DesignDirection[]).map((direction) => (
+                    <option key={direction} value={direction}>{DESIGN_DIRECTIONS[direction].label}</option>
+                  ))}
+                </select>
+                <div style={{ display: 'flex', gap: 3, marginTop: 6 }}>
+                  {DESIGN_DIRECTIONS[designSystem.direction].colors.map((color) => (
+                    <span key={color} title={color} style={{ width: 18, height: 14, borderRadius: 3, background: color, border: '1px solid var(--border)', display: 'inline-block' }} />
+                  ))}
+                </div>
+                <div style={{ display: 'grid', gap: 7, marginTop: 8 }}>
+                  {(Object.keys(DESIGN_DIRECTIONS) as DesignDirection[]).filter((direction) => direction !== 'auto').map((direction) => {
+                    const row = DESIGN_DIRECTIONS[direction]
+                    const active = designSystem.direction === direction
+                    return (
+                      <button
+                        key={direction}
+                        type="button"
+                        onClick={() => updateDesignSystem({ direction })}
+                        aria-pressed={active}
+                        style={{
+                          textAlign: 'left',
+                          border: `1px solid ${active ? 'var(--accent)' : 'var(--border)'}`,
+                          background: active ? 'var(--accent-dim)' : 'var(--bg-2)',
+                          color: 'var(--text-1)',
+                          borderRadius: 8,
+                          padding: 8,
+                          cursor: 'pointer',
+                          display: 'grid',
+                          gap: 6,
+                        }}
+                      >
+                        <span style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+                          <span style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-0)' }}>{row.label}</span>
+                          {active && <span style={{ fontSize: 8, color: '#fff', background: 'var(--accent)', borderRadius: 999, padding: '1px 5px', fontFamily: 'var(--font-mono)' }}>ON</span>}
+                        </span>
+                        <span style={{ display: 'flex', gap: 3 }}>
+                          {row.colors.map((color) => <span key={color} style={{ flex: 1, height: 12, borderRadius: 3, background: color, border: '1px solid var(--border)' }} />)}
+                        </span>
+                        <span style={{ display: 'flex', alignItems: 'baseline', gap: 8, padding: '4px 0', borderTop: '1px solid var(--border)', borderBottom: '1px solid var(--border)' }}>
+                          <span style={{ fontFamily: row.displayFont, fontSize: 22, lineHeight: 1, color: 'var(--text-0)' }}>Aa</span>
+                          <span style={{ fontFamily: row.bodyFont, fontSize: 10, color: 'var(--text-2)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>The quick brown fox - 0123</span>
+                        </span>
+                        <span style={{ fontSize: 10, color: 'var(--text-2)', lineHeight: 1.4 }}>{row.summary}</span>
+                        <span style={{ fontSize: 9, color: 'var(--text-2)', fontFamily: 'var(--font-mono)', opacity: 0.8 }}>{row.references.join(' / ')}</span>
+                      </button>
+                    )
+                  })}
+                </div>
+              </div>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6, marginBottom: 10 }}>
+                <div>
+                  <div style={{ fontSize: 9, color: 'var(--text-2)', fontFamily: 'var(--font-mono)', marginBottom: 2 }}>Motion</div>
+                  <select
+                    value={designSystem.motion}
+                    onChange={(event) => updateDesignSystem({ motion: event.target.value as DesignMotion })}
+                    style={{ width: '100%', background: 'var(--bg-2)', border: '1px solid var(--border)', borderRadius: 4, color: 'var(--text-0)', fontSize: 10, padding: '3px 6px', outline: 'none', fontFamily: 'var(--font-mono)' }}
+                  >
+                    <option value="none">None</option>
+                    <option value="subtle">Subtle</option>
+                    <option value="expressive">Expressive</option>
+                    <option value="cinematic">Cinematic</option>
+                  </select>
+                </div>
+                <div>
+                  <div style={{ fontSize: 9, color: 'var(--text-2)', fontFamily: 'var(--font-mono)', marginBottom: 2 }}>Frame</div>
+                  <select
+                    value={designSystem.deviceFrame}
+                    onChange={(event) => updateDesignSystem({ deviceFrame: event.target.value as DeviceFrame })}
+                    style={{ width: '100%', background: 'var(--bg-2)', border: '1px solid var(--border)', borderRadius: 4, color: 'var(--text-0)', fontSize: 10, padding: '3px 6px', outline: 'none', fontFamily: 'var(--font-mono)' }}
+                  >
+                    {(Object.keys(DEVICE_FRAME_PROMPTS) as DeviceFrame[]).map((frame) => (
+                      <option key={frame} value={frame}>{frame}</option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+              {([
+                { key: 'audience', label: 'Audience', rows: 1 },
+                { key: 'scale', label: 'Scope / scale', rows: 1 },
+                { key: 'brandAssets', label: 'Brand assets / references', rows: 2 },
+              ] as { key: keyof DesignSystemConfig; label: string; rows: number }[]).map(({ key, label, rows }) => (
+                <div key={key} style={{ marginBottom: 6 }}>
+                  <div style={{ fontSize: 9, color: 'var(--text-2)', fontFamily: 'var(--font-mono)', marginBottom: 2 }}>{label}</div>
+                  <textarea
+                    value={String(designSystem[key] || '')}
+                    rows={rows}
+                    onChange={(event) => updateDesignSystem({ [key]: event.target.value } as Partial<DesignSystemConfig>)}
+                    style={{ width: '100%', background: 'var(--bg-2)', border: '1px solid var(--border)', borderRadius: 4, color: 'var(--text-0)', fontSize: 10, padding: '3px 6px', outline: 'none', fontFamily: 'var(--font-mono)', resize: 'vertical', boxSizing: 'border-box' as const }}
+                  />
+                </div>
+              ))}
               {([
                 { key: 'brandName', label: 'Brand name', type: 'text' },
                 { key: 'primaryColor', label: 'Primary', type: 'color' },
@@ -2503,17 +3880,29 @@ RULES:
         </div>
 
         {fileTreeOpen && (
-          <DragHandle handleId="file-tree" onDrag={d => setFileTreeW(w => Math.max(140, Math.min(420, w + d)))} />
+          <DragHandle order={3} handleId="file-tree" onDrag={d => setFileTreeW(w => Math.max(140, Math.min(420, w - d)))} />
         )}
 
         {/* ── CENTER: PREVIEW / CODE ─────────────────────────────────────────── */}
-        <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+        <div style={{ order: 2, flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
           {/* Center toolbar */}
           <div style={{
             display: 'flex', alignItems: 'center', gap: 4,
             padding: '0 10px', height: 36, borderBottom: '1px solid var(--border)',
             background: 'var(--bg-0)', flexShrink: 0,
           }}>
+            <span style={{
+              display: 'flex', alignItems: 'center', gap: 5,
+              padding: '3px 8px',
+              borderRadius: 6,
+              background: 'var(--bg-1)',
+              border: '1px solid var(--border)',
+              color: 'var(--text-0)',
+              fontSize: 11,
+              fontWeight: 700,
+            }}>
+              <FolderOpen size={12} /> Design Files
+            </span>
             {selectedFile && (
               <span style={{ fontSize: 11, color: 'var(--text-1)', fontFamily: 'var(--font-mono)', display: 'flex', alignItems: 'center', gap: 4 }}>
                 {getFileIcon(selectedFile.name)} {selectedFile.name}
@@ -2623,7 +4012,7 @@ RULES:
                       display: 'flex',
                       alignItems: device === 'desktop' ? 'stretch' : 'flex-start',
                       justifyContent: 'center',
-                      background: device !== 'desktop' ? '#d8d8d8' : '#efefef',
+                      background: device !== 'desktop' ? 'color-mix(in srgb, var(--bg-0) 82%, #000)' : 'var(--bg-0)',
                       overflow: 'auto',
                       padding: device !== 'desktop' ? '24px 16px' : 0,
                     }}
@@ -2691,7 +4080,7 @@ RULES:
                     display: 'flex',
                     alignItems: device === 'desktop' ? 'stretch' : 'flex-start',
                     justifyContent: 'center',
-                    background: device !== 'desktop' ? '#d8d8d8' : '#efefef',
+                    background: device !== 'desktop' ? 'color-mix(in srgb, var(--bg-0) 82%, #000)' : 'var(--bg-0)',
                     overflow: 'auto',
                     padding: device !== 'desktop' ? '24px 16px' : 0,
                   }}
@@ -2719,13 +4108,14 @@ RULES:
           )}
         </div>
 
-        <DragHandle handleId="chat" onDrag={d => setChatW(w => Math.max(260, Math.min(560, w - d)))} />
+        <DragHandle order={1} handleId="chat" onDrag={d => setChatW(w => Math.max(260, Math.min(560, w + d)))} />
 
         {/* ── RIGHT: CHAT ────────────────────────────────────────────────────── */}
         <div style={{
+          order: 0,
           width: chatW, flexShrink: 0,
           display: 'flex', flexDirection: 'column',
-          borderLeft: '1px solid var(--border)',
+          borderRight: '1px solid var(--border)',
           background: 'var(--bg-1)',
         }}>
           {/* Chat header */}
@@ -2798,6 +4188,38 @@ RULES:
                       <div style={{ fontWeight: 500 }}>{s.label}</div>
                     </button>
                   ))}
+                </div>
+                <div style={{ marginTop: 10, border: '1px solid var(--border)', background: 'var(--bg-2)', borderRadius: 10, overflow: 'hidden' }}>
+                  <div style={{ padding: '8px 10px', borderBottom: '1px solid var(--border)', display: 'flex', alignItems: 'center', gap: 7 }}>
+                    <span style={{ width: 18, height: 18, borderRadius: 999, background: 'var(--accent-dim)', color: 'var(--accent)', display: 'grid', placeItems: 'center', fontSize: 10, fontWeight: 800 }}>?</span>
+                    <div>
+                      <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-0)' }}>Quick brief - 30 seconds</div>
+                      <div style={{ fontSize: 9, color: 'var(--text-2)' }}>Seed the project like Open Design before generation.</div>
+                    </div>
+                  </div>
+                  <div style={{ padding: 10, display: 'grid', gap: 7 }}>
+                    {[
+                      ['Studio name and one-line positioning', 'e.g. Field Studio - design practice for climate-tech founders'],
+                      ['Who you are pitching', 'e.g. seed-stage VCs / design-led SaaS buyers'],
+                      ['The ask', 'e.g. 10-screen pitch deck, landing page, mobile app'],
+                    ].map(([label, placeholder]) => (
+                      <label key={label} style={{ display: 'grid', gap: 3 }}>
+                        <span style={{ fontSize: 9, color: 'var(--text-2)', fontFamily: 'var(--font-mono)' }}>{label}</span>
+                        <input
+                          placeholder={placeholder}
+                          onChange={(event) => {
+                            const value = event.target.value.trim()
+                            if (value) setInput((prev) => prev || value)
+                          }}
+                          style={{ width: '100%', boxSizing: 'border-box', background: 'var(--bg-1)', border: '1px solid var(--border)', borderRadius: 5, color: 'var(--text-1)', fontSize: 10, padding: '5px 7px', outline: 'none' }}
+                        />
+                      </label>
+                    ))}
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6 }}>
+                      <button type="button" onClick={() => { setShowDesignSystem(true); updateDesignSystem({ direction: 'auto' }) }} style={{ ...btn(false), justifyContent: 'center', fontSize: 9, padding: '5px 6px' }}>Pick direction</button>
+                      <button type="button" onClick={() => fileInputRef.current?.click()} style={{ ...btn(false), justifyContent: 'center', fontSize: 9, padding: '5px 6px' }}>Attach reference</button>
+                    </div>
+                  </div>
                 </div>
               </div>
             )}

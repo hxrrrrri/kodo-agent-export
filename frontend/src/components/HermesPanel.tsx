@@ -5,11 +5,11 @@
  *   3. User profile viewer + inference
  */
 import { useCallback, useEffect, useState } from 'react'
-import { BookOpen, Brain, Search, Sparkles, User, Zap, Save, CheckCircle, X } from 'lucide-react'
+import { BookOpen, Brain, Search, Sparkles, User, Zap, Save, CheckCircle, X, Wrench, FileText } from 'lucide-react'
 import { buildApiHeaders } from '../lib/api'
 import { useChatStore } from '../store/chatStore'
 
-type Tab = 'search' | 'profile' | 'skill' | 'identity'
+type Tab = 'search' | 'profile' | 'skill' | 'identity' | 'catalog' | 'context'
 
 interface SearchResult {
   session_id: string
@@ -57,6 +57,54 @@ export function HermesPanel({ onClose }: { onClose?: () => void }) {
   const [loadingIdentity, setLoadingIdentity] = useState(false)
   const [savingSoul, setSavingSoul] = useState(false)
   const [savingMemory, setSavingMemory] = useState(false)
+
+  // Catalog + context state
+  const [catalog, setCatalog] = useState<{ tools?: any; models?: any; insights?: any }>({})
+  const [contextFiles, setContextFiles] = useState<Array<{ name: string; size: number; updated_at: number }>>([])
+  const [contextName, setContextName] = useState('project.md')
+  const [contextContent, setContextContent] = useState('')
+  const [contextMsg, setContextMsg] = useState('')
+
+  const loadCatalog = useCallback(async () => {
+    try {
+      const [toolsRes, modelsRes, insightsRes] = await Promise.all([
+        fetch('/api/hermes/tools', { headers: buildApiHeaders() }),
+        fetch('/api/hermes/models', { headers: buildApiHeaders() }),
+        fetch('/api/hermes/insights', { headers: buildApiHeaders() }),
+      ])
+      setCatalog({
+        tools: toolsRes.ok ? await toolsRes.json() : null,
+        models: modelsRes.ok ? await modelsRes.json() : null,
+        insights: insightsRes.ok ? await insightsRes.json() : null,
+      })
+    } catch { /* ignore */ }
+  }, [])
+
+  const loadContextFiles = useCallback(async () => {
+    try {
+      const res = await fetch('/api/hermes/context-files', { headers: buildApiHeaders() })
+      if (res.ok) {
+        const data = await res.json()
+        setContextFiles(data.files || [])
+      }
+    } catch { /* ignore */ }
+  }, [])
+
+  const saveContextFile = useCallback(async () => {
+    setContextMsg('')
+    try {
+      const res = await fetch('/api/hermes/context-files', {
+        method: 'POST',
+        headers: buildApiHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify({ name: contextName, content: contextContent }),
+      })
+      if (!res.ok) throw new Error(await res.text())
+      setContextMsg('Context file saved.')
+      await loadContextFiles()
+    } catch (e) {
+      setContextMsg(`Error: ${(e as Error).message}`)
+    }
+  }, [contextName, contextContent, loadContextFiles])
 
   const loadIdentity = useCallback(async () => {
     setLoadingIdentity(true)
@@ -108,6 +156,11 @@ export function HermesPanel({ onClose }: { onClose?: () => void }) {
   useEffect(() => {
     if (tab === 'identity') void loadIdentity()
   }, [tab, loadIdentity])
+
+  useEffect(() => {
+    if (tab === 'catalog') void loadCatalog()
+    if (tab === 'context') void loadContextFiles()
+  }, [tab, loadCatalog, loadContextFiles])
 
   const doSearch = useCallback(async () => {
     if (!query.trim()) return
@@ -197,6 +250,8 @@ export function HermesPanel({ onClose }: { onClose?: () => void }) {
     { id: 'profile' as Tab, icon: <User size={11} />, label: 'PROFILE' },
     { id: 'skill' as Tab, icon: <Sparkles size={11} />, label: 'SKILLS' },
     { id: 'identity' as Tab, icon: <Brain size={11} />, label: 'IDENTITY' },
+    { id: 'catalog' as Tab, icon: <Wrench size={11} />, label: 'CATALOG' },
+    { id: 'context' as Tab, icon: <FileText size={11} />, label: 'CONTEXT' },
   ]
 
   return (
@@ -529,7 +584,96 @@ export function HermesPanel({ onClose }: { onClose?: () => void }) {
             )}
           </div>
         )}
+
+        {tab === 'catalog' && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+            <div style={{ fontSize: 11, color: 'var(--text-2)', fontFamily: 'var(--font-mono)' }}>
+              Hermes-style catalog of Kodo toolsets, model routes, and agent insights.
+            </div>
+            <div style={panelBox}>
+              <div style={panelTitle}>INSIGHTS</div>
+              <div style={metricGrid}>
+                <Metric label="Sessions" value={catalog.insights?.sessions_total ?? '-'} />
+                <Metric label="Recent" value={catalog.insights?.sessions_recent ?? '-'} />
+                <Metric label="Skills" value={catalog.insights?.skills ?? '-'} />
+                <Metric label="Traits" value={catalog.insights?.profile_traits ?? '-'} />
+              </div>
+            </div>
+            <div style={panelBox}>
+              <div style={panelTitle}>MODELS</div>
+              <div style={{ fontSize: 11, color: 'var(--text-1)', marginBottom: 8 }}>
+                Active: {catalog.models?.active_provider || 'unset'} / {catalog.models?.active_model || 'unset'}
+              </div>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                {(catalog.models?.providers || []).map((p: any) => (
+                  <span key={p.name} style={{
+                    fontSize: 10, fontFamily: 'var(--font-mono)', padding: '3px 7px', borderRadius: 7,
+                    border: `1px solid ${p.configured ? 'var(--green)' : 'var(--border)'}`,
+                    color: p.configured ? 'var(--green)' : 'var(--text-2)'
+                  }}>
+                    {p.name}
+                  </span>
+                ))}
+              </div>
+            </div>
+            <div style={panelBox}>
+              <div style={panelTitle}>TOOLSETS</div>
+              {(catalog.tools?.toolsets || []).map((t: any) => (
+                <div key={t.name} style={{ marginBottom: 8 }}>
+                  <div style={{ fontSize: 11, color: 'var(--text-0)', fontWeight: 700 }}>{t.name}</div>
+                  <div style={{ fontSize: 10, color: 'var(--text-2)', lineHeight: 1.5 }}>{(t.tools || []).join(', ')}</div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {tab === 'context' && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+            <div style={{ fontSize: 11, color: 'var(--text-2)', fontFamily: 'var(--font-mono)' }}>
+              Context files are durable instructions or project notes that can shape future sessions.
+            </div>
+            <div style={panelBox}>
+              <div style={panelTitle}>FILES</div>
+              {contextFiles.length === 0 ? (
+                <div style={{ fontSize: 11, color: 'var(--text-2)' }}>No context files saved.</div>
+              ) : contextFiles.map(f => (
+                <div key={f.name} style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, color: 'var(--text-1)', marginBottom: 5 }}>
+                  <span>{f.name}</span>
+                  <span style={{ color: 'var(--text-2)' }}>{f.size} bytes</span>
+                </div>
+              ))}
+            </div>
+            <div style={panelBox}>
+              <div style={panelTitle}>EDIT</div>
+              <input value={contextName} onChange={e => setContextName(e.target.value)} style={inputStyle} />
+              <textarea
+                value={contextContent}
+                onChange={e => setContextContent(e.target.value)}
+                placeholder="Persistent context, operating rules, project facts..."
+                style={{ ...inputStyle, minHeight: 220, resize: 'vertical', fontFamily: 'var(--font-mono)', marginTop: 8 }}
+              />
+              <button onClick={() => void saveContextFile()} style={{
+                marginTop: 8, background: 'var(--blue-dim)', border: '1px solid var(--blue)',
+                color: 'var(--blue)', borderRadius: 8, padding: '7px 12px', cursor: 'pointer',
+                fontSize: 11, fontFamily: 'var(--font-mono)', fontWeight: 700
+              }}>
+                SAVE CONTEXT
+              </button>
+              {contextMsg && <div style={{ marginTop: 8, fontSize: 10, color: contextMsg.startsWith('Error') ? 'var(--red)' : 'var(--green)' }}>{contextMsg}</div>}
+            </div>
+          </div>
+        )}
       </div>
+    </div>
+  )
+}
+
+function Metric({ label, value }: { label: string; value: string | number }) {
+  return (
+    <div style={{ background: 'var(--bg-1)', border: '1px solid var(--border)', borderRadius: 8, padding: 8 }}>
+      <div style={{ fontSize: 9, color: 'var(--text-2)', fontFamily: 'var(--font-mono)' }}>{label.toUpperCase()}</div>
+      <div style={{ fontSize: 16, color: 'var(--text-0)', fontWeight: 700 }}>{value}</div>
     </div>
   )
 }
@@ -570,4 +714,26 @@ const inputStyle: React.CSSProperties = {
   outline: 'none',
   fontFamily: 'var(--font-mono)',
   boxSizing: 'border-box',
+}
+
+const panelBox: React.CSSProperties = {
+  background: 'var(--bg-2)',
+  border: '1px solid var(--border)',
+  borderRadius: 10,
+  padding: '10px 12px',
+}
+
+const panelTitle: React.CSSProperties = {
+  fontSize: 10,
+  color: 'var(--text-2)',
+  fontFamily: 'var(--font-mono)',
+  marginBottom: 8,
+  letterSpacing: '0.08em',
+  fontWeight: 700,
+}
+
+const metricGrid: React.CSSProperties = {
+  display: 'grid',
+  gridTemplateColumns: 'repeat(2, minmax(0, 1fr))',
+  gap: 8,
 }

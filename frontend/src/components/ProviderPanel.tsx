@@ -74,6 +74,7 @@ const ALL_PROVIDER_OPTIONS = [
   'codex',
   'ollama',
   'atomic-chat',
+  'nvidia',
 ]
 
 const DEFAULT_MODEL_BY_PROVIDER: Record<string, string> = {
@@ -87,6 +88,7 @@ const DEFAULT_MODEL_BY_PROVIDER: Record<string, string> = {
   codex: 'gpt-4o',
   ollama: '',
   'atomic-chat': '',
+  nvidia: 'meta/llama-3.1-8b-instruct',
 }
 
 type ProvidersDiscoveryResponse = {
@@ -113,6 +115,20 @@ type OllamaSetupStatusResponse = {
 }
 
 type OllamaSetupResponse = OllamaSetupStatusResponse & {
+  provider: string
+  model: string
+  profile: string
+  persisted: boolean
+}
+
+type NvidiaSetupStatusResponse = {
+  configured: boolean
+  models: string[]
+  recommended_model: string | null
+  active_model?: string | null
+}
+
+type NvidiaSetupResponse = NvidiaSetupStatusResponse & {
   provider: string
   model: string
   profile: string
@@ -184,6 +200,11 @@ export function ProviderPanel() {
   const [ollamaModel, setOllamaModel] = useState('')
   const [ollamaSetupLoading, setOllamaSetupLoading] = useState(false)
   const [ollamaSetupSaving, setOllamaSetupSaving] = useState(false)
+  const [nvidiaSetup, setNvidiaSetup] = useState<NvidiaSetupStatusResponse | null>(null)
+  const [nvidiaApiKey, setNvidiaApiKey] = useState('')
+  const [nvidiaModel, setNvidiaModel] = useState('')
+  const [nvidiaSetupLoading, setNvidiaSetupLoading] = useState(false)
+  const [nvidiaSetupSaving, setNvidiaSetupSaving] = useState(false)
   const [showModal, setShowModal] = useState(false)
   const [newProfile, setNewProfile] = useState({
     name: '',
@@ -253,6 +274,13 @@ export function ProviderPanel() {
     if (!current || models.includes(current)) return models
     return [current, ...models]
   }, [ollamaModel, ollamaSetup])
+
+  const nvidiaModelOptions = useMemo(() => {
+    const models = Array.isArray(nvidiaSetup?.models) ? nvidiaSetup.models : []
+    const current = String(nvidiaModel || '').trim()
+    if (!current || models.includes(current)) return models
+    return [current, ...models]
+  }, [nvidiaModel, nvidiaSetup])
 
   const webhookUrl = useMemo(() => {
     if (typeof window === 'undefined') return '/api/webhooks/trigger'
@@ -324,6 +352,7 @@ export function ProviderPanel() {
       nextAvailability['groq'] = Boolean(keys.groq)
       nextAvailability['ollama'] = Boolean(local.ollama)
       nextAvailability['atomic-chat'] = Boolean(local.atomic_chat)
+      nextAvailability['nvidia'] = Boolean((keys as Record<string, boolean>).nvidia)
 
       setProviderAvailability((prev) => ({ ...prev, ...nextAvailability }))
     } catch (e) {
@@ -396,6 +425,62 @@ export function ProviderPanel() {
       setError(String(e))
     } finally {
       setOllamaSetupSaving(false)
+    }
+  }
+
+  const loadNvidiaSetupStatus = async () => {
+    setNvidiaSetupLoading(true)
+    try {
+      const res = await fetch('/api/providers/nvidia/setup', { headers: buildApiHeaders() })
+      if (!res.ok) throw new Error(await parseApiError(res))
+      const payload = (await res.json()) as NvidiaSetupStatusResponse
+      setNvidiaSetup(payload)
+
+      const models = Array.isArray(payload.models) ? payload.models : []
+      const preferred = payload.active_model || payload.recommended_model || models[0] || ''
+      setNvidiaModel(String(preferred || ''))
+      setModelCatalog((prev) => ({
+        ...prev,
+        nvidia: Array.from(new Set([...models, String(preferred || '')].map((item) => item.trim()).filter(Boolean))),
+      }))
+      setProviderAvailability((prev) => ({ ...prev, nvidia: payload.configured }))
+    } catch (e) {
+      setError(String(e))
+    } finally {
+      setNvidiaSetupLoading(false)
+    }
+  }
+
+  const runNvidiaSetup = async () => {
+    setNvidiaSetupSaving(true)
+    setError(null)
+    try {
+      const response = await fetch('/api/providers/nvidia/setup', {
+        method: 'POST',
+        headers: buildApiHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify({
+          api_key: nvidiaApiKey.trim() || null,
+          model: nvidiaModel.trim() || null,
+          session_id: sessionId || null,
+          persist: true,
+        }),
+      })
+      if (!response.ok) throw new Error(await parseApiError(response))
+
+      const payload = (await response.json()) as NvidiaSetupResponse
+      setSwitchDraft({ provider: payload.provider, model: payload.model })
+      setNvidiaApiKey('')
+
+      await Promise.all([
+        loadStatus(),
+        loadProfiles(),
+        loadDiscovery(),
+        loadNvidiaSetupStatus(),
+      ])
+    } catch (e) {
+      setError(String(e))
+    } finally {
+      setNvidiaSetupSaving(false)
     }
   }
 
@@ -616,6 +701,7 @@ export function ProviderPanel() {
     void loadDiscovery()
     void loadProfiles()
     void loadOllamaSetupStatus()
+    void loadNvidiaSetupStatus()
     void loadWebhookEvents()
     void loadOpenRouterModels()
   }, [])
@@ -627,6 +713,7 @@ export function ProviderPanel() {
       void loadDiscovery()
       void loadProfiles()
       void loadOllamaSetupStatus()
+      void loadNvidiaSetupStatus()
     }, 7000)
 
     return () => window.clearInterval(timer)
@@ -987,6 +1074,106 @@ export function ProviderPanel() {
 
           <div style={{ fontSize: 10, color: 'var(--text-2)' }}>
             Sets provider to Ollama, updates model, and persists settings for one-click local usage.
+          </div>
+        </div>
+      </section>
+
+      <section style={{ marginBottom: 12 }}>
+        <div style={{ fontSize: 10, color: 'var(--text-2)', letterSpacing: '0.1em', marginBottom: 6 }}>NVIDIA SETUP</div>
+        <div
+          style={{
+            border: '1px solid var(--border)',
+            borderRadius: 'var(--radius)',
+            background: 'var(--bg-2)',
+            padding: '8px 10px',
+            display: 'grid',
+            gap: 8,
+          }}
+        >
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, fontSize: 10 }}>
+            <span style={{ color: 'var(--text-2)' }}>Status</span>
+            <span style={{ color: nvidiaSetup?.configured ? 'var(--green)' : 'var(--yellow)' }}>
+              {nvidiaSetup?.configured ? 'configured' : 'not configured'}
+            </span>
+          </div>
+
+          <input
+            type="password"
+            value={nvidiaApiKey}
+            onChange={(event) => setNvidiaApiKey(event.target.value)}
+            placeholder="NVIDIA_API_KEY (nvapi-...)"
+            style={{
+              width: '100%',
+              background: 'var(--bg-1)',
+              border: '1px solid var(--border)',
+              color: 'var(--text-0)',
+              borderRadius: 'var(--radius)',
+              padding: '6px 8px',
+              fontSize: 11,
+              fontFamily: 'var(--font-mono)',
+            }}
+          />
+
+          <select
+            value={nvidiaModel}
+            onChange={(event) => setNvidiaModel(event.target.value)}
+            style={{
+              width: '100%',
+              background: 'var(--bg-1)',
+              border: '1px solid var(--border)',
+              color: 'var(--text-0)',
+              borderRadius: 'var(--radius)',
+              padding: '6px 8px',
+              fontSize: 11,
+              fontFamily: 'var(--font-mono)',
+            }}
+          >
+            {nvidiaModelOptions.length === 0 && (
+              <option value="">(no models discovered)</option>
+            )}
+            {nvidiaModelOptions.map((model) => (
+              <option key={model} value={model}>{model}</option>
+            ))}
+          </select>
+
+          <div style={{ display: 'flex', gap: 6 }}>
+            <button
+              onClick={() => void loadNvidiaSetupStatus()}
+              disabled={nvidiaSetupLoading}
+              style={{
+                border: '1px solid var(--border)',
+                color: 'var(--text-1)',
+                background: 'var(--bg-1)',
+                borderRadius: 'var(--radius)',
+                fontSize: 10,
+                padding: '4px 8px',
+                cursor: nvidiaSetupLoading ? 'not-allowed' : 'pointer',
+                opacity: nvidiaSetupLoading ? 0.65 : 1,
+              }}
+            >
+              {nvidiaSetupLoading ? 'Refreshing...' : 'Refresh'}
+            </button>
+
+            <button
+              onClick={() => void runNvidiaSetup()}
+              disabled={nvidiaSetupSaving}
+              style={{
+                border: '1px solid var(--accent)',
+                color: 'var(--accent)',
+                background: 'var(--accent-dim)',
+                borderRadius: 'var(--radius)',
+                fontSize: 10,
+                padding: '4px 8px',
+                cursor: nvidiaSetupSaving ? 'not-allowed' : 'pointer',
+                opacity: nvidiaSetupSaving ? 0.65 : 1,
+              }}
+            >
+              {nvidiaSetupSaving ? 'Connecting...' : 'Connect Nvidia'}
+            </button>
+          </div>
+
+          <div style={{ fontSize: 10, color: 'var(--text-2)' }}>
+            Sets provider to NVIDIA, updates model, and persists settings for AI chat and coding.
           </div>
         </div>
       </section>

@@ -19,6 +19,7 @@ _SUPPORTED_PROVIDER_KEYS = {
     "codex": ("CODEX_API_KEY",),
     "ollama": ("OLLAMA_BASE_URL",),
     "atomic-chat": ("ATOMIC_CHAT_BASE_URL",),
+    "nvidia": ("NVIDIA_API_KEY",),
 }
 
 
@@ -57,6 +58,8 @@ def _default_model_for_provider(provider: str) -> str:
         return "llama3"
     if name == "atomic-chat":
         return "default"
+    if name == "nvidia":
+        return "meta/llama-3.1-8b-instruct"
     return ""
 
 
@@ -67,13 +70,20 @@ async def gateway_status_endpoint(request: Request):
 
     openai_key_set = _provider_configured("openai")
     anthropic_key_set = _provider_configured("anthropic")
-    primary_provider = os.getenv("PRIMARY_PROVIDER", "anthropic").strip().lower() or "anthropic"
-    if openai_key_set and anthropic_key_set:
-        provider = "openai" if primary_provider == "openai" else "anthropic"
-    else:
-        provider = "openai" if openai_key_set else ("anthropic" if anthropic_key_set else None)
+    primary_provider = os.getenv("PRIMARY_PROVIDER", "").strip().lower()
 
-    resolved_provider = provider or primary_provider or "none"
+    # Resolve actual active provider — respect PRIMARY_PROVIDER before falling back
+    ALL_PROVIDERS = [
+        "nvidia", "ollama", "anthropic", "openai", "gemini", "deepseek",
+        "groq", "openrouter", "github-models", "codex", "atomic-chat",
+    ]
+    if primary_provider and _provider_configured(primary_provider):
+        provider = primary_provider
+    else:
+        # Fall back to first configured provider
+        provider = next((p for p in ALL_PROVIDERS if _provider_configured(p)), None)
+
+    resolved_provider = provider or primary_provider or "anthropic"
     default_model = _default_model_for_provider(resolved_provider) if resolved_provider != "none" else ""
 
     return {
@@ -100,5 +110,6 @@ async def gateway_status_endpoint(request: Request):
             "codex": _provider_configured("codex"),
             "ollama": _provider_configured("ollama"),
             "atomic_chat": _provider_configured("atomic-chat"),
+            "nvidia": _provider_configured("nvidia"),
         },
     }

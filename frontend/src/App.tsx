@@ -6,6 +6,7 @@ import { EditorPanel } from './components/EditorPanel'
 import { ArtifactSidePanel } from './components/ArtifactSidePanel'
 import { ArtifactSidePanelV2 } from './components/artifacts/ArtifactSidePanelV2'
 import { DesignStudio } from './components/DesignStudio'
+import { OpenClawPanel } from './components/OpenClawPanel'
 import { AntiVibePanel } from './components/AntiVibePanel'
 import { HermesPanel } from './components/HermesPanel'
 import { useChatStore } from './store/chatStore'
@@ -90,6 +91,13 @@ export default function App() {
     return () => window.removeEventListener('kodo:open-design-studio', handler)
   }, [setDesignStudioOpen])
 
+  const [openClawOpen, setOpenClawOpen] = useState(false)
+  useEffect(() => {
+    const handler = () => setOpenClawOpen(true)
+    window.addEventListener('kodo:open-openclaw', handler)
+    return () => window.removeEventListener('kodo:open-openclaw', handler)
+  }, [])
+
   const toggleSidebar = () => {
     setSidebarCollapsed((prev) => !prev)
   }
@@ -101,7 +109,9 @@ export default function App() {
   useEffect(() => {
     const handler = () => {
       setAntivibeOpen((prev) => {
-        if (!prev) setHermesOpen(false)
+        if (!prev) {
+          setHermesOpen(false)
+        }
         return !prev
       })
     }
@@ -112,7 +122,9 @@ export default function App() {
   useEffect(() => {
     const handler = () => {
       setHermesOpen((prev) => {
-        if (!prev) setAntivibeOpen(false)
+        if (!prev) {
+          setAntivibeOpen(false)
+        }
         return !prev
       })
     }
@@ -208,7 +220,13 @@ export default function App() {
     window.addEventListener('mouseup', onUp)
   }
 
-  const rightPanelWidth = artifactOpen ? artifactWidthPercent : (showEditor ? editorWidthPercent : (antivibeOpen ? antivibeWidthPercent : (hermesOpen ? hermesWidthPercent : 0)))
+  const rightPanelWidth = artifactOpen
+    ? artifactWidthPercent
+    : (showEditor
+      ? editorWidthPercent
+      : (antivibeOpen
+        ? antivibeWidthPercent
+        : (hermesOpen ? hermesWidthPercent : 0)))
 
   return (
     <div style={{
@@ -226,11 +244,16 @@ export default function App() {
           <div className="fusion-orb fusion-orb-3" />
         </div>
       )}
-      <Sidebar collapsed={sidebarCollapsed} onToggleCollapse={toggleSidebar} />
+      <Sidebar
+        collapsed={sidebarCollapsed}
+        onToggleCollapse={toggleSidebar}
+        antivibeOpen={antivibeOpen}
+        hermesOpen={hermesOpen}
+      />
 
       <div style={{ flex: 1, minWidth: 0, display: 'flex', height: '100%' }}>
         <div style={{
-          width: (artifactOpen || showEditor) ? `${100 - rightPanelWidth}%` : '100%',
+          width: (artifactOpen || showEditor || antivibeOpen || hermesOpen) ? `${100 - rightPanelWidth}%` : '100%',
           minWidth: 0,
           transition: 'width 0.2s ease',
         }}>
@@ -328,12 +351,16 @@ export default function App() {
             </div>
           </>
         )}
+
       </div>
 
       <NotificationCenter />
 
       {designStudioOpen && (
         <DesignStudio onClose={() => setDesignStudioOpen(false)} />
+      )}
+      {openClawOpen && (
+        <OpenClawPanel onClose={() => setOpenClawOpen(false)} />
       )}
     </div>
   )

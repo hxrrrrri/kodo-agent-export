@@ -1,10 +1,11 @@
 import { MouseEvent as ReactMouseEvent, useEffect, useMemo, useRef, useState } from 'react'
+
+
 import {
   Activity,
   BarChart2,
   BookOpen,
   Brain,
-  Globe,
   Clock,
   Cpu,
   FileText,
@@ -37,9 +38,6 @@ import { PromptLibraryPanel } from './PromptLibraryPanel'
 import { PromptCompressorPanel } from './PromptCompressorPanel'
 import { SkillBuilderPanel } from './SkillBuilderPanel'
 import { CodeReviewPanel } from './CodeReviewPanel'
-import { AntiVibePanel } from './AntiVibePanel'
-import { HermesPanel } from './HermesPanel'
-import { BrowserPanel } from './BrowserPanel'
 import { ArtifactGallery } from './ArtifactGallery'
 import { ThemeStudio, applyVarsToDOM } from './ThemeStudio'
 import { SessionInsights } from './SessionInsights'
@@ -48,9 +46,11 @@ import { SchedulerPanel } from './SchedulerPanel'
 type SidebarProps = {
   collapsed: boolean
   onToggleCollapse: () => void
+  antivibeOpen?: boolean
+  hermesOpen?: boolean
 }
 
-type SidebarView = 'sessions' | 'providers' | 'agents' | 'usage' | 'prompts' | 'compressor' | 'skills' | 'crg' | 'review' | 'antivibe' | 'hermes' | 'browser' | 'settings' | 'design' | 'gallery' | 'insights' | 'scheduler'
+type SidebarView = 'sessions' | 'providers' | 'agents' | 'usage' | 'prompts' | 'compressor' | 'skills' | 'crg' | 'review' | 'antivibe' | 'hermes' | 'settings' | 'design' | 'gallery' | 'insights' | 'scheduler'
 
 type RuntimeTask = {
   task_id: string
@@ -337,7 +337,7 @@ function GraphGlyphIcon({ size = 15 }: { size?: number }) {
   )
 }
 
-export function Sidebar({ collapsed, onToggleCollapse }: SidebarProps) {
+export function Sidebar({ collapsed, onToggleCollapse, antivibeOpen = false, hermesOpen = false }: SidebarProps) {
   const {
     sessions,
     sessionId,
@@ -1212,7 +1212,7 @@ export function Sidebar({ collapsed, onToggleCollapse }: SidebarProps) {
           onClick={() => {
             window.dispatchEvent(new CustomEvent('kodo:toggle-antivibe'))
           }}
-          active={false}
+          active={antivibeOpen}
         />
         <RailButton
           icon={<Brain size={15} />}
@@ -1220,9 +1220,8 @@ export function Sidebar({ collapsed, onToggleCollapse }: SidebarProps) {
           onClick={() => {
             window.dispatchEvent(new CustomEvent('kodo:toggle-hermes'))
           }}
-          active={false}
+          active={hermesOpen}
         />
-
         <RailButton
           icon={<Wand2 size={15} />}
           label="Design Studio"
@@ -1429,20 +1428,14 @@ export function Sidebar({ collapsed, onToggleCollapse }: SidebarProps) {
           <PanelNav
             icon={<BookOpen size={15} />}
             label="AntiVibe"
-            active={activeView === 'antivibe'}
-            onClick={() => setActiveView('antivibe')}
+            active={antivibeOpen}
+            onClick={() => window.dispatchEvent(new CustomEvent('kodo:toggle-antivibe'))}
           />
           <PanelNav
             icon={<Brain size={15} />}
             label="Hermes"
-            active={activeView === 'hermes'}
-            onClick={() => setActiveView('hermes')}
-          />
-          <PanelNav
-            icon={<Globe size={15} />}
-            label="Browser"
-            active={activeView === 'browser'}
-            onClick={() => setActiveView('browser')}
+            active={hermesOpen}
+            onClick={() => window.dispatchEvent(new CustomEvent('kodo:toggle-hermes'))}
           />
           <PanelNav
             icon={<Clock size={15} />}
@@ -2385,18 +2378,6 @@ export function Sidebar({ collapsed, onToggleCollapse }: SidebarProps) {
 
           {activeView === 'review' && (
             <CodeReviewPanel sessionId={sessionId} projectDir={projectDir} />
-          )}
-
-          {activeView === 'antivibe' && (
-            <AntiVibePanel />
-          )}
-
-          {activeView === 'hermes' && (
-            <HermesPanel />
-          )}
-
-          {activeView === 'browser' && (
-            <BrowserPanel />
           )}
 
           {activeView === 'scheduler' && (

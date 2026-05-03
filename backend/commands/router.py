@@ -23,6 +23,7 @@ from observability.usage import summarize_usage
 from privacy import feature_enabled, telemetry_disabled
 from profiles.manager import profile_manager
 from providers.smart_router import ROUTER_STRATEGIES, get_smart_router, smart_router_enabled
+from project_context import get_project_command, list_project_markdown
 from skills.registry import skill_registry
 from tasks.manager import task_manager
 from tools import TOOL_MAP
@@ -51,6 +52,7 @@ KNOWN_ROOT_COMMANDS = [
     "/crg",
     "/agents",
     "/skills",
+    "/commands",
     "/teleport",
     "/ultraplan",
     "/dream",
@@ -85,7 +87,8 @@ COMMAND_REGISTRY: dict[str, str] = {
     "/mcp": "Manage and call MCP servers",
     "/crg": "Operate code-review-graph analysis workflows",
     "/agents": "Manage spawned sub-agents",
-    "/skills": "Inspect bundled skills",
+    "/skills": "Inspect project, custom, and bundled skills",
+    "/commands": "Inspect and run project-local commands",
     "/teleport": "Quick-switch session mode with aliases",
     "/ultraplan": "Generate a high-fidelity implementation plan",
     "/dream": "Generate a bold next-iteration concept",
@@ -225,9 +228,11 @@ def _help_text() -> str:
         "/agents spawn <goal> - Spawn sub-agent",
         "/agents get <agent_id> - Show sub-agent details",
         "/agents stop <agent_id> - Stop sub-agent",
-        "/skills - List bundled skills",
+        "/skills - List project, custom, and bundled skills",
         "/skills show <name> - Show skill content",
-        "/skills run <name> - Run a bundled skill now",
+        "/skills run <name> - Run a skill now",
+        "/commands - List project-local commands from .kodo/commands",
+        "/commands run <name> - Run a project-local command",
         "/teleport <mode|alias> - Quick switch mode (aliases: coord, hunt, ultra)",
         "/ultraplan <goal> - Build an execution-ready implementation plan",
         "/dream [focus] - Brainstorm a high-impact next iteration",
@@ -412,13 +417,23 @@ async def _format_agents() -> str:
     return "\n".join(lines)
 
 
-def _format_skills() -> str:
-    skills = skill_registry.list_skills()
+def _format_skills(project_dir: str | None = None) -> str:
+    skills = skill_registry.list_skills(project_dir=project_dir)
     if not skills:
         return "No skills available."
     lines = ["Skills:"]
     for item in skills:
         lines.append(f"- {item.get('name')}: {item.get('description', '')}")
+    return "\n".join(lines)
+
+
+def _format_project_commands(project_dir: str | None) -> str:
+    commands = list_project_markdown(project_dir, "commands")
+    if not commands:
+        return "No project-local commands found. Add markdown files under .kodo/commands/."
+    lines = ["Project commands:"]
+    for item in commands:
+        lines.append(f"- /{item.get('name')}: {item.get('description', '')}")
     return "\n".join(lines)
 
 
@@ -1586,16 +1601,16 @@ async def execute_command(
 
     if command == "/skills":
         if not args:
-            return CommandExecutionResult(name="skills", text=_format_skills())
+            return CommandExecutionResult(name="skills", text=_format_skills(project_dir))
 
         action = args[0].lower()
         if action == "list":
-            return CommandExecutionResult(name="skills", text=_format_skills())
+            return CommandExecutionResult(name="skills", text=_format_skills(project_dir))
 
         if action == "show":
             if len(args) < 2:
                 return CommandExecutionResult(name="skills", text="Usage: /skills show <name>")
-            payload = skill_registry.get_skill(args[1])
+            payload = skill_registry.get_skill(args[1], project_dir=project_dir)
             if payload is None:
                 return CommandExecutionResult(name="skills", text=f"Skill not found: {args[1]}")
             content = str(payload.get("content", ""))
@@ -1606,7 +1621,7 @@ async def execute_command(
         if action == "run":
             if len(args) < 2:
                 return CommandExecutionResult(name="skills", text="Usage: /skills run <name>")
-            payload = skill_registry.get_skill(args[1])
+            payload = skill_registry.get_skill(args[1], project_dir=project_dir)
             if payload is None:
                 return CommandExecutionResult(name="skills", text=f"Skill not found: {args[1]}")
 
@@ -1623,6 +1638,58 @@ async def execute_command(
             )
 
         return CommandExecutionResult(name="skills", text="Usage: /skills [list|show|run]")
+
+    if command == "/commands":
+        if not args or args[0].lower() in {"list", "ls"}:
+            return CommandExecutionResult(name="commands", text=_format_project_commands(project_dir))
+
+        action = args[0].lower()
+        if action == "show":
+            if len(args) < 2:
+                return CommandExecutionResult(name="commands", text="Usage: /commands show <name>")
+            payload = get_project_command(project_dir, args[1])
+            if payload is None:
+                return CommandExecutionResult(name="commands", text=f"Project command not found: {args[1]}")
+            content = str(payload.get("content", ""))
+            if len(content) > 3500:
+                content = content[:3500] + "\n\n... (truncated)"
+            return CommandExecutionResult(name="commands", text=content)
+
+        if action == "run":
+            if len(args) < 2:
+                return CommandExecutionResult(name="commands", text="Usage: /commands run <name> [extra context]")
+            payload = get_project_command(project_dir, args[1])
+            if payload is None:
+                return CommandExecutionResult(name="commands", text=f"Project command not found: {args[1]}")
+            extra_context = " ".join(args[2:]).strip()
+            command_name = str(payload.get("name", args[1]))
+            command_content = str(payload.get("content", "")).strip()
+            run_prompt = f"[Project command: /{command_name}]\n{command_content}"
+            if extra_context:
+                run_prompt += f"\n\nExtra context from user:\n{extra_context}"
+            run_prompt += "\n\nPlease execute this project command now."
+            return CommandExecutionResult(
+                name="commands",
+                text=f"Running project command: /{command_name}",
+                run_prompt=run_prompt,
+            )
+
+        return CommandExecutionResult(name="commands", text="Usage: /commands [list|show|run]")
+
+    project_command = get_project_command(project_dir, command)
+    if project_command is not None:
+        command_name = str(project_command.get("name", command.lstrip("/")))
+        command_content = str(project_command.get("content", "")).strip()
+        extra_context = " ".join(args).strip()
+        run_prompt = f"[Project command: /{command_name}]\n{command_content}"
+        if extra_context:
+            run_prompt += f"\n\nExtra context from user:\n{extra_context}"
+        run_prompt += "\n\nPlease execute this project command now."
+        return CommandExecutionResult(
+            name=command_name,
+            text=f"Running project command: /{command_name}",
+            run_prompt=run_prompt,
+        )
 
     suggestions = _suggest_commands(command)
     if suggestions:

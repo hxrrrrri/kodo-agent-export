@@ -29,6 +29,7 @@ logger = logging.getLogger(__name__)
 
 USER_PROFILE_PATH = KODO_DIR / "user_profile.json"
 SESSIONS_DIR = KODO_DIR / "sessions"
+CONTEXT_DIR = KODO_DIR / "context"
 
 # ── Helper: call LLM inline for summarization ──────────────────────────────────
 
@@ -564,3 +565,209 @@ async def improve_skill(body: ImproveSkillRequest, request: Request):
         "improved": True,
         "content": improved,
     }
+
+
+# -- Hermes parity: skills, tools, model catalog, context, insights, migration --
+
+class ContextFileRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=120, pattern=r"^[a-zA-Z0-9_.-]+$")
+    content: str = Field(default="", max_length=50000)
+
+
+@router.get("/skills")
+async def list_hermes_skills(request: Request):
+    """List local user skills, compatible with the Hermes skills concept."""
+    require_api_auth(request)
+    skills_dir = KODO_DIR / "skills"
+    skills_dir.mkdir(parents=True, exist_ok=True)
+    skills = []
+    for path in sorted(skills_dir.glob("*.md")):
+        text = path.read_text(encoding="utf-8", errors="replace")
+        description = ""
+        for line in text.splitlines()[:20]:
+            if line.lower().startswith("description:"):
+                description = line.split(":", 1)[1].strip()
+                break
+        skills.append({
+            "name": path.stem,
+            "path": str(path),
+            "description": description,
+            "size": path.stat().st_size,
+            "updated_at": path.stat().st_mtime,
+        })
+    return {"skills": skills}
+
+
+@router.get("/tools")
+async def hermes_tools_catalog(request: Request):
+    """Return Kodo's available tool families in a Hermes-style catalog."""
+    require_api_auth(request)
+    return {
+        "toolsets": [
+            {
+                "name": "messaging",
+                "tools": ["send_message", "auto_reply", "templates", "channel_webhooks"],
+                "surfaces": ["telegram", "discord", "slack", "whatsapp", "instagram", "email", "signal", "matrix", "teams", "webhook"],
+            },
+            {
+                "name": "automation",
+                "tools": ["computer_use", "app_automation", "browser", "desktop", "android", "workflow_dag", "cron"],
+            },
+            {
+                "name": "memory",
+                "tools": ["session_search", "profile", "memory", "soul", "skills", "context_files"],
+            },
+            {
+                "name": "integration",
+                "tools": ["mcp", "webhooks", "http_request", "database", "web_search", "web_fetch"],
+            },
+        ]
+    }
+
+
+@router.get("/models")
+async def hermes_model_catalog(request: Request):
+    """Describe local and API-key model routes available to Hermes."""
+    require_api_auth(request)
+    providers = [
+        ("ollama", "OLLAMA_BASE_URL", ""),
+        ("openai", "OPENAI_BASE_URL", "OPENAI_API_KEY"),
+        ("anthropic", "ANTHROPIC_BASE_URL", "ANTHROPIC_API_KEY"),
+        ("google", "GEMINI_BASE_URL", "GOOGLE_API_KEY"),
+        ("groq", "GROQ_BASE_URL", "GROQ_API_KEY"),
+        ("deepseek", "DEEPSEEK_BASE_URL", "DEEPSEEK_API_KEY"),
+        ("openrouter", "OPENROUTER_BASE_URL", "OPENROUTER_API_KEY"),
+        ("nvidia", "NVIDIA_BASE_URL", "NVIDIA_API_KEY"),
+    ]
+    return {
+        "active_provider": os.getenv("PRIMARY_PROVIDER", ""),
+        "active_model": os.getenv("MODEL", ""),
+        "providers": [
+            {
+                "name": name,
+                "base_url": os.getenv(base_env, ""),
+                "configured": name == "ollama" or bool(os.getenv(key_env, "").strip()),
+                "key_env": key_env,
+            }
+            for name, base_env, key_env in providers
+        ],
+    }
+
+
+@router.get("/context-files")
+async def list_context_files(request: Request):
+    require_api_auth(request)
+    CONTEXT_DIR.mkdir(parents=True, exist_ok=True)
+    return {
+        "files": [
+            {
+                "name": path.name,
+                "path": str(path),
+                "size": path.stat().st_size,
+                "updated_at": path.stat().st_mtime,
+            }
+            for path in sorted(CONTEXT_DIR.glob("*"))
+            if path.is_file()
+        ]
+    }
+
+
+@router.post("/context-files")
+async def save_context_file(body: ContextFileRequest, request: Request):
+    require_api_auth(request)
+    CONTEXT_DIR.mkdir(parents=True, exist_ok=True)
+    path = CONTEXT_DIR / body.name
+    path.write_text(body.content, encoding="utf-8")
+    return {"ok": True, "path": str(path), "size": path.stat().st_size}
+
+
+@router.get("/context-files/{name}")
+async def get_context_file(name: str, request: Request):
+    require_api_auth(request)
+    path = CONTEXT_DIR / name
+    if not path.exists() or not path.is_file():
+        raise HTTPException(status_code=404, detail="Context file not found")
+    return {"name": path.name, "content": path.read_text(encoding="utf-8", errors="replace")}
+
+
+@router.delete("/context-files/{name}")
+async def delete_context_file(name: str, request: Request):
+    require_api_auth(request)
+    path = CONTEXT_DIR / name
+    if path.exists() and path.is_file():
+        path.unlink()
+        return {"ok": True}
+    return {"ok": False, "error": "Context file not found"}
+
+
+@router.get("/insights")
+async def hermes_insights(request: Request, days: int = 14):
+    """Summarize recent session and memory activity."""
+    require_api_auth(request)
+    sessions = await memory_manager.list_sessions()
+    cutoff = __import__("time").time() - max(1, min(days, 365)) * 86400
+    recent = [s for s in sessions if float(s.get("updated_at", 0) or 0) >= cutoff]
+    skills_dir = KODO_DIR / "skills"
+    skill_count = len(list(skills_dir.glob("*.md"))) if skills_dir.exists() else 0
+    profile = _load_profile()
+    return {
+        "days": days,
+        "sessions_total": len(sessions),
+        "sessions_recent": len(recent),
+        "messages_recent": sum(int(s.get("message_count", 0) or 0) for s in recent),
+        "skills": skill_count,
+        "profile_traits": len(profile.get("traits", {})),
+        "profile_preferences": len(profile.get("preferences", {})),
+        "notes": len(profile.get("notes", [])),
+    }
+
+
+@router.post("/memory/nudge")
+async def hermes_memory_nudge(request: Request):
+    """Ask the model what should be persisted from the latest sessions."""
+    require_api_auth(request)
+    sessions = (await memory_manager.list_sessions())[:5]
+    if not sessions:
+        return {"ok": True, "suggestions": []}
+    summary = "\n".join(
+        f"- {s.get('title', s.get('session_id'))}: {s.get('message_count', 0)} messages"
+        for s in sessions
+    )
+    prompt = (
+        "Review these recent sessions and suggest durable memories or skills the agent should save. "
+        "Return concise bullet points only.\n\n" + summary
+    )
+    output = await _llm_call(prompt, system="You curate durable agent memory.", max_tokens=400)
+    suggestions = [line.strip("- ").strip() for line in output.splitlines() if line.strip()]
+    return {"ok": True, "suggestions": suggestions}
+
+
+@router.post("/migrate-openclaw")
+async def migrate_openclaw_user_data(request: Request):
+    """Best-effort local migration of OpenClaw user data into Kodo/Hermes paths."""
+    require_api_auth(request)
+    source = KODO_DIR.parent / ".openclaw"
+    migrated: list[dict[str, str]] = []
+    if not source.exists():
+        return {"ok": False, "error": f"OpenClaw directory not found at {source}"}
+
+    mappings = [
+        (source / "SOUL.md", KODO_DIR / "SOUL.md"),
+        (source / "MEMORY.md", GLOBAL_MEMORY_FILE),
+    ]
+    for src, dst in mappings:
+        if src.exists() and src.is_file():
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            dst.write_text(src.read_text(encoding="utf-8", errors="replace"), encoding="utf-8")
+            migrated.append({"from": str(src), "to": str(dst)})
+
+    source_skills = source / "skills"
+    if source_skills.exists():
+        target_skills = KODO_DIR / "skills" / "openclaw-imports"
+        target_skills.mkdir(parents=True, exist_ok=True)
+        for skill in source_skills.rglob("*.md"):
+            dst = target_skills / skill.name
+            dst.write_text(skill.read_text(encoding="utf-8", errors="replace"), encoding="utf-8")
+            migrated.append({"from": str(skill), "to": str(dst)})
+
+    return {"ok": True, "migrated": migrated}
