@@ -163,4 +163,78 @@ describe('parseArtifacts — v2 protocol', () => {
     expect(artifacts).toHaveLength(1)
     expect(artifacts[0].id).toBe('hello')
   })
+
+  it('promotes a plain html fence and strips a leading filename line', () => {
+    const text = [
+      'Here is the page:',
+      '```html',
+      'index.html',
+      '<!DOCTYPE html><html><body><h1>Animeverse</h1></body></html>',
+      '```',
+    ].join('\n')
+
+    const { artifacts } = parseArtifacts(text)
+    expect(artifacts).toHaveLength(1)
+    expect(artifacts[0].type).toBe('html')
+    expect(artifacts[0].files[0].path).toBe('index.html')
+    expect(artifacts[0].files[0].content).toMatch(/^<!DOCTYPE html>/)
+    expect(artifacts[0].files[0].content).not.toContain('index.html\n')
+  })
+
+  it('promotes a blank fence when the body starts with an html filename', () => {
+    const text = [
+      '```',
+      'index.html',
+      '<!DOCTYPE html><html><body><main>Live preview</main></body></html>',
+      '```',
+    ].join('\n')
+
+    const { artifacts } = parseArtifacts(text)
+    expect(artifacts).toHaveLength(1)
+    expect(artifacts[0].type).toBe('html')
+    expect(artifacts[0].files[0].path).toBe('index.html')
+  })
+
+  it('promotes html fences that put the filename in the info string', () => {
+    const text = [
+      '```html index.html',
+      '<!DOCTYPE html><html><body><h1>Preview</h1></body></html>',
+      '```',
+    ].join('\n')
+
+    const { artifacts } = parseArtifacts(text)
+    expect(artifacts).toHaveLength(1)
+    expect(artifacts[0].type).toBe('html')
+    expect(artifacts[0].files[0].path).toBe('index.html')
+  })
+
+  it('salvages an unclosed renderable fence only in final parse mode', () => {
+    const text = [
+      '```html',
+      'index.html',
+      '<!DOCTYPE html><html><body><h1>Unclosed but complete enough</h1></body></html>',
+    ].join('\n')
+
+    const streaming = parseArtifacts(text)
+    expect(streaming.streaming).toBe(true)
+    expect(streaming.artifacts).toHaveLength(0)
+
+    const final = parseArtifacts(text, { allowIncomplete: true })
+    expect(final.artifacts).toHaveLength(1)
+    expect(final.artifacts[0].type).toBe('html')
+  })
+
+  it('extracts a standalone html document from prose in final parse mode', () => {
+    const text = [
+      'Plan complete. Save this as index.html:',
+      '<!DOCTYPE html>',
+      '<html><body><section>Standalone document</section></body></html>',
+      'That is the full page.',
+    ].join('\n')
+
+    const { artifacts } = parseArtifacts(text, { allowIncomplete: true })
+    expect(artifacts).toHaveLength(1)
+    expect(artifacts[0].type).toBe('html')
+    expect(artifacts[0].files[0].content).not.toContain('Plan complete')
+  })
 })

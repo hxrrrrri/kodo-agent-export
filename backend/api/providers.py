@@ -66,7 +66,7 @@ def _provider_configured(provider: str, request: Request) -> bool:
     if name == "codex":
         return bool(_env_or_override(request, "CODEX_API_KEY"))
     if name == "ollama":
-        return bool(os.getenv("OLLAMA_BASE_URL", "").strip())
+        return bool(os.getenv("OLLAMA_BASE_URL", "").strip() or os.getenv("OLLAMA_API_KEY", "").strip())
     if name == "atomic-chat":
         return bool(os.getenv("ATOMIC_CHAT_BASE_URL", "").strip())
     if name == "nvidia":
@@ -159,6 +159,7 @@ class ProviderSwitchRequest(BaseModel):
 
 class OllamaSetupRequest(BaseModel):
     base_url: str | None = Field(default=None, max_length=300)
+    api_key: str | None = Field(default=None, max_length=500)
     model: str | None = Field(default=None, max_length=200)
     session_id: str | None = Field(default=None, max_length=128)
     persist: bool = Field(default=True)
@@ -183,6 +184,7 @@ async def _ollama_setup_status() -> dict[str, object]:
     return {
         "base_url": normalized_base,
         "configured": bool(os.getenv("OLLAMA_BASE_URL", "").strip()),
+        "api_key_configured": bool(os.getenv("OLLAMA_API_KEY", "").strip()),
         "reachable": bool(local.get("ollama")),
         "models": models,
         "recommended_model": recommended,
@@ -425,6 +427,10 @@ async def ollama_setup_endpoint(body: OllamaSetupRequest, request: Request):
 
     normalized_base = _normalize_ollama_base_url(body.base_url)
     _set_runtime_setting("OLLAMA_BASE_URL", normalized_base, persist=body.persist)
+
+    if body.api_key is not None:
+        stripped_key = body.api_key.strip()
+        _set_runtime_setting("OLLAMA_API_KEY", stripped_key, persist=body.persist)
 
     models = await list_available_models("ollama")
     selected_model = str(body.model or "").strip()

@@ -108,6 +108,7 @@ type ProviderSwitchResponse = {
 type OllamaSetupStatusResponse = {
   base_url: string
   configured: boolean
+  api_key_configured?: boolean
   reachable: boolean
   models: string[]
   recommended_model: string | null
@@ -197,6 +198,8 @@ export function ProviderPanel() {
   const [switching, setSwitching] = useState(false)
   const [ollamaSetup, setOllamaSetup] = useState<OllamaSetupStatusResponse | null>(null)
   const [ollamaBaseUrl, setOllamaBaseUrl] = useState('http://127.0.0.1:11434')
+  const [ollamaApiKey, setOllamaApiKey] = useState('')
+  const [ollamaMode, setOllamaMode] = useState<'local' | 'cloud'>('local')
   const [ollamaModel, setOllamaModel] = useState('')
   const [ollamaSetupLoading, setOllamaSetupLoading] = useState(false)
   const [ollamaSetupSaving, setOllamaSetupSaving] = useState(false)
@@ -381,6 +384,9 @@ export function ProviderPanel() {
       const payload = (await res.json()) as OllamaSetupStatusResponse
       setOllamaSetup(payload)
       setOllamaBaseUrl(payload.base_url || 'http://127.0.0.1:11434')
+      if (payload.api_key_configured && !payload.configured) {
+        setOllamaMode('cloud')
+      }
 
       const models = Array.isArray(payload.models) ? payload.models : []
       const preferred = payload.active_model || payload.recommended_model || models[0] || ''
@@ -404,7 +410,8 @@ export function ProviderPanel() {
         method: 'POST',
         headers: buildApiHeaders({ 'Content-Type': 'application/json' }),
         body: JSON.stringify({
-          base_url: ollamaBaseUrl.trim() || null,
+          base_url: ollamaMode === 'cloud' ? (ollamaBaseUrl.trim() || null) : (ollamaBaseUrl.trim() || null),
+          api_key: ollamaApiKey.trim() || null,
           model: ollamaModel.trim() || null,
           session_id: sessionId || null,
           persist: true,
@@ -991,73 +998,170 @@ export function ProviderPanel() {
             gap: 8,
           }}
         >
+          {/* Mode toggle */}
+          <div style={{ display: 'flex', gap: 4, background: 'var(--bg-1)', borderRadius: 'var(--radius)', padding: 3 }}>
+            {(['local', 'cloud'] as const).map((m) => (
+              <button
+                key={m}
+                type="button"
+                onClick={() => setOllamaMode(m)}
+                style={{
+                  flex: 1,
+                  fontSize: 10,
+                  fontFamily: 'var(--font-mono)',
+                  padding: '3px 0',
+                  border: 'none',
+                  borderRadius: 'var(--radius)',
+                  cursor: 'pointer',
+                  background: ollamaMode === m ? 'var(--accent)' : 'transparent',
+                  color: ollamaMode === m ? '#fff' : 'var(--text-2)',
+                  letterSpacing: '0.06em',
+                  transition: 'background 0.15s, color 0.15s',
+                }}
+              >
+                {m === 'local' ? 'LOCAL' : 'CLOUD / API KEY'}
+              </button>
+            ))}
+          </div>
+
+          {/* Status row */}
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, fontSize: 10 }}>
-            <span style={{ color: 'var(--text-2)' }}>Status</span>
-            <span style={{ color: ollamaSetup?.reachable ? 'var(--green)' : 'var(--yellow)' }}>
-              {ollamaSetup?.reachable ? 'reachable' : 'not reachable'}
+            <span style={{ color: 'var(--text-2)' }}>
+              {ollamaMode === 'local' ? 'Status' : 'API key'}
+            </span>
+            <span style={{
+              color: ollamaMode === 'local'
+                ? (ollamaSetup?.reachable ? 'var(--green)' : 'var(--yellow)')
+                : (ollamaSetup?.api_key_configured ? 'var(--green)' : 'var(--text-2)'),
+            }}>
+              {ollamaMode === 'local'
+                ? (ollamaSetup?.reachable ? 'reachable' : 'not reachable')
+                : (ollamaSetup?.api_key_configured ? 'configured' : 'not set')}
             </span>
           </div>
 
-          <input
-            value={ollamaBaseUrl}
-            onChange={(event) => setOllamaBaseUrl(event.target.value)}
-            placeholder="http://127.0.0.1:11434"
-            style={{
-              width: '100%',
-              background: 'var(--bg-1)',
-              border: '1px solid var(--border)',
-              color: 'var(--text-0)',
-              borderRadius: 'var(--radius)',
-              padding: '6px 8px',
-              fontSize: 11,
-              fontFamily: 'var(--font-mono)',
-            }}
-          />
-
-          <select
-            value={ollamaModel}
-            onChange={(event) => setOllamaModel(event.target.value)}
-            style={{
-              width: '100%',
-              background: 'var(--bg-1)',
-              border: '1px solid var(--border)',
-              color: 'var(--text-0)',
-              borderRadius: 'var(--radius)',
-              padding: '6px 8px',
-              fontSize: 11,
-              fontFamily: 'var(--font-mono)',
-            }}
-          >
-            {ollamaModelOptions.length === 0 && (
-              <option value="">(no models discovered)</option>
-            )}
-            {ollamaModelOptions.map((model) => (
-              <option key={model} value={model}>{model}</option>
-            ))}
-          </select>
-
-          <div style={{ display: 'flex', gap: 6 }}>
-            <button
-              onClick={() => void loadOllamaSetupStatus()}
-              disabled={ollamaSetupLoading}
+          {/* Local mode: base URL input */}
+          {ollamaMode === 'local' && (
+            <input
+              value={ollamaBaseUrl}
+              onChange={(event) => setOllamaBaseUrl(event.target.value)}
+              placeholder="http://127.0.0.1:11434"
               style={{
-                border: '1px solid var(--border)',
-                color: 'var(--text-1)',
+                width: '100%',
                 background: 'var(--bg-1)',
+                border: '1px solid var(--border)',
+                color: 'var(--text-0)',
                 borderRadius: 'var(--radius)',
-                fontSize: 10,
-                padding: '4px 8px',
-                cursor: ollamaSetupLoading ? 'not-allowed' : 'pointer',
-                opacity: ollamaSetupLoading ? 0.65 : 1,
+                padding: '6px 8px',
+                fontSize: 11,
+                fontFamily: 'var(--font-mono)',
+              }}
+            />
+          )}
+
+          {/* Cloud mode: API key + optional base URL */}
+          {ollamaMode === 'cloud' && (
+            <>
+              <input
+                type="password"
+                value={ollamaApiKey}
+                onChange={(event) => setOllamaApiKey(event.target.value)}
+                placeholder="API key (e.g. sk-...)"
+                style={{
+                  width: '100%',
+                  background: 'var(--bg-1)',
+                  border: '1px solid var(--border)',
+                  color: 'var(--text-0)',
+                  borderRadius: 'var(--radius)',
+                  padding: '6px 8px',
+                  fontSize: 11,
+                  fontFamily: 'var(--font-mono)',
+                }}
+              />
+              <input
+                value={ollamaBaseUrl}
+                onChange={(event) => setOllamaBaseUrl(event.target.value)}
+                placeholder="Base URL (e.g. https://ollama.example.com)"
+                style={{
+                  width: '100%',
+                  background: 'var(--bg-1)',
+                  border: '1px solid var(--border)',
+                  color: 'var(--text-0)',
+                  borderRadius: 'var(--radius)',
+                  padding: '6px 8px',
+                  fontSize: 11,
+                  fontFamily: 'var(--font-mono)',
+                }}
+              />
+            </>
+          )}
+
+          {/* Model select (local: dropdown, cloud: text input) */}
+          {ollamaMode === 'local' ? (
+            <select
+              value={ollamaModel}
+              onChange={(event) => setOllamaModel(event.target.value)}
+              style={{
+                width: '100%',
+                background: 'var(--bg-1)',
+                border: '1px solid var(--border)',
+                color: 'var(--text-0)',
+                borderRadius: 'var(--radius)',
+                padding: '6px 8px',
+                fontSize: 11,
+                fontFamily: 'var(--font-mono)',
               }}
             >
-              {ollamaSetupLoading ? 'Refreshing...' : 'Refresh'}
-            </button>
+              {ollamaModelOptions.length === 0 && (
+                <option value="">(no models discovered)</option>
+              )}
+              {ollamaModelOptions.map((model) => (
+                <option key={model} value={model}>{model}</option>
+              ))}
+            </select>
+          ) : (
+            <input
+              value={ollamaModel}
+              onChange={(event) => setOllamaModel(event.target.value)}
+              placeholder="Model name (e.g. llama3, mistral)"
+              style={{
+                width: '100%',
+                background: 'var(--bg-1)',
+                border: '1px solid var(--border)',
+                color: 'var(--text-0)',
+                borderRadius: 'var(--radius)',
+                padding: '6px 8px',
+                fontSize: 11,
+                fontFamily: 'var(--font-mono)',
+              }}
+            />
+          )}
+
+          <div style={{ display: 'flex', gap: 6 }}>
+            {ollamaMode === 'local' && (
+              <button
+                onClick={() => void loadOllamaSetupStatus()}
+                disabled={ollamaSetupLoading}
+                style={{
+                  border: '1px solid var(--border)',
+                  color: 'var(--text-1)',
+                  background: 'var(--bg-1)',
+                  borderRadius: 'var(--radius)',
+                  fontSize: 10,
+                  padding: '4px 8px',
+                  cursor: ollamaSetupLoading ? 'not-allowed' : 'pointer',
+                  opacity: ollamaSetupLoading ? 0.65 : 1,
+                }}
+              >
+                {ollamaSetupLoading ? 'Refreshing...' : 'Refresh'}
+              </button>
+            )}
 
             <button
               onClick={() => void runOllamaSetup()}
               disabled={ollamaSetupSaving}
               style={{
+                flex: 1,
                 border: '1px solid var(--accent)',
                 color: 'var(--accent)',
                 background: 'var(--accent-dim)',
@@ -1073,7 +1177,9 @@ export function ProviderPanel() {
           </div>
 
           <div style={{ fontSize: 10, color: 'var(--text-2)' }}>
-            Sets provider to Ollama, updates model, and persists settings for one-click local usage.
+            {ollamaMode === 'local'
+              ? 'Local: run Ollama in background and connect via base URL.'
+              : 'Cloud: connect to a hosted Ollama-compatible endpoint using an API key.'}
           </div>
         </div>
       </section>

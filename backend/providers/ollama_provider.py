@@ -24,6 +24,13 @@ def _base_url() -> str:
     return os.getenv("OLLAMA_BASE_URL", "http://localhost:11434").rstrip("/")
 
 
+def _auth_headers() -> dict[str, str]:
+    key = os.getenv("OLLAMA_API_KEY", "").strip()
+    if key:
+        return {"Authorization": f"Bearer {key}"}
+    return {}
+
+
 def _dedupe_models(models: list[str]) -> list[str]:
     seen: set[str] = set()
     result: list[str] = []
@@ -54,7 +61,7 @@ def _model_names_from_tags_payload(data: Any) -> list[str]:
 
 async def check_ollama_running() -> bool:
     try:
-        async with build_httpx_async_client(timeout=3.0) as client:
+        async with build_httpx_async_client(timeout=3.0, headers=_auth_headers()) as client:
             resp = await client.get(f"{_base_url()}/api/tags")
             return resp.status_code == 200
     except Exception:
@@ -64,7 +71,7 @@ async def check_ollama_running() -> bool:
 async def list_ollama_models() -> list[str]:
     models: list[str] = []
     try:
-        async with build_httpx_async_client(timeout=5.0) as client:
+        async with build_httpx_async_client(timeout=5.0, headers=_auth_headers()) as client:
             resp = await client.get(f"{_base_url()}/api/tags")
             resp.raise_for_status()
             models.extend(_model_names_from_tags_payload(resp.json()))
@@ -173,7 +180,7 @@ async def ollama_chat(
         },
     }
 
-    async with build_httpx_async_client(timeout=120.0) as client:
+    async with build_httpx_async_client(timeout=120.0, headers=_auth_headers()) as client:
         resp = await client.post(f"{_base_url()}/api/chat", json=payload)
         resp.raise_for_status()
         data = resp.json()
@@ -217,7 +224,7 @@ async def ollama_chat_stream(
         },
     }
 
-    async with build_httpx_async_client(timeout=120.0) as client:
+    async with build_httpx_async_client(timeout=120.0, headers=_auth_headers()) as client:
         async with client.stream("POST", f"{_base_url()}/api/chat", json=payload) as resp:
             resp.raise_for_status()
             async for line in resp.aiter_lines():

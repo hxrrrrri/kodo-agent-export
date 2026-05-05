@@ -1,3 +1,5 @@
+from pathlib import Path
+
 from agent.modes import get_mode
 from artifacts.protocol_prompt import build_artifact_system_block
 from caveman import build_mode_prompt as build_caveman_mode_prompt
@@ -5,6 +7,45 @@ from caveman import normalize_mode as normalize_caveman_mode
 from memory.manager import memory_manager
 from privacy import feature_enabled
 from project_context import build_project_context_prompt
+
+_BUNDLED_SKILLS_DIR = Path(__file__).parent.parent / "skills" / "bundled"
+_PLANNER_SKILL_FALLBACK = _BUNDLED_SKILLS_DIR / "smart-planner.md"
+
+
+def _strip_frontmatter(text: str) -> str:
+    if text.startswith("---"):
+        end = text.find("---", 3)
+        if end != -1:
+            text = text[end + 3:].lstrip()
+    return text.strip()
+
+
+def _load_auto_inject_skills() -> list[str]:
+    """Return prompt text for every enabled auto-inject skill.
+
+    Falls back to smart-planner directly if the settings layer is unavailable
+    (e.g. during early startup or import errors).
+    """
+    try:
+        from skills.settings import list_auto_inject_skill_names
+        from skills.registry import skill_registry
+
+        names = list_auto_inject_skill_names()
+        result: list[str] = []
+        for name in names:
+            data = skill_registry.get_skill(name)
+            if data and data.get("content"):
+                body = _strip_frontmatter(data["content"])
+                if body:
+                    result.append(body)
+        return result
+    except Exception:
+        # Hard fallback — always inject smart-planner even if settings fail
+        try:
+            text = _strip_frontmatter(_PLANNER_SKILL_FALLBACK.read_text(encoding="utf-8"))
+            return [text] if text else []
+        except Exception:
+            return []
 
 BASE_SYSTEM_PROMPT = """You are KODO, an autonomous software engineering agent.
 
@@ -92,6 +133,11 @@ async def build_system_prompt(
             caveman_prompt = build_caveman_mode_prompt(normalized_caveman_mode)
             if caveman_prompt.strip():
                 sections.append(caveman_prompt)
+
+    # Auto-inject skills — all skills the user has marked "Auto-inject" in the
+    # Skills Library panel are appended here so every LLM receives them.
+    for skill_body in _load_auto_inject_skills():
+        sections.append(skill_body)
 
     # Repeat the artifact block at the end too — LLMs weight recent instructions
     # heavier, so this re-primes right before the user message lands.

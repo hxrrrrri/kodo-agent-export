@@ -2118,15 +2118,16 @@ export function ChatWindow({ editorOpen, onToggleEditor }: ChatWindowProps) {
         borderBottom: '1px solid var(--border)',
         display: 'flex',
         alignItems: 'center',
-        justifyContent: 'space-between',
+        justifyContent: 'flex-start',
         background: 'var(--bg-1)',
         gap: 10,
         flexWrap: headerCollapsed ? 'nowrap' : 'wrap',
         flexShrink: 0,
         transition: 'padding 0.2s ease',
         overflow: headerCollapsed ? 'hidden' : 'visible',
+        minWidth: 0,
       }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+        <div className="kodo-header-status" style={{ display: 'flex', alignItems: 'center', gap: 10, flexShrink: 0 }}>
           <Zap size={14} color="var(--accent)" />
           <span style={{ fontSize: 12, color: 'var(--text-1)', letterSpacing: '0.05em' }}>
             {isLoading ? (
@@ -2158,8 +2159,9 @@ export function ChatWindow({ editorOpen, onToggleEditor }: ChatWindowProps) {
           gap: 6,
           flexWrap: 'wrap',
           alignItems: 'center',
-          justifyContent: 'flex-end',
+          justifyContent: 'flex-start',
           flex: 1,
+          minWidth: 0,
         }}>
 
         <button
@@ -2686,6 +2688,7 @@ export function ChatWindow({ editorOpen, onToggleEditor }: ChatWindowProps) {
         {/* Collapse header toggle — always visible */}
         <button
           type="button"
+          className="kodo-header-collapse"
           onClick={() => setHeaderCollapsed((v) => !v)}
           title={headerCollapsed ? 'Expand header' : 'Collapse header for more space'}
           style={{

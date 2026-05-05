@@ -1,0 +1,530 @@
+﻿<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Salesforce — Design System</title>
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+:root{
+  --bg:#f3f3f3;--surface:#ffffff;--text:#032d60;--muted:#444444;--accent:#0176d3;
+  --font-d:Inter, system-ui, sans-serif;--font-b:Inter, system-ui, sans-serif;
+  --border:rgba(0,0,0,0.1);--border-strong:rgba(0,0,0,0.18);
+  --shadow:0 2px 16px rgba(0,0,0,0.07);--accent-alpha:rgba(1,118,211,0.15);
+}
+html{font-size:16px;-webkit-font-smoothing:antialiased;color-scheme:light}
+body{background:var(--bg);color:var(--text);font-family:var(--font-b);min-height:100vh;overflow-x:hidden}
+a{color:inherit;text-decoration:none}
+
+/* NAV */
+nav{display:flex;align-items:center;gap:32px;padding:0 48px;height:64px;border-bottom:1px solid var(--border);position:sticky;top:0;background:var(--bg);z-index:50}
+.nav-brand{font-family:var(--font-d);font-weight:800;font-size:16px;letter-spacing:-0.02em}
+.nav-links{display:flex;gap:24px;list-style:none}
+.nav-links a{font-size:14px;font-weight:500;color:var(--muted)}
+.nav-links a:hover{color:var(--text)}
+.nav-right{margin-left:auto;display:flex;gap:10px;align-items:center}
+.btn-ghost{background:none;border:1px solid var(--border-strong);color:var(--text);font-size:13px;font-weight:500;padding:7px 16px;border-radius:8px;cursor:pointer;font-family:var(--font-b)}
+.btn-accent{background:#0176d3;border:none;color:#ffffff;font-size:13px;font-weight:700;padding:8px 18px;border-radius:8px;cursor:pointer;font-family:var(--font-b)}
+
+/* HEADER BAND */
+.header-band{padding:12px 48px;border-bottom:1px solid var(--border);font-size:11px;font-weight:700;letter-spacing:0.1em;text-transform:uppercase;color:var(--muted)}
+
+/* SECTION WRAPPER */
+.section{padding:56px 48px;border-bottom:1px solid var(--border)}
+.section-label{font-size:11px;font-weight:700;letter-spacing:0.1em;text-transform:uppercase;color:var(--muted);margin-bottom:8px}
+.section-title{font-family:var(--font-d);font-size:28px;font-weight:800;letter-spacing:-0.02em;line-height:1.1;margin-bottom:8px}
+.section-desc{font-size:14px;color:var(--muted);line-height:1.6;max-width:600px;margin-bottom:32px}
+
+/* COLOR PALETTE */
+.color-grid{display:grid;grid-template-columns:repeat(5,1fr);gap:12px}
+.color-swatch-wrap{border:1px solid var(--border);border-radius:10px;overflow:hidden}
+.color-swatch{height:80px}
+.color-meta{padding:10px 12px;background:var(--surface)}
+.color-name{font-size:11px;font-weight:700;letter-spacing:0.04em;text-transform:uppercase;margin-bottom:3px}
+.color-hex{font-size:12px;font-family:monospace;color:var(--muted);margin-bottom:3px}
+.color-desc{font-size:11px;color:var(--muted)}
+
+/* M-STRIPE (accent stripe) */
+.accent-stripe{height:4px;background:#0176d3;margin:0 0 0 0}
+
+/* TYPOGRAPHY */
+.type-table{width:100%;border:1px solid var(--border);border-radius:10px;overflow:hidden}
+.type-row{display:grid;grid-template-columns:140px 1fr;align-items:center;border-top:1px solid var(--border);padding:12px 16px;gap:24px}
+.type-row:first-child{border-top:none}
+.type-meta{font-size:11px;color:var(--muted);font-family:monospace}
+.type-meta strong{display:block;font-size:12px;color:var(--text);font-weight:600;margin-bottom:2px}
+
+/* BUTTONS */
+.btn-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:16px}
+.btn-card{background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:20px;box-shadow:var(--shadow)}
+.btn-card-label{font-size:11px;font-weight:700;letter-spacing:0.06em;text-transform:uppercase;color:#0176d3;margin-bottom:12px}
+.btn-card-desc{font-size:11px;color:var(--muted);margin-top:8px}
+.demo-btn-primary{display:inline-flex;align-items:center;gap:8px;background:#0176d3;color:#ffffff;border:none;padding:11px 22px;border-radius:8px;font-size:14px;font-weight:700;font-family:var(--font-b);cursor:pointer;letter-spacing:0.02em}
+.demo-btn-outline{display:inline-flex;align-items:center;gap:8px;background:transparent;color:var(--text);border:1px solid var(--border-strong);padding:10px 22px;border-radius:8px;font-size:14px;font-weight:600;font-family:var(--font-b);cursor:pointer}
+.demo-btn-ghost{display:inline-flex;align-items:center;gap:8px;background:transparent;color:var(--muted);border:none;padding:10px 16px;border-radius:8px;font-size:14px;font-weight:500;font-family:var(--font-b);cursor:pointer}
+.demo-btn-danger{display:inline-flex;align-items:center;gap:8px;background:#dc2626;color:#fff;border:none;padding:11px 22px;border-radius:8px;font-size:14px;font-weight:700;font-family:var(--font-b);cursor:pointer}
+
+/* CARDS */
+.card-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:16px}
+.design-card{background:var(--surface);border:1px solid var(--border);border-radius:12px;overflow:hidden;box-shadow:var(--shadow)}
+.card-img{height:120px;background:linear-gradient(135deg,#0176d333,#44444422)}
+.card-body{padding:16px}
+.card-tag{font-size:10px;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;color:#0176d3;margin-bottom:8px}
+.card-title{font-family:var(--font-d);font-size:16px;font-weight:700;margin-bottom:6px;letter-spacing:-0.01em}
+.card-desc{font-size:13px;color:var(--muted);line-height:1.5}
+
+/* FORM */
+.form-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:16px;margin-bottom:16px}
+.form-field label{display:block;font-size:12px;font-weight:600;margin-bottom:6px;color:var(--muted)}
+.form-input{width:100%;background:var(--surface);border:1px solid var(--border-strong);color:var(--text);font-size:14px;font-family:var(--font-b);padding:10px 12px;border-radius:8px;outline:none}
+.form-input:focus{border-color:#0176d3}
+.form-input.focused{border-color:#0176d3;box-shadow:0 0 0 3px rgba(1,118,211,0.15)}
+textarea.form-input{resize:vertical;min-height:80px}
+
+/* SPEC CELLS */
+.spec-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:1px;background:var(--border);border:1px solid var(--border);border-radius:10px;overflow:hidden}
+.spec-cell{background:var(--bg);padding:20px;text-align:center}
+.spec-value{font-family:var(--font-d);font-size:28px;font-weight:800;letter-spacing:-0.03em;margin-bottom:4px}
+.spec-label{font-size:11px;font-weight:600;letter-spacing:0.06em;text-transform:uppercase;color:var(--muted)}
+
+/* SPACING */
+.spacing-row{display:flex;align-items:flex-end;gap:8px;flex-wrap:wrap}
+.spacing-item{display:flex;flex-direction:column;align-items:center;gap:6px}
+.spacing-bar{width:24px;background:#0176d3;border-radius:3px}
+.spacing-val{font-size:10px;font-family:monospace;color:var(--muted)}
+
+/* RADIUS */
+.radius-row{display:flex;align-items:center;gap:16px;flex-wrap:wrap}
+.radius-box{display:flex;flex-direction:column;align-items:center;gap:8px}
+.radius-demo{width:56px;height:56px;background:var(--accent-alpha);border:2px solid #0176d3}
+.radius-label{font-size:11px;font-family:monospace;color:var(--muted)}
+
+/* ELEVATION */
+.elev-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:16px}
+.elev-card{background:var(--surface);border-radius:10px;padding:20px;border:1px solid var(--border)}
+.elev-label{font-size:11px;font-weight:700;letter-spacing:0.06em;text-transform:uppercase;color:#0176d3;margin-bottom:4px}
+.elev-sub{font-size:11px;color:var(--muted);line-height:1.5}
+
+/* CTA BAND */
+.cta-band{padding:64px 48px;text-align:center;background:linear-gradient(135deg,#0176d322,#44444411)}
+.cta-title{font-family:var(--font-d);font-size:36px;font-weight:800;letter-spacing:-0.02em;margin-bottom:16px}
+.cta-sub{font-size:16px;color:var(--muted);margin-bottom:32px}
+
+/* RESPONSIVE TABLE */
+.resp-table{width:100%;border:1px solid var(--border);border-radius:10px;overflow:hidden;border-collapse:collapse}
+.resp-table th{background:var(--surface);padding:12px 16px;text-align:left;font-size:11px;font-weight:700;letter-spacing:0.06em;text-transform:uppercase;color:var(--muted);border-bottom:1px solid var(--border)}
+.resp-table td{padding:12px 16px;font-size:13px;border-bottom:1px solid var(--border)}
+.resp-table tr:last-child td{border-bottom:none}
+.resp-table td:first-child{font-weight:600}
+
+/* FOOTER */
+footer{padding:32px 48px;border-top:1px solid var(--border)}
+.footer-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:32px;margin-bottom:24px}
+.footer-col h6{font-size:11px;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;color:var(--muted);margin-bottom:12px}
+.footer-col span{display:block;font-size:13px;color:var(--muted);margin-bottom:6px}
+.footer-credit{font-size:12px;color:var(--muted);border-top:1px solid var(--border);padding-top:20px}
+
+.badge{display:inline-block;padding:3px 8px;border-radius:999px;font-size:11px;font-weight:700;letter-spacing:0.04em}
+.badge-accent{background:rgba(1,118,211,0.15);color:#0176d3}
+.badge-muted{background:rgba(3,45,96,0.08);color:var(--muted)}
+</style>
+</head>
+<body>
+
+<div class="accent-stripe"></div>
+
+<nav>
+  <span class="nav-brand">SALESFORCE</span>
+  <ul class="nav-links">
+    <li><a href="#">Overview</a></li>
+    <li><a href="#">Tokens</a></li>
+    <li><a href="#">Components</a></li>
+    <li><a href="#">Guidelines</a></li>
+  </ul>
+  <div class="nav-right">
+    <button class="btn-ghost">Docs</button>
+    <button class="btn-accent">Get Started</button>
+  </div>
+</nav>
+
+<div class="header-band">Design System Inspiration · Enterprise · Kodo</div>
+
+<!-- HERO -->
+<div class="section">
+  <div class="section-label">Design System Overview</div>
+  <div class="section-title">SALESFORCE</div>
+  <div class="section-desc">Lightning Design System with CRM record layouts, activity timelines, and Salesforce Blue.</div>
+  <div style="display:flex;gap:10px;flex-wrap:wrap">
+    <button class="demo-btn-primary">Get Started →</button>
+    <button class="demo-btn-outline">View Docs</button>
+    <span class="badge badge-accent">Enterprise</span>
+    <span class="badge badge-muted">Design System</span>
+  </div>
+</div>
+
+<!-- 01 COLOR PALETTE -->
+<div class="section">
+  <div class="section-label">01 — Color Palette</div>
+  <div class="section-title">Core Token Colors</div>
+  <div class="section-desc">Five foundational tokens drive the entire visual identity. Each token has a semantic role — never use colors outside these roles.</div>
+  <div class="color-grid">
+    
+    <div class="color-swatch-wrap">
+      <div class="color-swatch" style="background:#f3f3f3"></div>
+      <div class="color-meta">
+        <div class="color-name">Canvas / Background</div>
+        <div class="color-hex">#f3f3f3</div>
+        <div class="color-desc">Page base surface</div>
+      </div>
+    </div>
+    <div class="color-swatch-wrap">
+      <div class="color-swatch" style="background:#ffffff"></div>
+      <div class="color-meta">
+        <div class="color-name">Surface / Card</div>
+        <div class="color-hex">#ffffff</div>
+        <div class="color-desc">Elevated containers</div>
+      </div>
+    </div>
+    <div class="color-swatch-wrap">
+      <div class="color-swatch" style="background:#032d60"></div>
+      <div class="color-meta">
+        <div class="color-name">Text / Ink</div>
+        <div class="color-hex">#032d60</div>
+        <div class="color-desc">Primary foreground</div>
+      </div>
+    </div>
+    <div class="color-swatch-wrap">
+      <div class="color-swatch" style="background:#444444"></div>
+      <div class="color-meta">
+        <div class="color-name">Muted / Secondary</div>
+        <div class="color-hex">#444444</div>
+        <div class="color-desc">Subdued text & icons</div>
+      </div>
+    </div>
+    <div class="color-swatch-wrap">
+      <div class="color-swatch" style="background:#0176d3"></div>
+      <div class="color-meta">
+        <div class="color-name">Accent / Brand</div>
+        <div class="color-hex">#0176d3</div>
+        <div class="color-desc">Primary action color</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- 02 TYPOGRAPHY -->
+<div class="section">
+  <div class="section-label">02 — Typography Scale</div>
+  <div class="section-title">Type Hierarchy</div>
+  <div class="section-desc">Display: <strong>Inter</strong> · Body: <strong>Inter</strong>. Weight contrast between display (800) and body (400) creates editorial signature.</div>
+  <div class="type-table">
+    
+    <div class="type-row" style="">
+      <div class="type-meta">
+        <strong>Display XL</strong>
+        64px / 800 / −0.02em
+      </div>
+      <div style="font-family:Inter, system-ui, sans-serif;font-size:64px;font-weight:800;letter-spacing:-0.02em;line-height:1.1;color:var(--text);overflow:hidden;white-space:nowrap;text-overflow:ellipsis">THE ULTIMATE MACHINE</div>
+    </div>
+    <div class="type-row" style="">
+      <div class="type-meta">
+        <strong>Display LG</strong>
+        48px / 800 / −0.02em
+      </div>
+      <div style="font-family:Inter, system-ui, sans-serif;font-size:48px;font-weight:800;letter-spacing:-0.02em;line-height:1.1;color:var(--text);overflow:hidden;white-space:nowrap;text-overflow:ellipsis">Design that moves</div>
+    </div>
+    <div class="type-row" style="">
+      <div class="type-meta">
+        <strong>Display MD</strong>
+        36px / 700 / −0.02em
+      </div>
+      <div style="font-family:Inter, system-ui, sans-serif;font-size:36px;font-weight:700;letter-spacing:-0.02em;line-height:1.1;color:var(--text);overflow:hidden;white-space:nowrap;text-overflow:ellipsis">Build something great</div>
+    </div>
+    <div class="type-row" style="">
+      <div class="type-meta">
+        <strong>Display SM</strong>
+        28px / 700 / −0.02em
+      </div>
+      <div style="font-family:Inter, system-ui, sans-serif;font-size:28px;font-weight:700;letter-spacing:-0.02em;line-height:1.1;color:var(--text);overflow:hidden;white-space:nowrap;text-overflow:ellipsis">Precision by design</div>
+    </div>
+    <div class="type-row" style="">
+      <div class="type-meta">
+        <strong>Title LG</strong>
+        22px / 600 / −0.02em
+      </div>
+      <div style="font-family:Inter, system-ui, sans-serif;font-size:22px;font-weight:600;letter-spacing:-0.02em;line-height:1.1;color:var(--text);overflow:hidden;white-space:nowrap;text-overflow:ellipsis">Title heading text</div>
+    </div>
+    <div class="type-row" style="">
+      <div class="type-meta">
+        <strong>Title MD</strong>
+        18px / 600 / −0.02em
+      </div>
+      <div style="font-family:Inter, system-ui, sans-serif;font-size:18px;font-weight:600;letter-spacing:-0.02em;line-height:1.1;color:var(--text);overflow:hidden;white-space:nowrap;text-overflow:ellipsis">Subtitle line here</div>
+    </div>
+    <div class="type-row" style="">
+      <div class="type-meta">
+        <strong>Body MD</strong>
+        16px / 400 / −0.02em
+      </div>
+      <div style="font-family:Inter, system-ui, sans-serif;font-size:16px;font-weight:400;letter-spacing:-0.02em;line-height:1.1;color:var(--text);overflow:hidden;white-space:nowrap;text-overflow:ellipsis">Body paragraph text reads at this size.</div>
+    </div>
+    <div class="type-row" style="">
+      <div class="type-meta">
+        <strong>Body SM</strong>
+        14px / 400 / −0.02em
+      </div>
+      <div style="font-family:Inter, system-ui, sans-serif;font-size:14px;font-weight:400;letter-spacing:-0.02em;line-height:1.1;color:var(--text);overflow:hidden;white-space:nowrap;text-overflow:ellipsis">Small supporting text for metadata.</div>
+    </div>
+    <div class="type-row" style="">
+      <div class="type-meta">
+        <strong>Caption</strong>
+        12px / 400 / −0.02em
+      </div>
+      <div style="font-family:Inter, system-ui, sans-serif;font-size:12px;font-weight:400;letter-spacing:-0.02em;line-height:1.1;color:var(--text);overflow:hidden;white-space:nowrap;text-overflow:ellipsis">Caption · Label · Tag</div>
+    </div>
+  </div>
+</div>
+
+<!-- 03 BUTTONS -->
+<div class="section">
+  <div class="section-label">03 — Button Variants</div>
+  <div class="section-title">Interactive Controls</div>
+  <div class="section-desc">All buttons share 8px radius and 700 weight for primary actions. Accent color drives primary CTAs — never dilute with decorative fills.</div>
+  <div class="btn-grid">
+    <div class="btn-card">
+      <div class="btn-card-label">Primary</div>
+      <button class="demo-btn-primary">Get Started →</button>
+      <div class="btn-card-desc">Accent fill · #ffffff text · main CTA</div>
+    </div>
+    <div class="btn-card">
+      <div class="btn-card-label">Outline</div>
+      <button class="demo-btn-outline">Learn More</button>
+      <div class="btn-card-desc">Transparent bg · border-strong · secondary</div>
+    </div>
+    <div class="btn-card">
+      <div class="btn-card-label">Ghost</div>
+      <button class="demo-btn-ghost">View Docs</button>
+      <div class="btn-card-desc">No border · muted color · tertiary nav</div>
+    </div>
+    <div class="btn-card">
+      <div class="btn-card-label">Destructive</div>
+      <button class="demo-btn-danger">Delete</button>
+      <div class="btn-card-desc">Red fill · white text · irreversible actions</div>
+    </div>
+  </div>
+</div>
+
+<!-- 04 CARDS -->
+<div class="section">
+  <div class="section-label">04 — Cards & Containers</div>
+  <div class="section-title">Content Surfaces</div>
+  <div class="section-desc">Cards use surface token on canvas background. 12px radius, hairline border, and subtle shadow creates depth without ornamentation.</div>
+  <div class="card-grid">
+    <div class="design-card">
+      <div class="card-img"></div>
+      <div class="card-body">
+        <div class="card-tag">ENTERPRISE · FEATURE</div>
+        <div class="card-title">Design with Clarity</div>
+        <div class="card-desc">A system built on restraint. Every token earns its place through function, not decoration.</div>
+      </div>
+    </div>
+    <div class="design-card">
+      <div class="card-img" style="background:linear-gradient(135deg,#44444422,#0176d311)"></div>
+      <div class="card-body">
+        <div class="card-tag">ENTERPRISE · GUIDE</div>
+        <div class="card-title">Token Architecture</div>
+        <div class="card-desc">Five core tokens map to semantic roles. Primitive → semantic → component. No raw hex values in components.</div>
+      </div>
+    </div>
+    <div class="design-card">
+      <div class="card-img" style="background:linear-gradient(135deg,#f3f3f3,#0176d322)"></div>
+      <div class="card-body">
+        <div class="card-tag">ENTERPRISE · MOTION</div>
+        <div class="card-title">Interaction Patterns</div>
+        <div class="card-desc">150ms ease-out for micro-interactions. Hover states use accent-alpha overlay. Focus rings use 3px accent glow.</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- 05 FORM ELEMENTS -->
+<div class="section">
+  <div class="section-label">05 — Form Elements</div>
+  <div class="section-title">Input Components</div>
+  <div class="section-desc">Inputs use 8px radius and surface background. Focus state thickens border to accent color with 3px glow ring.</div>
+  <div class="form-grid">
+    <div class="form-field">
+      <label>Email address</label>
+      <input class="form-input" type="email" placeholder="you@example.com">
+    </div>
+    <div class="form-field">
+      <label>Email (focused)</label>
+      <input class="form-input focused" type="email" value="design@studio.com">
+    </div>
+    <div class="form-field">
+      <label>Organization</label>
+      <input class="form-input" type="text" placeholder="Your company">
+    </div>
+  </div>
+  <div class="form-field" style="max-width:480px">
+    <label>Message</label>
+    <textarea class="form-input" placeholder="Tell us about your project..."></textarea>
+  </div>
+</div>
+
+<!-- 06 SPEC CELLS -->
+<div class="section">
+  <div class="section-label">06 — Design Specs</div>
+  <div class="section-title">Key Measurements</div>
+  <div class="section-desc">Core dimensions used across the system. Sharp corners on data cells — values sit in 4-up grid with hairline dividers.</div>
+  <div class="spec-grid">
+    <div class="spec-cell"><div class="spec-value">8px</div><div class="spec-label">Base Grid</div></div>
+    <div class="spec-cell"><div class="spec-value">8</div><div class="spec-label">Border Radius</div></div>
+    <div class="spec-cell"><div class="spec-value">60px</div><div class="spec-label">Nav Height</div></div>
+    <div class="spec-cell"><div class="spec-value">1440</div><div class="spec-label">Max Width</div></div>
+    <div class="spec-cell"><div class="spec-value">48px</div><div class="spec-label">Section Gap</div></div>
+    <div class="spec-cell"><div class="spec-value">150ms</div><div class="spec-label">Transition</div></div>
+    <div class="spec-cell"><div class="spec-value">4.5:1</div><div class="spec-label">Min Contrast</div></div>
+    <div class="spec-cell"><div class="spec-value">WCAG AA</div><div class="spec-label">Accessibility</div></div>
+  </div>
+</div>
+
+<!-- 07 SPACING -->
+<div class="section">
+  <div class="section-label">07 — Spacing Scale</div>
+  <div class="section-title">Layout Rhythm</div>
+  <div class="section-desc">8px base unit. Section rhythm at 48–96px. Spacing tokens scale by 1.5× increments.</div>
+  <div class="spacing-row">
+    
+    <div class="spacing-item">
+      <div class="spacing-bar" style="height:4px"></div>
+      <span class="spacing-val">4px</span>
+    </div>
+    <div class="spacing-item">
+      <div class="spacing-bar" style="height:8px"></div>
+      <span class="spacing-val">8px</span>
+    </div>
+    <div class="spacing-item">
+      <div class="spacing-bar" style="height:12px"></div>
+      <span class="spacing-val">12px</span>
+    </div>
+    <div class="spacing-item">
+      <div class="spacing-bar" style="height:16px"></div>
+      <span class="spacing-val">16px</span>
+    </div>
+    <div class="spacing-item">
+      <div class="spacing-bar" style="height:24px"></div>
+      <span class="spacing-val">24px</span>
+    </div>
+    <div class="spacing-item">
+      <div class="spacing-bar" style="height:32px"></div>
+      <span class="spacing-val">32px</span>
+    </div>
+    <div class="spacing-item">
+      <div class="spacing-bar" style="height:48px"></div>
+      <span class="spacing-val">48px</span>
+    </div>
+    <div class="spacing-item">
+      <div class="spacing-bar" style="height:64px"></div>
+      <span class="spacing-val">64px</span>
+    </div>
+    <div class="spacing-item">
+      <div class="spacing-bar" style="height:96px"></div>
+      <span class="spacing-val">96px</span>
+    </div>
+  </div>
+</div>
+
+<!-- 08 BORDER RADIUS -->
+<div class="section">
+  <div class="section-label">08 — Border Radius Scale</div>
+  <div class="section-title">Shape Language</div>
+  <div class="section-desc">Reserve full radius for pill buttons and avatars only. Components use sm–lg range. Sharp corners on data tables.</div>
+  <div class="radius-row">
+    
+    <div class="radius-box">
+      <div class="radius-demo" style="border-radius:0px"></div>
+      <span class="radius-label">0px</span>
+    </div>
+    <div class="radius-box">
+      <div class="radius-demo" style="border-radius:2px"></div>
+      <span class="radius-label">2px</span>
+    </div>
+    <div class="radius-box">
+      <div class="radius-demo" style="border-radius:4px"></div>
+      <span class="radius-label">4px</span>
+    </div>
+    <div class="radius-box">
+      <div class="radius-demo" style="border-radius:8px"></div>
+      <span class="radius-label">8px</span>
+    </div>
+    <div class="radius-box">
+      <div class="radius-demo" style="border-radius:12px"></div>
+      <span class="radius-label">12px</span>
+    </div>
+    <div class="radius-box">
+      <div class="radius-demo" style="border-radius:16px"></div>
+      <span class="radius-label">16px</span>
+    </div>
+    <div class="radius-box">
+      <div class="radius-demo" style="border-radius:9999px"></div>
+      <span class="radius-label">9999px</span>
+    </div>
+  </div>
+</div>
+
+<!-- 09 ELEVATION -->
+<div class="section">
+  <div class="section-label">09 — Elevation & Depth</div>
+  <div class="section-title">Surface Layers</div>
+  <div class="section-desc">Subtle shadows create depth. No heavy elevation — trust surface-card on canvas.</div>
+  <div class="elev-grid">
+    <div class="elev-card" style="box-shadow:none">
+      <div class="elev-label">Flat</div>
+      <div class="elev-sub">No shadow. Body, top nav, footer, photo bands.</div>
+    </div>
+    <div class="elev-card" style="box-shadow:0 1px 3px rgba(0,0,0,0.1)">
+      <div class="elev-label">Soft</div>
+      <div class="elev-sub">1px shadow. Section dividers, card outlines.</div>
+    </div>
+    <div class="elev-card" style="box-shadow:0 4px 16px rgba(0,0,0,0.1)">
+      <div class="elev-label">Card Surface</div>
+      <div class="elev-sub">surface-card over canvas — visible elevation.</div>
+    </div>
+    <div class="elev-card" style="box-shadow:0 8px 32px rgba(0,0,0,0.15)">
+      <div class="elev-label">Modal / Float</div>
+      <div class="elev-sub">Dialogs, dropdowns, tooltips. Maximum elevation.</div>
+    </div>
+  </div>
+</div>
+
+<!-- CTA BAND -->
+<div class="cta-band">
+  <div class="cta-title">Use Salesforce in Your Project</div>
+  <div class="cta-sub">Apply this design system to any Kodo project and let AI build matching UI.</div>
+  <button class="demo-btn-primary" style="font-size:16px;padding:14px 32px">Apply Design System →</button>
+</div>
+
+<!-- 10 RESPONSIVE -->
+<div class="section">
+  <div class="section-label">10 — Responsive Behavior</div>
+  <div class="section-title">Breakpoint System</div>
+  <div class="section-desc">Mobile-first. Photography stays full-bleed at every breakpoint. Card grids reduce columns rather than scaling cards down.</div>
+  <table class="resp-table">
+    <thead><tr><th>Name</th><th>Width</th><th>Key Changes</th></tr></thead>
+    <tbody>
+      <tr><td>Mobile</td><td>&lt; 768px</td><td>Single column · hamburger nav · stacked cards</td></tr>
+      <tr><td>Tablet</td><td>768–1024px</td><td>2-col grids · compact nav · 2-up spec tables</td></tr>
+      <tr><td>Desktop</td><td>1024–1440px</td><td>Full nav · 3-col grids · 4-up spec grids</td></tr>
+      <tr><td>Wide</td><td>&gt; 1440px</td><td>Max 1440px container · same as desktop</td></tr>
+    </tbody>
+  </table>
+</div>
+
+<footer>
+  </div>
+  
+</footer>
+
+</body>
+</html>

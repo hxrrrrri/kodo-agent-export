@@ -9,6 +9,7 @@ import { DesignStudio } from './components/DesignStudio'
 import { OpenClawPanel } from './components/OpenClawPanel'
 import { AntiVibePanel } from './components/AntiVibePanel'
 import { HermesPanel } from './components/HermesPanel'
+import { SkillsBrowserPanel } from './components/SkillsBrowserPanel'
 import { useChatStore } from './store/chatStore'
 import { THEME_KEYS, THEME_TONES, ThemeKey } from './store/chatStore'
 import { requestUiNotificationPermission } from './lib/notifications'
@@ -27,9 +28,11 @@ export default function App() {
   const [editorOpen, setEditorOpen] = useState(false)
   const [antivibeOpen, setAntivibeOpen] = useState(false)
   const [hermesOpen, setHermesOpen] = useState(false)
+  const [skillsLibraryOpen, setSkillsLibraryOpen] = useState(false)
   const [editorWidthPercent, setEditorWidthPercent] = useState(40)
   const [antivibeWidthPercent, setAntivibeWidthPercent] = useState(42)
   const [hermesWidthPercent, setHermesWidthPercent] = useState(42)
+  const [skillsLibraryWidthPercent, setSkillsLibraryWidthPercent] = useState(44)
   const [artifactWidthPercent, setArtifactWidthPercent] = useState(42)
   const rootRef = useRef<HTMLDivElement>(null)
   const theme = useChatStore((state) => state.theme)
@@ -60,8 +63,7 @@ export default function App() {
   useEffect(() => {
     const saved = window.localStorage.getItem(THEME_STORAGE_KEY)
     if (saved && (THEME_KEYS as readonly string[]).includes(saved)) {
-      const normalizedTheme: ThemeKey = saved === 'dark' ? 'claude' : (saved as ThemeKey)
-      setTheme(normalizedTheme)
+      setTheme(saved as ThemeKey)
       return
     }
 
@@ -111,6 +113,7 @@ export default function App() {
       setAntivibeOpen((prev) => {
         if (!prev) {
           setHermesOpen(false)
+          setSkillsLibraryOpen(false)
         }
         return !prev
       })
@@ -124,12 +127,27 @@ export default function App() {
       setHermesOpen((prev) => {
         if (!prev) {
           setAntivibeOpen(false)
+          setSkillsLibraryOpen(false)
         }
         return !prev
       })
     }
     window.addEventListener('kodo:toggle-hermes', handler)
     return () => window.removeEventListener('kodo:toggle-hermes', handler)
+  }, [])
+
+  useEffect(() => {
+    const handler = () => {
+      setSkillsLibraryOpen((prev) => {
+        if (!prev) {
+          setAntivibeOpen(false)
+          setHermesOpen(false)
+        }
+        return !prev
+      })
+    }
+    window.addEventListener('kodo:toggle-skills-library', handler)
+    return () => window.removeEventListener('kodo:toggle-skills-library', handler)
   }, [])
 
   const startResizeEditor = (event: ReactMouseEvent<HTMLDivElement>) => {
@@ -220,13 +238,37 @@ export default function App() {
     window.addEventListener('mouseup', onUp)
   }
 
+  const startResizeSkillsLibrary = (event: ReactMouseEvent<HTMLDivElement>) => {
+    event.preventDefault()
+    const root = rootRef.current
+    if (!root) return
+
+    const onMove = (moveEvent: MouseEvent) => {
+      const rect = root.getBoundingClientRect()
+      const rightPanePx = rect.right - moveEvent.clientX
+      const next = (rightPanePx / rect.width) * 100
+      const clamped = Math.max(32, Math.min(68, next))
+      setSkillsLibraryWidthPercent(clamped)
+    }
+
+    const onUp = () => {
+      window.removeEventListener('mousemove', onMove)
+      window.removeEventListener('mouseup', onUp)
+    }
+
+    window.addEventListener('mousemove', onMove)
+    window.addEventListener('mouseup', onUp)
+  }
+
   const rightPanelWidth = artifactOpen
     ? artifactWidthPercent
     : (showEditor
       ? editorWidthPercent
       : (antivibeOpen
         ? antivibeWidthPercent
-        : (hermesOpen ? hermesWidthPercent : 0)))
+        : (hermesOpen
+          ? hermesWidthPercent
+          : (skillsLibraryOpen ? skillsLibraryWidthPercent : 0))))
 
   return (
     <div style={{
@@ -234,26 +276,20 @@ export default function App() {
       height: '100vh',
       width: '100vw',
       overflow: 'hidden',
-      background: theme === 'fusion' ? 'transparent' : 'var(--bg-0)',
+      background: 'var(--bg-0)',
       position: 'relative',
     }} ref={rootRef}>
-      {theme === 'fusion' && (
-        <div className="fusion-orb-layer" aria-hidden="true">
-          <div className="fusion-orb fusion-orb-1" />
-          <div className="fusion-orb fusion-orb-2" />
-          <div className="fusion-orb fusion-orb-3" />
-        </div>
-      )}
       <Sidebar
         collapsed={sidebarCollapsed}
         onToggleCollapse={toggleSidebar}
         antivibeOpen={antivibeOpen}
         hermesOpen={hermesOpen}
+        skillsLibraryOpen={skillsLibraryOpen}
       />
 
       <div style={{ flex: 1, minWidth: 0, display: 'flex', height: '100%' }}>
         <div style={{
-          width: (artifactOpen || showEditor || antivibeOpen || hermesOpen) ? `${100 - rightPanelWidth}%` : '100%',
+          width: (artifactOpen || showEditor || antivibeOpen || hermesOpen || skillsLibraryOpen) ? `${100 - rightPanelWidth}%` : '100%',
           minWidth: 0,
           transition: 'width 0.2s ease',
         }}>
@@ -348,6 +384,27 @@ export default function App() {
             />
             <div style={{ width: `${hermesWidthPercent}%`, flexShrink: 0, height: '100%', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
               <HermesPanel onClose={() => setHermesOpen(false)} />
+            </div>
+          </>
+        )}
+
+        {skillsLibraryOpen && !artifactOpen && !showEditor && !antivibeOpen && !hermesOpen && (
+          <>
+            <div
+              role="separator"
+              aria-orientation="vertical"
+              onMouseDown={startResizeSkillsLibrary}
+              style={{
+                width: 6,
+                cursor: 'col-resize',
+                background: 'var(--bg-2)',
+                borderLeft: '1px solid var(--border)',
+                borderRight: '1px solid var(--border)',
+                flexShrink: 0,
+              }}
+            />
+            <div style={{ width: `${skillsLibraryWidthPercent}%`, flexShrink: 0, height: '100%', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+              <SkillsBrowserPanel onClose={() => setSkillsLibraryOpen(false)} />
             </div>
           </>
         )}

@@ -39,7 +39,9 @@ export default function App() {
 ```
 
 ## Rules
+- For visual build requests, emit the artifact fence directly. Do not wrap it in a plan, explanation, or markdown file.
 - Close every fence with a bare ` ``` ` on its own line.
+- If you include a filename, put it in the fence info as `filename=index.html`. Do not put `index.html` as the first line of the code body.
 - HTML: Use `<script src="...">`. Tailwind: `<script src="https://cdn.tailwindcss.com"></script>`.
 - UI Theme (MANDATORY — Claude-style blending):
   - `html, body { background: transparent !important; margin: 0; }` — host chat bg shows through.

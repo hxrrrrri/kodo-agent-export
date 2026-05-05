@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npx tsc *)",
+      "Skill(firecrawl-scrape)",
+      "Skill(firecrawl-scrape:*)"
+    ]
+  }
+}

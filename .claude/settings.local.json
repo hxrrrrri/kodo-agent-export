@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "WebFetch(domain:api.github.com)",
+      "Bash(Get-ChildItem -Path \"c:\\\\project_github\\\\kodo-agent-export\" -Force)",
+      "Bash(Select-Object Name, FullName)",
+      "WebFetch(domain:raw.githubusercontent.com)"
+    ]
+  }
+}

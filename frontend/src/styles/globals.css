@@ -42,342 +42,136 @@
   --sidebar-width: calc(var(--sidebar-rail-width) + var(--sidebar-panel-width));
 }
 
-:root[data-theme='light'] {
-  --bg-0: #f5f4ed;
-  --bg-1: #faf9f5;
-  --bg-2: #f0eee6;
-  --bg-3: #e8e6dc;
-  --border: #f0eee6;
-  --border-bright: #e8e6dc;
-
-  --text-0: #141413;
-  --text-1: #5e5d59;
-  --text-2: #87867f;
-
-  --accent: #c96442;
-  --accent-dim: rgba(201, 100, 66, 0.14);
-  --accent-glow: rgba(201, 100, 66, 0.24);
-
-  --green: #2aa953;
-  --green-dim: rgba(42, 169, 83, 0.16);
-  --yellow: #9a780a;
-  --yellow-dim: rgba(154, 120, 10, 0.14);
-  --red: #b53333;
-  --red-dim: rgba(181, 51, 51, 0.14);
-  --blue: #3898ec;
-  --blue-dim: rgba(56, 152, 236, 0.14);
-
-  --logo-primary: #c96442;
-  --logo-secondary: #d97757;
-
-  --font-mono: 'Anthropic Sans', 'Avenir Next', 'Segoe UI', Arial, sans-serif;
-  --font-display: 'Anthropic Serif', Georgia, 'Times New Roman', serif;
-  --font-kodo-brand: 'Syne', sans-serif;
-
-  --page-gradient: #f5f4ed;
-  --terminal-bg: #faf9f5;
-  --terminal-fg: #4d4c48;
-  --terminal-cursor: #c96442;
-  --terminal-selection: rgba(201, 100, 66, 0.2);
-}
-
-:root[data-theme='ocean'] {
-  --bg-0: #071821;
-  --bg-1: #0d2430;
-  --bg-2: #133341;
-  --bg-3: #184454;
-  --border: #245167;
-  --border-bright: #2f6f89;
-
-  --text-0: #effbff;
-  --text-1: #b1d8e3;
-  --text-2: #6f98a6;
-
-  --accent: #12c8c5;
-  --accent-dim: rgba(18, 200, 197, 0.18);
-  --accent-glow: rgba(18, 200, 197, 0.3);
-
-  --green: #53f2a7;
-  --green-dim: rgba(83, 242, 167, 0.14);
-  --yellow: #ffd67c;
-  --yellow-dim: rgba(255, 214, 124, 0.16);
-  --red: #ff7d7d;
-  --red-dim: rgba(255, 125, 125, 0.16);
-  --blue: #5db6ff;
-  --blue-dim: rgba(93, 182, 255, 0.16);
-
-  --page-gradient: radial-gradient(circle at 14% 8%, rgba(18, 200, 197, 0.22), transparent 44%), #071821;
-  --terminal-bg: #06121a;
-  --terminal-fg: #bde4ef;
-  --terminal-cursor: #12c8c5;
-  --terminal-selection: rgba(18, 200, 197, 0.25);
-}
-
-:root[data-theme='forest'] {
-  --bg-0: #101913;
-  --bg-1: #18231b;
-  --bg-2: #223126;
-  --bg-3: #2b3d2f;
-  --border: #3a5140;
-  --border-bright: #4e6d58;
-
-  --text-0: #f0f7f0;
-  --text-1: #b8cbb8;
-  --text-2: #7f9582;
-
-  --accent: #64d492;
-  --accent-dim: rgba(100, 212, 146, 0.17);
-  --accent-glow: rgba(100, 212, 146, 0.28);
-
-  --green: #73f4aa;
-  --green-dim: rgba(115, 244, 170, 0.14);
-  --yellow: #f5d37c;
-  --yellow-dim: rgba(245, 211, 124, 0.14);
-  --red: #ff8787;
-  --red-dim: rgba(255, 135, 135, 0.14);
-  --blue: #77b8ff;
-  --blue-dim: rgba(119, 184, 255, 0.14);
-
-  --page-gradient: radial-gradient(circle at 16% 12%, rgba(100, 212, 146, 0.2), transparent 46%), #101913;
-  --terminal-bg: #0e1711;
-  --terminal-fg: #bbd0bc;
-  --terminal-cursor: #64d492;
-  --terminal-selection: rgba(100, 212, 146, 0.24);
-}
-
-:root[data-theme='midnight'] {
-  --bg-0: #0d1020;
-  --bg-1: #14182d;
-  --bg-2: #1d2240;
-  --bg-3: #282e52;
-  --border: #343d64;
-  --border-bright: #4b5787;
-
-  --text-0: #f2f3ff;
-  --text-1: #c0c4eb;
-  --text-2: #868eb9;
-
-  --accent: #8b92ff;
-  --accent-dim: rgba(139, 146, 255, 0.18);
-  --accent-glow: rgba(139, 146, 255, 0.3);
-
-  --green: #64e6b9;
-  --green-dim: rgba(100, 230, 185, 0.13);
-  --yellow: #f3d57d;
-  --yellow-dim: rgba(243, 213, 125, 0.14);
-  --red: #ff8d9a;
-  --red-dim: rgba(255, 141, 154, 0.15);
-  --blue: #69b5ff;
-  --blue-dim: rgba(105, 181, 255, 0.16);
-
-  --page-gradient: radial-gradient(circle at 14% 10%, rgba(139, 146, 255, 0.24), transparent 44%), #0d1020;
-  --terminal-bg: #0b0f1d;
-  --terminal-fg: #c5caef;
-  --terminal-cursor: #8b92ff;
-  --terminal-selection: rgba(139, 146, 255, 0.24);
-}
-
-:root[data-theme='rose'] {
-  --bg-0: #fff6f8;
-  --bg-1: #fbeef2;
-  --bg-2: #f5e1e8;
-  --bg-3: #ebd0da;
-  --border: #dcb7c5;
-  --border-bright: #c995a7;
-
-  --text-0: #2a1f24;
-  --text-1: #5c4650;
-  --text-2: #856775;
-
-  --accent: #d95180;
-  --accent-dim: rgba(217, 81, 128, 0.16);
-  --accent-glow: rgba(217, 81, 128, 0.24);
-
-  --green: #1f9264;
-  --green-dim: rgba(31, 146, 100, 0.14);
-  --yellow: #9e7b18;
-  --yellow-dim: rgba(158, 123, 24, 0.14);
-  --red: #c4385e;
-  --red-dim: rgba(196, 56, 94, 0.14);
-  --blue: #2c72af;
-  --blue-dim: rgba(44, 114, 175, 0.14);
-
-  --page-gradient: radial-gradient(circle at 18% 11%, rgba(217, 81, 128, 0.14), transparent 46%), #fff6f8;
-  --terminal-bg: #fff0f5;
-  --terminal-fg: #573542;
-  --terminal-cursor: #d95180;
-  --terminal-selection: rgba(217, 81, 128, 0.2);
-}
-
-:root[data-theme='sunrise'] {
-  --bg-0: #fff9ef;
-  --bg-1: #fff2df;
-  --bg-2: #fbe6c8;
-  --bg-3: #f2d7ad;
-  --border: #dfc39a;
-  --border-bright: #cda872;
-
-  --text-0: #2c2118;
-  --text-1: #5f4a34;
-  --text-2: #8b6f4d;
-
-  --accent: #e96b24;
-  --accent-dim: rgba(233, 107, 36, 0.16);
-  --accent-glow: rgba(233, 107, 36, 0.24);
-
-  --green: #228a5a;
-  --green-dim: rgba(34, 138, 90, 0.14);
-  --yellow: #9a780a;
-  --yellow-dim: rgba(154, 120, 10, 0.14);
-  --red: #c24635;
-  --red-dim: rgba(194, 70, 53, 0.14);
-  --blue: #2e6cb8;
-  --blue-dim: rgba(46, 108, 184, 0.14);
-
-  --page-gradient: radial-gradient(circle at 16% 9%, rgba(233, 107, 36, 0.16), transparent 44%), #fff9ef;
-  --terminal-bg: #fff1dd;
-  --terminal-fg: #5b432a;
-  --terminal-cursor: #e96b24;
-  --terminal-selection: rgba(233, 107, 36, 0.2);
-}
-
-:root[data-theme='nord'] {
-  --bg-0: #edf3f8;
-  --bg-1: #e2ebf3;
-  --bg-2: #d5e2ee;
-  --bg-3: #c4d5e6;
-  --border: #a9bfd4;
-  --border-bright: #89a7c3;
-
-  --text-0: #162231;
-  --text-1: #34485d;
-  --text-2: #60768f;
-
-  --accent: #2f6fa7;
-  --accent-dim: rgba(47, 111, 167, 0.16);
-  --accent-glow: rgba(47, 111, 167, 0.24);
-
-  --green: #1e8f7a;
-  --green-dim: rgba(30, 143, 122, 0.14);
-  --yellow: #8f7a2b;
-  --yellow-dim: rgba(143, 122, 43, 0.14);
-  --red: #b64a5d;
-  --red-dim: rgba(182, 74, 93, 0.14);
-  --blue: #2f6fa7;
-  --blue-dim: rgba(47, 111, 167, 0.14);
-
-  --page-gradient: radial-gradient(circle at 15% 9%, rgba(47, 111, 167, 0.14), transparent 45%), #edf3f8;
-  --terminal-bg: #dde7f1;
-  --terminal-fg: #2a4258;
-  --terminal-cursor: #2f6fa7;
-  --terminal-selection: rgba(47, 111, 167, 0.2);
-}
-
-:root[data-theme='mono'] {
-  --bg-0: #111214;
-  --bg-1: #181a1d;
-  --bg-2: #23262b;
-  --bg-3: #2f3339;
-  --border: #3d434c;
-  --border-bright: #566070;
-
-  --text-0: #f2f3f5;
-  --text-1: #c4c8cf;
-  --text-2: #8a919b;
-
-  --accent: #b8beca;
-  --accent-dim: rgba(184, 190, 202, 0.16);
-  --accent-glow: rgba(184, 190, 202, 0.25);
-
-  --green: #96d7bf;
-  --green-dim: rgba(150, 215, 191, 0.13);
-  --yellow: #d6c68d;
-  --yellow-dim: rgba(214, 198, 141, 0.14);
-  --red: #d99e9e;
-  --red-dim: rgba(217, 158, 158, 0.14);
-  --blue: #a5bedf;
-  --blue-dim: rgba(165, 190, 223, 0.15);
-
-  --page-gradient: radial-gradient(circle at 14% 9%, rgba(184, 190, 202, 0.15), transparent 45%), #111214;
-  --terminal-bg: #0f1012;
-  --terminal-fg: #c5c9d0;
-  --terminal-cursor: #b8beca;
-  --terminal-selection: rgba(184, 190, 202, 0.22);
-}
-
-:root[data-theme='glass'] {
-  --bg-0: #08111f;
-  --bg-1: rgba(17, 28, 48, 0.55);
-  --bg-2: rgba(28, 43, 67, 0.5);
-  --bg-3: rgba(47, 66, 98, 0.42);
-  --border: rgba(188, 219, 255, 0.2);
-  --border-bright: rgba(230, 244, 255, 0.45);
-
-  --text-0: #edf6ff;
-  --text-1: #bfd1e5;
-  --text-2: #89a1bb;
-
-  --accent: #7fd1ff;
-  --accent-dim: rgba(127, 209, 255, 0.2);
-  --accent-glow: rgba(127, 209, 255, 0.34);
-
-  --green: #78e7b8;
-  --green-dim: rgba(120, 231, 184, 0.18);
-  --yellow: #ffe18d;
-  --yellow-dim: rgba(255, 225, 141, 0.18);
-  --red: #ff9ea9;
-  --red-dim: rgba(255, 158, 169, 0.18);
-  --blue: #9bc5ff;
-  --blue-dim: rgba(155, 197, 255, 0.18);
-
-  --page-gradient:
-    radial-gradient(circle at 10% 10%, rgba(127, 209, 255, 0.24), transparent 38%),
-    radial-gradient(circle at 84% 16%, rgba(185, 146, 255, 0.22), transparent 34%),
-    radial-gradient(circle at 50% 100%, rgba(97, 189, 255, 0.14), transparent 46%),
-    #08111f;
-  --terminal-bg: rgba(7, 14, 28, 0.78);
-  --terminal-fg: #d8e9ff;
-  --terminal-cursor: #9bd9ff;
-  --terminal-selection: rgba(155, 217, 255, 0.28);
-}
-
-:root[data-theme='fusion'] {
-  --bg-0: #080808;
+/* BMW M — pure black canvas, M-tricolor (blue/red) accents, machined precision.
+   Canvas #000000 per BMW M brand spec. M Blue Dark (#1c69d4) as interactive
+   accent. M Red (#e22718) for errors. All-white primary text. Zero decoration. */
+:root[data-theme='bmw-m'] {
+  --bg-0: #000000;
   --bg-1: #0d0d0d;
-  --bg-2: #141414;
-  --bg-3: #1e1e1e;
-  --border: rgba(255, 255, 255, 0.07);
-  --border-bright: rgba(255, 255, 255, 0.14);
+  --bg-2: #1a1a1a;
+  --bg-3: #262626;
+  --border: #3c3c3c;
+  --border-bright: #5c5c5c;
 
-  --text-0: #f0ede8;
-  --text-1: #888880;
-  --text-2: #3e3e3a;
+  --text-0: #ffffff;
+  --text-1: #e6e6e6;
+  --text-2: #7e7e7e;
 
-  --accent: #c0553a;
-  --accent-dim: rgba(192, 85, 58, 0.14);
-  --accent-glow: rgba(192, 85, 58, 0.28);
+  --accent: #1c69d4;
+  --accent-dim: rgba(28, 105, 212, 0.12);
+  --accent-glow: rgba(28, 105, 212, 0.28);
 
-  --green: #5fc489;
-  --green-dim: rgba(95, 196, 137, 0.13);
-  --yellow: #c8a84b;
-  --yellow-dim: rgba(200, 168, 75, 0.14);
-  --red: #e8001d;
-  --red-dim: rgba(232, 0, 29, 0.15);
-  --blue: #7a9ebf;
-  --blue-dim: rgba(122, 158, 191, 0.13);
+  --green: #0fa336;
+  --green-dim: rgba(15, 163, 54, 0.14);
+  --yellow: #f4b400;
+  --yellow-dim: rgba(244, 180, 0, 0.14);
+  --red: #e22718;
+  --red-dim: rgba(226, 39, 24, 0.14);
+  --blue: #0066b1;
+  --blue-dim: rgba(0, 102, 177, 0.14);
 
-  --logo-primary: #c0553a;
-  --logo-secondary: #c0553a;
+  --logo-primary: #1c69d4;
+  --logo-secondary: #e22718;
 
-  --font-mono: 'DM Mono', 'Space Mono', 'JetBrains Mono', monospace;
-  --font-display: 'Cormorant Garamond', 'Syne', serif;
+  --page-gradient: #000000;
+  --terminal-bg: #000000;
+  --terminal-fg: #ffffff;
+  --terminal-cursor: #1c69d4;
+  --terminal-selection: rgba(28, 105, 212, 0.22);
 
-  --radius: 8px;
-  --page-gradient: #080808;
+  --radius: 2px;
+  --font-mono: 'Inter', 'Helvetica Neue', Helvetica, Arial, sans-serif;
+}
+
+:root[data-theme='bmw-m'] aside {
+  background: #000000;
+  border-right: 1px solid #3c3c3c !important;
+}
+
+:root[data-theme='bmw-m'] button,
+:root[data-theme='bmw-m'] a,
+:root[data-theme='bmw-m'] input,
+:root[data-theme='bmw-m'] select,
+:root[data-theme='bmw-m'] textarea {
+  border-color: transparent !important;
+  box-shadow: none !important;
+  outline: none !important;
+}
+
+:root[data-theme='bmw-m'] [style*='var(--accent)'] {
+  border-color: var(--accent) !important;
+}
+
+:root[data-theme='bmw-m'] [style*='var(--border-bright)'] {
+  border-color: var(--border-bright) !important;
+}
+
+:root[data-theme='bmw-m'] ::-webkit-scrollbar-thumb {
+  background: #3c3c3c;
+}
+:root[data-theme='bmw-m'] ::-webkit-scrollbar-thumb:hover {
+  background: #1c69d4;
+}
+
+:root[data-theme='netflix'] {
+  --bg-0: #080808;
+  --bg-1: #141414;
+  --bg-2: #1f1f1f;
+  --bg-3: #2f2f2f;
+  --border: #2a2a2a;
+  --border-bright: #404040;
+
+  --text-0: #e5e5e5;
+  --text-1: #a3a3a3;
+  --text-2: #737373;
+
+  --accent: #e50914;
+  --accent-dim: rgba(229, 9, 20, 0.15);
+  --accent-glow: rgba(229, 9, 20, 0.3);
+
+  --green: #46d369;
+  --green-dim: rgba(70, 211, 105, 0.14);
+  --yellow: #f5c518;
+  --yellow-dim: rgba(245, 197, 24, 0.14);
+  --red: #e50914;
+  --red-dim: rgba(229, 9, 20, 0.14);
+  --blue: #4da6d8;
+  --blue-dim: rgba(77, 166, 216, 0.14);
+
+  --logo-primary: #e50914;
+  --logo-secondary: #b81d24;
+
+  --page-gradient: #141414;
   --terminal-bg: #080808;
-  --terminal-fg: #888880;
-  --terminal-cursor: #c0553a;
-  --terminal-selection: rgba(192, 85, 58, 0.22);
+  --terminal-fg: #e5e5e5;
+  --terminal-cursor: #e50914;
+  --terminal-selection: rgba(229, 9, 20, 0.22);
+
+  --radius: 4px;
+  --font-mono: 'Inter', 'Helvetica Neue', Helvetica, Arial, sans-serif;
+}
+
+:root[data-theme='netflix'] aside {
+  background: #0d0d0d;
+  border-right-color: #1f1f1f !important;
+}
+
+:root[data-theme='netflix'] button,
+:root[data-theme='netflix'] input,
+:root[data-theme='netflix'] select,
+:root[data-theme='netflix'] textarea {
+  transition:
+    background-color 200ms ease,
+    color 200ms ease,
+    border-color 200ms ease,
+    box-shadow 200ms ease;
+}
+
+:root[data-theme='netflix'] ::-webkit-scrollbar-thumb {
+  background: #404040;
+}
+:root[data-theme='netflix'] ::-webkit-scrollbar-thumb:hover {
+  background: #595959;
 }
 
 :root[data-theme='claude'] {
@@ -479,105 +273,374 @@
   background: #5e5d59;
 }
 
-/* Fusion ambient orb layer */
-.fusion-orb-layer {
-  position: fixed;
-  inset: 0;
-  pointer-events: none;
-  z-index: 0;
-  overflow: hidden;
+/* OpenAI Research: pure white canvas, jet-black ink, sparse green signals. */
+:root[data-theme='openai-research'] {
+  --bg-0: #ffffff;
+  --bg-1: #f7f7f8;
+  --bg-2: #ffffff;
+  --bg-3: #ececf1;
+  --border: #d9d9e3;
+  --border-bright: #acacbe;
+  --text-0: #0a0a0a;
+  --text-1: #353740;
+  --text-2: #8e8ea0;
+  --accent: #10a37f;
+  --accent-dim: rgba(16, 163, 127, 0.12);
+  --accent-glow: rgba(16, 163, 127, 0.2);
+  --green: #10a37f;
+  --green-dim: rgba(16, 163, 127, 0.12);
+  --yellow: #c8a45d;
+  --yellow-dim: rgba(200, 164, 93, 0.14);
+  --red: #d92d20;
+  --red-dim: rgba(217, 45, 32, 0.12);
+  --blue: #3898ec;
+  --blue-dim: rgba(56, 152, 236, 0.12);
+  --logo-primary: #0a0a0a;
+  --logo-secondary: #10a37f;
+  --page-gradient: #ffffff;
+  --terminal-bg: #202123;
+  --terminal-fg: #d9d9e3;
+  --terminal-cursor: #10a37f;
+  --terminal-selection: rgba(16, 163, 127, 0.22);
+  --font-mono: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  --radius: 6px;
 }
 
-.fusion-orb {
-  position: absolute;
-  border-radius: 50%;
-  filter: blur(90px);
-  opacity: 0.22;
-  animation: fusion-orb-drift 24s ease-in-out infinite alternate;
+/* Linear: deepest black canvas, charcoal panels, lavender-blue accent. */
+:root[data-theme='linear-app'] {
+  --bg-0: #010102;
+  --bg-1: #0f1011;
+  --bg-2: #141516;
+  --bg-3: #18191a;
+  --border: #23252a;
+  --border-bright: #34343a;
+  --text-0: #f7f8f8;
+  --text-1: #d0d6e0;
+  --text-2: #8a8f98;
+  --accent: #5e6ad2;
+  --accent-dim: rgba(94, 106, 210, 0.15);
+  --accent-glow: rgba(94, 106, 210, 0.3);
+  --green: #27a644;
+  --green-dim: rgba(39, 166, 68, 0.14);
+  --yellow: #f2c94c;
+  --yellow-dim: rgba(242, 201, 76, 0.14);
+  --red: #eb5757;
+  --red-dim: rgba(235, 87, 87, 0.14);
+  --blue: #828fff;
+  --blue-dim: rgba(130, 143, 255, 0.14);
+  --logo-primary: #5e6ad2;
+  --logo-secondary: #828fff;
+  --page-gradient: #010102;
+  --terminal-bg: #010102;
+  --terminal-fg: #d0d6e0;
+  --terminal-cursor: #5e6ad2;
+  --terminal-selection: rgba(94, 106, 210, 0.25);
+  --font-mono: 'Inter', 'SF Pro Display', -apple-system, BlinkMacSystemFont, sans-serif;
+  --radius: 8px;
 }
 
-.fusion-orb-1 {
-  width: 520px;
-  height: 520px;
-  background: radial-gradient(circle, #c0553a 0%, transparent 70%);
-  top: -160px;
-  left: -100px;
-  animation-duration: 22s;
-  animation-delay: 0s;
+/* Vercel: white gallery canvas, near-black Geist structure, blue focus links. */
+:root[data-theme='vercel'] {
+  --bg-0: #ffffff;
+  --bg-1: #fafafa;
+  --bg-2: #ffffff;
+  --bg-3: #f5f5f5;
+  --border: #ebebeb;
+  --border-bright: #d4d4d4;
+  --text-0: #171717;
+  --text-1: #4d4d4d;
+  --text-2: #808080;
+  --accent: #0072f5;
+  --accent-dim: rgba(0, 114, 245, 0.1);
+  --accent-glow: rgba(0, 114, 245, 0.2);
+  --green: #27a844;
+  --green-dim: rgba(39, 168, 68, 0.12);
+  --yellow: #f5a623;
+  --yellow-dim: rgba(245, 166, 35, 0.12);
+  --red: #ff5b4f;
+  --red-dim: rgba(255, 91, 79, 0.12);
+  --blue: #0a72ef;
+  --blue-dim: rgba(10, 114, 239, 0.12);
+  --logo-primary: #000000;
+  --logo-secondary: #0072f5;
+  --page-gradient: #ffffff;
+  --terminal-bg: #000000;
+  --terminal-fg: #ededed;
+  --terminal-cursor: #0072f5;
+  --terminal-selection: rgba(0, 114, 245, 0.22);
+  --font-mono: 'Geist Mono', ui-monospace, SFMono-Regular, Menlo, Monaco, monospace;
+  --font-display: 'Geist', Arial, sans-serif;
+  --radius: 8px;
 }
 
-.fusion-orb-2 {
-  width: 400px;
-  height: 400px;
-  background: radial-gradient(circle, #7a9ebf 0%, transparent 70%);
-  bottom: -120px;
-  right: -60px;
-  animation-duration: 28s;
-  animation-delay: -9s;
-  opacity: 0.14;
+/* Stripe: white fintech canvas, navy headings, saturated purple action. */
+:root[data-theme='stripe'] {
+  --bg-0: #ffffff;
+  --bg-1: #f6f9fc;
+  --bg-2: #ffffff;
+  --bg-3: #eef3f8;
+  --border: #e5edf5;
+  --border-bright: #b9b9f9;
+  --text-0: #061b31;
+  --text-1: #273951;
+  --text-2: #64748d;
+  --accent: #533afd;
+  --accent-dim: rgba(83, 58, 253, 0.12);
+  --accent-glow: rgba(83, 58, 253, 0.24);
+  --green: #15be53;
+  --green-dim: rgba(21, 190, 83, 0.14);
+  --yellow: #9b6829;
+  --yellow-dim: rgba(155, 104, 41, 0.14);
+  --red: #ea2261;
+  --red-dim: rgba(234, 34, 97, 0.12);
+  --blue: #665efd;
+  --blue-dim: rgba(102, 94, 253, 0.12);
+  --logo-primary: #533afd;
+  --logo-secondary: #f96bee;
+  --page-gradient: #ffffff;
+  --terminal-bg: #0d253d;
+  --terminal-fg: #e5edf5;
+  --terminal-cursor: #533afd;
+  --terminal-selection: rgba(83, 58, 253, 0.22);
+  --font-mono: 'Source Code Pro', SFMono-Regular, Menlo, Monaco, monospace;
+  --font-display: 'Inter', 'SF Pro Display', system-ui, sans-serif;
+  --radius: 6px;
 }
 
-.fusion-orb-3 {
-  width: 300px;
-  height: 300px;
-  background: radial-gradient(circle, #c8a84b 0%, transparent 70%);
-  top: 45%;
-  left: 55%;
-  animation-duration: 35s;
-  animation-delay: -16s;
-  opacity: 0.1;
+/* Supabase: code-editor dark, border-led depth, emerald identity marker. */
+:root[data-theme='supabase'] {
+  --bg-0: #0f0f0f;
+  --bg-1: #171717;
+  --bg-2: #1f1f1f;
+  --bg-3: #262626;
+  --border: #2e2e2e;
+  --border-bright: rgba(62, 207, 142, 0.35);
+  --text-0: #fafafa;
+  --text-1: #b4b4b4;
+  --text-2: #737373;
+  --accent: #3ecf8e;
+  --accent-dim: rgba(62, 207, 142, 0.12);
+  --accent-glow: rgba(62, 207, 142, 0.28);
+  --green: #3ecf8e;
+  --green-dim: rgba(62, 207, 142, 0.14);
+  --yellow: #f5c542;
+  --yellow-dim: rgba(245, 197, 66, 0.14);
+  --red: #ef4444;
+  --red-dim: rgba(239, 68, 68, 0.14);
+  --blue: #3b82f6;
+  --blue-dim: rgba(59, 130, 246, 0.14);
+  --logo-primary: #3ecf8e;
+  --logo-secondary: #00c573;
+  --page-gradient: #0f0f0f;
+  --terminal-bg: #0f0f0f;
+  --terminal-fg: #b4b4b4;
+  --terminal-cursor: #3ecf8e;
+  --terminal-selection: rgba(62, 207, 142, 0.22);
+  --font-mono: 'Inter', system-ui, sans-serif;
+  --radius: 6px;
 }
 
-@keyframes fusion-orb-drift {
-  0%   { transform: translate(0, 0) scale(1); }
-  33%  { transform: translate(40px, 30px) scale(1.06); }
-  66%  { transform: translate(-20px, 50px) scale(0.96); }
-  100% { transform: translate(30px, -20px) scale(1.03); }
+/* GitHub: Primer dark repo UI with precise borders and status colors. */
+:root[data-theme='github-utility'] {
+  --bg-0: #0d1117;
+  --bg-1: #161b22;
+  --bg-2: #21262d;
+  --bg-3: #30363d;
+  --border: #30363d;
+  --border-bright: #8b949e;
+  --text-0: #f0f6fc;
+  --text-1: #c9d1d9;
+  --text-2: #8b949e;
+  --accent: #2f81f7;
+  --accent-dim: rgba(47, 129, 247, 0.14);
+  --accent-glow: rgba(47, 129, 247, 0.28);
+  --green: #3fb950;
+  --green-dim: rgba(63, 185, 80, 0.15);
+  --yellow: #d29922;
+  --yellow-dim: rgba(210, 153, 34, 0.15);
+  --red: #f85149;
+  --red-dim: rgba(248, 81, 73, 0.15);
+  --blue: #58a6ff;
+  --blue-dim: rgba(88, 166, 255, 0.14);
+  --logo-primary: #f0f6fc;
+  --logo-secondary: #2f81f7;
+  --page-gradient: #0d1117;
+  --terminal-bg: #0d1117;
+  --terminal-fg: #c9d1d9;
+  --terminal-cursor: #2f81f7;
+  --terminal-selection: rgba(47, 129, 247, 0.24);
+  --font-mono: SFMono-Regular, Consolas, 'Liberation Mono', Menlo, monospace;
+  --font-display: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  --radius: 6px;
 }
 
-/* Fusion glass sidebar + inputs */
-:root[data-theme='fusion'] aside {
-  background: rgba(13, 13, 13, 0.72);
-  backdrop-filter: blur(20px) saturate(120%);
-  -webkit-backdrop-filter: blur(20px) saturate(120%);
-  border-right: 1px solid rgba(255, 255, 255, 0.06);
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
+/* Figma: monochrome product frame with hand-cut creative color blocks. */
+:root[data-theme='figma'] {
+  --bg-0: #ffffff;
+  --bg-1: #f7f7f5;
+  --bg-2: #ffffff;
+  --bg-3: #f1f1f1;
+  --border: #e6e6e6;
+  --border-bright: #000000;
+  --text-0: #000000;
+  --text-1: #333333;
+  --text-2: #6b6b6b;
+  --accent: #000000;
+  --accent-dim: rgba(0, 0, 0, 0.08);
+  --accent-glow: rgba(255, 61, 139, 0.2);
+  --green: #1ea64a;
+  --green-dim: rgba(30, 166, 74, 0.12);
+  --yellow: #dceeb1;
+  --yellow-dim: rgba(220, 238, 177, 0.45);
+  --red: #ff3d8b;
+  --red-dim: rgba(255, 61, 139, 0.14);
+  --blue: #c5b0f4;
+  --blue-dim: rgba(197, 176, 244, 0.26);
+  --logo-primary: #000000;
+  --logo-secondary: #ff3d8b;
+  --page-gradient: #ffffff;
+  --terminal-bg: #000000;
+  --terminal-fg: #ffffff;
+  --terminal-cursor: #ff3d8b;
+  --terminal-selection: rgba(197, 176, 244, 0.35);
+  --font-mono: 'Inter', 'Figma Sans', system-ui, sans-serif;
+  --font-display: 'Inter', 'Figma Sans', system-ui, sans-serif;
+  --radius: 9999px;
 }
 
-:root[data-theme='fusion'] button,
-:root[data-theme='fusion'] input,
-:root[data-theme='fusion'] select,
-:root[data-theme='fusion'] textarea {
-  transition:
-    background-color 240ms cubic-bezier(0.16, 1, 0.3, 1),
-    color 240ms cubic-bezier(0.16, 1, 0.3, 1),
-    border-color 240ms cubic-bezier(0.16, 1, 0.3, 1),
-    box-shadow 240ms cubic-bezier(0.16, 1, 0.3, 1),
-    opacity 240ms cubic-bezier(0.16, 1, 0.3, 1);
+/* Spotify: immersive charcoal player UI with functional green controls. */
+:root[data-theme='spotify'] {
+  --bg-0: #121212;
+  --bg-1: #181818;
+  --bg-2: #1f1f1f;
+  --bg-3: #252525;
+  --border: #4d4d4d;
+  --border-bright: #7c7c7c;
+  --text-0: #ffffff;
+  --text-1: #cbcbcb;
+  --text-2: #b3b3b3;
+  --accent: #1ed760;
+  --accent-dim: rgba(30, 215, 96, 0.12);
+  --accent-glow: rgba(30, 215, 96, 0.28);
+  --green: #1ed760;
+  --green-dim: rgba(30, 215, 96, 0.14);
+  --yellow: #ffa42b;
+  --yellow-dim: rgba(255, 164, 43, 0.14);
+  --red: #f3727f;
+  --red-dim: rgba(243, 114, 127, 0.14);
+  --blue: #539df5;
+  --blue-dim: rgba(83, 157, 245, 0.14);
+  --logo-primary: #1ed760;
+  --logo-secondary: #1db954;
+  --page-gradient: #121212;
+  --terminal-bg: #121212;
+  --terminal-fg: #cbcbcb;
+  --terminal-cursor: #1ed760;
+  --terminal-selection: rgba(30, 215, 96, 0.22);
+  --font-mono: 'Inter', 'Helvetica Neue', Helvetica, Arial, sans-serif;
+  --radius: 9999px;
 }
 
-/* Fusion scrollbar */
-:root[data-theme='fusion'] ::-webkit-scrollbar-thumb {
-  background: rgba(192, 85, 58, 0.28);
-}
-:root[data-theme='fusion'] ::-webkit-scrollbar-thumb:hover {
-  background: rgba(192, 85, 58, 0.48);
+/* Apple: SF Pro gallery restraint, pearl surfaces, Action Blue links. */
+:root[data-theme='apple'] {
+  --bg-0: #ffffff;
+  --bg-1: #f5f5f7;
+  --bg-2: #fafafc;
+  --bg-3: #f0f0f0;
+  --border: #e0e0e0;
+  --border-bright: #d2d2d7;
+  --text-0: #1d1d1f;
+  --text-1: #333333;
+  --text-2: #7a7a7a;
+  --accent: #0066cc;
+  --accent-dim: rgba(0, 102, 204, 0.1);
+  --accent-glow: rgba(0, 113, 227, 0.22);
+  --green: #34c759;
+  --green-dim: rgba(52, 199, 89, 0.12);
+  --yellow: #ffcc00;
+  --yellow-dim: rgba(255, 204, 0, 0.14);
+  --red: #ff3b30;
+  --red-dim: rgba(255, 59, 48, 0.12);
+  --blue: #2997ff;
+  --blue-dim: rgba(41, 151, 255, 0.12);
+  --logo-primary: #1d1d1f;
+  --logo-secondary: #0066cc;
+  --page-gradient: #ffffff;
+  --terminal-bg: #000000;
+  --terminal-fg: #ffffff;
+  --terminal-cursor: #2997ff;
+  --terminal-selection: rgba(41, 151, 255, 0.25);
+  --font-mono: 'SF Pro Text', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  --font-display: 'SF Pro Display', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  --radius: 12px;
 }
 
-/* Fusion dvsy-reveal entry animation */
-@keyframes dvsy-reveal {
-  0%   { opacity: 0; transform: translateY(10px); filter: blur(4px); }
-  100% { opacity: 1; transform: translateY(0);    filter: blur(0); }
+/* Tesla: radical subtraction, white showroom chrome, Electric Blue CTA. */
+:root[data-theme='tesla'] {
+  --bg-0: #ffffff;
+  --bg-1: #f4f4f4;
+  --bg-2: #ffffff;
+  --bg-3: #eeeeee;
+  --border: #d0d1d2;
+  --border-bright: #8e8e8e;
+  --text-0: #171a20;
+  --text-1: #393c41;
+  --text-2: #5c5e62;
+  --accent: #3e6ae1;
+  --accent-dim: rgba(62, 106, 225, 0.11);
+  --accent-glow: rgba(62, 106, 225, 0.22);
+  --green: #2e7d32;
+  --green-dim: rgba(46, 125, 50, 0.1);
+  --yellow: #c88719;
+  --yellow-dim: rgba(200, 135, 25, 0.12);
+  --red: #b3261e;
+  --red-dim: rgba(179, 38, 30, 0.12);
+  --blue: #3e6ae1;
+  --blue-dim: rgba(62, 106, 225, 0.12);
+  --logo-primary: #171a20;
+  --logo-secondary: #3e6ae1;
+  --page-gradient: #ffffff;
+  --terminal-bg: #171a20;
+  --terminal-fg: #eeeeee;
+  --terminal-cursor: #3e6ae1;
+  --terminal-selection: rgba(62, 106, 225, 0.25);
+  --font-mono: 'Universal Sans Text', -apple-system, BlinkMacSystemFont, Arial, sans-serif;
+  --font-display: 'Universal Sans Display', -apple-system, BlinkMacSystemFont, Arial, sans-serif;
+  --radius: 4px;
 }
 
-:root[data-theme='fusion'] .message-enter {
-  animation: dvsy-reveal 0.7s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+/* ── Global navbar / header: borderless interactive controls ─────────────────
+   Mirrors the Claude theme's borderless look across ALL themes.
+   Idle buttons show no border; active accent borders are preserved via
+   specificity of the [style*] selectors in each theme block above.      ── */
+.kodo-header-buttons > button,
+.kodo-header-buttons > a,
+.kodo-header-buttons > select,
+.kodo-header-buttons > div > button {
+  border-color: transparent !important;
+  box-shadow: none !important;
+  outline: none !important;
 }
 
-/* Fusion nothing-pulse on accent elements */
-@keyframes nothing-pulse {
-  0%, 100% { box-shadow: 0 0 0 0 rgba(192, 85, 58, 0); }
-  50%       { box-shadow: 0 0 0 3px rgba(192, 85, 58, 0.22); }
+/* Restore accent/active borders set via inline style */
+.kodo-header-buttons > button[style*="var(--accent)"],
+.kodo-header-buttons > a[style*="var(--accent)"],
+.kodo-header-buttons > div > button[style*="var(--accent)"] {
+  border-color: var(--accent) !important;
+}
+
+/* Left status area (zap + search toggle) */
+.kodo-header-status > button {
+  border-color: transparent !important;
+  box-shadow: none !important;
+  outline: none !important;
+}
+
+/* Collapse chevron button */
+.kodo-header-collapse {
+  border-color: transparent !important;
+  box-shadow: none !important;
+  outline: none !important;
 }
 
 *, *::before, *::after {
@@ -610,19 +673,6 @@ select,
 textarea,
 aside {
   transition: background-color 180ms ease, color 180ms ease, border-color 180ms ease, box-shadow 180ms ease;
-}
-
-:root[data-theme='glass'] aside,
-:root[data-theme='glass'] button,
-:root[data-theme='glass'] input,
-:root[data-theme='glass'] select,
-:root[data-theme='glass'] textarea {
-  backdrop-filter: blur(14px) saturate(140%);
-  -webkit-backdrop-filter: blur(14px) saturate(140%);
-}
-
-:root[data-theme='glass'] aside {
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.22);
 }
 
 @media (max-width: 900px) {

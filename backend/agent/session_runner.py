@@ -297,6 +297,8 @@ class SessionRunner:
         approval_callback: Callable[[str, str, str], Awaitable[bool]] | None = None,
         model_override: str | None = None,
         artifact_mode: bool = False,
+        disable_tools: bool = False,
+        max_tokens: int | None = None,
     ) -> AsyncGenerator[dict[str, Any], None]:
         assistant_parts: list[str] = []
         usage_payload: dict[str, Any] | None = None
@@ -314,13 +316,17 @@ class SessionRunner:
         history = [_runtime_message(msg) for msg in messages[:-1] if isinstance(msg, dict)]
 
         try:
-            agent = AgentLoop(
-                session_id=session_id,
-                project_dir=project_dir,
-                mode=mode,
-                model_override=model_override,
-                artifact_mode=bool(artifact_mode),
-            )
+            agent_kwargs: dict[str, Any] = {
+                "session_id": session_id,
+                "project_dir": project_dir,
+                "mode": mode,
+                "model_override": model_override,
+                "artifact_mode": bool(artifact_mode),
+                "disable_tools": bool(disable_tools),
+            }
+            if max_tokens is not None:
+                agent_kwargs["max_tokens"] = max_tokens
+            agent = AgentLoop(**agent_kwargs)
         except Exception as exc:
             yield {"type": "error", "message": str(exc)}
             return
@@ -414,6 +420,15 @@ class SessionRunner:
             yield {"type": "error", "message": error_message}
 
         assistant_text = "".join(assistant_parts)
+        if not assistant_text.strip() and not tool_calls and error_message is None:
+            provider = str(getattr(agent, "provider", "") or "unknown")
+            model = str(getattr(agent, "model", "") or "unknown")
+            error_message = (
+                f"Model provider returned no text content "
+                f"(provider={provider}, model={model}). Check the active provider/model settings and try again."
+            )
+            yield {"type": "error", "message": error_message}
+
         updated_history = list(messages)
         assistant_entry: dict[str, Any] = {
             "role": "assistant",
@@ -474,16 +489,23 @@ class SessionRunner:
         approval_callback: Callable[[str, str, str], Awaitable[bool]] | None = None,
         model_override: str | None = None,
         artifact_mode: bool = False,
+        disable_tools: bool = False,
+        max_tokens: int | None = None,
     ) -> SessionResult:
-        async for event in self.stream(
-            session_id=session_id,
-            messages=messages,
-            project_dir=project_dir,
-            mode=mode,
-            approval_callback=approval_callback,
-            model_override=model_override,
-            artifact_mode=bool(artifact_mode),
-        ):
+        stream_kwargs: dict[str, Any] = {
+            "session_id": session_id,
+            "messages": messages,
+            "project_dir": project_dir,
+            "mode": mode,
+            "approval_callback": approval_callback,
+            "model_override": model_override,
+            "artifact_mode": bool(artifact_mode),
+            "disable_tools": bool(disable_tools),
+        }
+        if max_tokens is not None:
+            stream_kwargs["max_tokens"] = max_tokens
+
+        async for event in self.stream(**stream_kwargs):
             if stream_callback is not None:
                 await stream_callback(event)
 

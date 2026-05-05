@@ -1,4 +1,5 @@
 import tempfile
+import re
 from pathlib import Path
 from typing import Literal
 
@@ -10,6 +11,213 @@ from pydantic import BaseModel, Field
 router = APIRouter(prefix="/api/design", tags=["design"])
 
 MAX_HTML_CHARS = 1_500_000
+
+_DESIGN_SYSTEMS_DIR = Path(__file__).parent.parent / "skills" / "bundled" / "design-systems"
+_DESIGN_SYSTEM_DOC_MAX_CHARS = 24_000
+
+# Maps preset IDs to MD filenames (without .md extension).
+# Preset IDs that aren't listed here use the preset ID directly as the filename.
+_PRESET_ID_TO_DOC: dict[str, str] = {
+    "claude-warm": "claude",
+    "mistral-ai": "mistral-ai",
+    "elevenlabs-audio": "elevenlabs",
+    "ollama-local": "ollama",
+    "together-ai": "together-ai",
+    "opencode-ai": "opencode-ai",
+    "minimax-ai": "minimax",
+    "cohere-enterprise": "cohere",
+    "xai-mono": "x-ai",
+    "linear-minimal": "linear-app",
+    "vercel-mono": "vercel",
+    "cursor-agentic": "cursor",
+    "supabase-dev": "supabase",
+    "raycast-command": "raycast",
+    "warp-terminal": "warp",
+    "expo-platform": "expo",
+    "hashicorp-infra": "hashicorp",
+    "sentry-ops": "sentry",
+    "mintlify-docs": "mintlify",
+    "resend-email": "resend",
+    "replicate-ml": "replicate",
+    "composio-dev": "composio",
+    "posthog-analytics": "posthog",
+    "stripe-gradient": "stripe",
+    "coinbase-crypto": "coinbase",
+    "revolut-finance": "revolut",
+    "wise-fintech": "wise",
+    "binance-crypto": "binance",
+    "mastercard-brand": "mastercard",
+    "kraken-exchange": "kraken",
+    "apple-glass": "apple",
+    "airbnb-warm": "airbnb",
+    "spotify-audio": "spotify",
+    "nike-performance": "nike",
+    "starbucks-brand": "starbucks",
+    "meta-store": "meta",
+    "tesla-product": "tesla",
+    "bmw-premium": "bmw",
+    "bmw-m-sport": "bmw-m",
+    "ferrari-red": "ferrari",
+    "lamborghini-hex": "lamborghini",
+    "bugatti-mono": "bugatti",
+    "renault-aurora": "renault",
+    "spacex-stark": "spacex",
+    "figma-creative": "figma",
+    "framer-motion": "framer",
+    "webflow-creator": "webflow",
+    "miro-workshop": "miro",
+    "airtable-db": "airtable",
+    "clay-agency": "clay",
+    "theverge-editorial": "theverge",
+    "wired-magazine": "wired",
+    "ibm-carbon": "ibm",
+    "intercom-friendly": "intercom",
+    "superhuman-email": "superhuman",
+    "nvidia-ai": "nvidia",
+    "playstation-dark": "playstation",
+    "mongodb-db": "mongodb",
+    "sanity-cms": "sanity",
+    "lovable-builder": "lovable",
+    "clickhouse-db": "clickhouse",
+    "vodafone-brand": "vodafone",
+    "notion-editorial": "notion",
+    "cal-scheduling": "cal",
+    "zapier-orange": "zapier",
+    "runwayml-cinematic": "runwayml",
+    "shopify-commerce": "shopify",
+    "pinterest-discovery": "pinterest",
+    "duolingo-playful": "duolingo",
+}
+
+
+_CATEGORY_BY_DOC: dict[str, str] = {
+    **{key: "AI & LLM" for key in ("claude", "openai-research", "anthropic-editorial", "huggingface-community", "deepseek-tech", "mistral-ai", "elevenlabs", "ollama", "together-ai", "opencode-ai", "minimax", "cohere", "x-ai", "voltagent")},
+    **{key: "Developer Tools" for key in ("linear-app", "vercel", "cursor", "supabase", "github-utility", "raycast", "warp", "expo", "hashicorp", "sentry", "mintlify", "resend", "replicate", "composio", "posthog")},
+    **{key: "Fintech" for key in ("stripe", "coinbase", "revolut", "wise", "binance", "mastercard", "kraken", "fintech-dark")},
+    **{key: "Consumer" for key in ("apple", "airbnb", "spotify", "nike", "starbucks", "meta", "netflix-streaming", "discord-community", "dropbox-work", "loom-video", "mailchimp-friendly", "xiaohongshu-social", "amazon-commerce", "pinterest", "shopify")},
+    **{key: "Automotive" for key in ("tesla", "bmw", "bmw-m", "ferrari", "lamborghini", "bugatti", "porsche-precision", "mercedes-luxury", "renault", "spacex")},
+    **{key: "Design Tools" for key in ("figma", "framer", "webflow", "canva-playful", "miro", "airtable", "clay", "shadcn-system", "lovable", "cal", "zapier", "sanity")},
+    **{key: "Publishing" for key in ("theverge", "wired", "magazine-bold", "japanese-minimal", "substack-newsletter")},
+    **{key: "Enterprise" for key in ("ibm", "intercom", "atlassian-team", "material-google", "microsoft-fluent", "salesforce-crm", "superhuman", "hubspot-marketing", "pagerduty-incident", "datadog-ops", "vodafone", "mongodb", "clickhouse")},
+    **{key: "Platform" for key in ("nvidia", "playstation")},
+    **{key: "Styles" for key in ("neo-brutal", "neobrutalism", "glassmorphism", "claymorphism", "retro-80s", "cosmic-space", "luxury-premium", "cyberpunk-neon", "warmth-organic")},
+}
+
+
+def _clean_text(value: str) -> str:
+    value = value.replace("\ufffd", "")
+    value = re.sub(r"[\u2010-\u2015]", "-", value)
+    return re.sub(r"\s+", " ", value).strip()
+
+
+def _label_from_slug(slug: str) -> str:
+    special = {
+        "x-ai": "xAI",
+        "bmw-m": "BMW M",
+        "ibm": "IBM",
+        "nvidia": "NVIDIA",
+        "shadcn-system": "shadcn/ui",
+        "theverge": "The Verge",
+    }
+    if slug in special:
+        return special[slug]
+    return " ".join(part.upper() if part in {"ai", "ui", "crm", "cms", "db"} else part.capitalize() for part in slug.split("-"))
+
+
+def _read_frontmatter(text: str) -> tuple[dict[str, object], str]:
+    if not text.startswith("---"):
+        return {}, text
+    end = text.find("\n---", 3)
+    if end == -1:
+        return {}, text
+    raw = text[3:end]
+    body = text[end + 4 :]
+    meta: dict[str, object] = {}
+    current: str | None = None
+    for line in raw.splitlines():
+        if not line.strip():
+            continue
+        if re.match(r"^[A-Za-z0-9_-]+:", line):
+            key, val = line.split(":", 1)
+            current = key.strip()
+            val = val.strip()
+            meta[current] = val.strip('"') if val else {}
+        elif current and isinstance(meta.get(current), dict):
+            match = re.match(r'\s+([A-Za-z0-9_-]+):\s*"?([^"]+)"?\s*$', line)
+            if match:
+                meta[current][match.group(1).lower()] = match.group(2).strip().strip('"')  # type: ignore[index]
+    return meta, body
+
+
+def _contrast_safe_palette(meta: dict[str, object], text: str) -> list[str]:
+    colors = meta.get("colors") if isinstance(meta.get("colors"), dict) else {}
+    color_map = {str(k).lower(): str(v).strip().strip('"') for k, v in dict(colors).items()}
+    hexes = [match.group(0).lower()[:7] for match in re.finditer(r"#[0-9a-fA-F]{6}", text)]
+
+    def pick(*keys: str) -> str | None:
+        for key in keys:
+            val = color_map.get(key)
+            if val and re.match(r"^#[0-9a-fA-F]{6}", val):
+                return val[:7].lower()
+        return None
+
+    bg = pick("canvas", "background", "bg") or (hexes[0] if hexes else "#fafafa")
+    surface = pick("surface-card", "surface", "surface-soft", "surface-elevated") or (hexes[1] if len(hexes) > 1 else "#ffffff")
+    text_color = pick("ink", "text", "text-primary", "body-strong", "body") or "#111111"
+    muted = pick("muted", "muted-soft", "body", "text-secondary") or "#6b7280"
+    accent = pick("primary", "accent", "brand", "brand-primary", "cta", "blue", "green", "red")
+    if accent in {"#ffffff", "#000000", "#111111"}:
+        accent = pick("bmw-blue", "m-blue-dark", "electric-blue", "primary-active", "accent-blue") or accent
+    if not accent:
+        accent = next((h for h in hexes if h not in {bg, surface, text_color, muted}), text_color)
+
+    # A small server-side guard so search/apply swatches do not encode unreadable text.
+    def luminance(hex_value: str) -> float:
+        rgb = tuple(int(hex_value.lstrip("#")[i : i + 2], 16) / 255 for i in (0, 2, 4))
+        vals = [c / 12.92 if c <= 0.03928 else ((c + 0.055) / 1.055) ** 2.4 for c in rgb]
+        return 0.2126 * vals[0] + 0.7152 * vals[1] + 0.0722 * vals[2]
+
+    def contrast(a: str, b: str) -> float:
+        hi, lo = sorted((luminance(a), luminance(b)), reverse=True)
+        return (hi + 0.05) / (lo + 0.05)
+
+    if contrast(text_color, bg) < 4.5:
+        text_color = "#ffffff" if contrast("#ffffff", bg) >= contrast("#111111", bg) else "#111111"
+    if contrast(text_color, surface) < 4.5:
+        surface = "#ffffff" if contrast(text_color, "#ffffff") >= 4.5 else "#1a1a1a"
+    if contrast(muted, bg) < 3:
+        muted = "#a3a3a3" if luminance(bg) < 0.3 else "#6b7280"
+    if "netflix" in text.lower()[:2000]:
+        return ["#141414", "#1f1f1f", "#e5e5e5", "#808080", "#e50914"]
+    if "uber" in text.lower()[:2000]:
+        return ["#ffffff", "#f3f3f3", "#000000", "#4b4b4b", "#000000"]
+    return [bg, surface, text_color, muted, accent]
+
+
+def _design_system_options() -> list[dict[str, object]]:
+    presets: list[dict[str, object]] = []
+    priority = ["claude", "netflix-streaming", "bmw-m", "openai-research", "anthropic-editorial", "linear-app", "vercel", "stripe", "apple", "airbnb"]
+    rank = {slug: index for index, slug in enumerate(priority)}
+    for doc_path in sorted(_DESIGN_SYSTEMS_DIR.glob("*.md")):
+        slug = doc_path.stem
+        text = doc_path.read_text(encoding="utf-8", errors="replace")
+        meta, body = _read_frontmatter(text)
+        label = _clean_text(str(meta.get("name") or "")) or _label_from_slug(slug)
+        description = _clean_text(str(meta.get("description") or ""))
+        if not description:
+            paragraphs = [_clean_text(part) for part in re.split(r"\n\s*\n", body) if _clean_text(part) and not _clean_text(part).startswith("#")]
+            description = paragraphs[0] if paragraphs else f"{label} design system from bundled Kodo documentation."
+        presets.append(
+            {
+                "id": slug,
+                "label": label,
+                "category": _CATEGORY_BY_DOC.get(slug, "Design Systems"),
+                "colors": _contrast_safe_palette(meta, text),
+                "summary": description[:220] + ("..." if len(description) > 220 else ""),
+            }
+        )
+    presets.sort(key=lambda item: (rank.get(str(item["id"]), 999), str(item["category"]), str(item["label"]).lower()))
+    return presets
 
 
 class RenderRequest(BaseModel):
@@ -169,57 +377,30 @@ async def design_options():
             "macbook",
             "browser-chrome",
         ],
-        "designSystems": [
-            {"id": "neutral-modern", "label": "Neutral Modern", "category": "Starter", "colors": ["#fafafa", "#ffffff", "#111827", "#6b7280", "#2563eb"]},
-            {"id": "claude-warm", "label": "Claude Warm Editorial", "category": "AI & LLM", "colors": ["#f5f4ed", "#faf9f5", "#141413", "#5e5d59", "#c96442"]},
-            {"id": "linear-minimal", "label": "Linear Minimal", "category": "Developer Tools", "colors": ["#fbfbfc", "#ffffff", "#171717", "#737373", "#5e6ad2"]},
-            {"id": "vercel-mono", "label": "Vercel Mono", "category": "Developer Tools", "colors": ["#ffffff", "#fafafa", "#000000", "#666666", "#000000"]},
-            {"id": "stripe-gradient", "label": "Stripe Product", "category": "Fintech", "colors": ["#f6f9fc", "#ffffff", "#0a2540", "#425466", "#635bff"]},
-            {"id": "apple-glass", "label": "Apple Glass", "category": "Consumer", "colors": ["#f5f5f7", "#ffffff", "#1d1d1f", "#6e6e73", "#0071e3"]},
-            {"id": "airbnb-warm", "label": "Airbnb Warm", "category": "Marketplace", "colors": ["#fff8f6", "#ffffff", "#222222", "#717171", "#ff385c"]},
-            {"id": "notion-editorial", "label": "Notion Editorial", "category": "Productivity", "colors": ["#fbfbfa", "#ffffff", "#2f3437", "#787774", "#2383e2"]},
-            {"id": "supabase-dev", "label": "Supabase Dev", "category": "Backend & Data", "colors": ["#0f1512", "#151f1a", "#f8fafc", "#8b949e", "#3ecf8e"]},
-            {"id": "figma-creative", "label": "Figma Creative", "category": "Design Tools", "colors": ["#ffffff", "#f5f5f5", "#1f1f1f", "#6b7280", "#a259ff"]},
-            {"id": "github-utility", "label": "GitHub Utility", "category": "Developer Tools", "colors": ["#0d1117", "#161b22", "#f0f6fc", "#8b949e", "#2f81f7"]},
-            {"id": "shopify-commerce", "label": "Shopify Commerce", "category": "Commerce", "colors": ["#f3f6ef", "#ffffff", "#1f2d1f", "#60705c", "#008060"]},
-            {"id": "magazine-bold", "label": "Magazine Bold", "category": "Editorial", "colors": ["#f8f1e8", "#fffaf2", "#111111", "#6a5b4f", "#d13f22"]},
-            {"id": "neo-brutal", "label": "Neo Brutal", "category": "Experimental", "colors": ["#fffdf2", "#ffffff", "#111111", "#333333", "#ff4d00"]},
-            {"id": "luxury-premium", "label": "Luxury Premium", "category": "Luxury", "colors": ["#0b0a08", "#17130f", "#f7efe4", "#b7a58d", "#c8a45d"]},
-            {"id": "japanese-minimal", "label": "Japanese Minimal", "category": "Editorial", "colors": ["#f7f3ea", "#fffdf8", "#20201d", "#706a60", "#9b2c1f"]},
-            {"id": "cyberpunk-neon", "label": "Cyberpunk Neon", "category": "Futuristic", "colors": ["#070812", "#111827", "#e5faff", "#7dd3fc", "#00f5d4"]},
-            {"id": "openai-research", "label": "OpenAI Research", "category": "AI & LLM", "colors": ["#f7f7f2", "#ffffff", "#111111", "#6b6962", "#10a37f"]},
-            {"id": "anthropic-editorial", "label": "Anthropic Editorial", "category": "AI & LLM", "colors": ["#f3efe7", "#fbfaf7", "#191714", "#6f6860", "#d97757"]},
-            {"id": "cursor-agentic", "label": "Cursor Agentic", "category": "Developer Tools", "colors": ["#0c0d10", "#15171c", "#f4f4f5", "#9ca3af", "#7c3aed"]},
-            {"id": "raycast-command", "label": "Raycast Command", "category": "Productivity", "colors": ["#111113", "#1c1c21", "#f5f5f7", "#a1a1aa", "#ff6363"]},
-            {"id": "webflow-creator", "label": "Webflow Creator", "category": "Design Tools", "colors": ["#0b0d18", "#111827", "#f8fafc", "#94a3b8", "#4353ff"]},
-            {"id": "canva-playful", "label": "Canva Playful", "category": "Design Tools", "colors": ["#f8fbff", "#ffffff", "#1f2937", "#64748b", "#00c4cc"]},
-            {"id": "miro-workshop", "label": "Miro Workshop", "category": "Collaboration", "colors": ["#fff8d8", "#ffffff", "#1f2937", "#6b7280", "#ffd02f"]},
-            {"id": "framer-motion", "label": "Framer Motion", "category": "Design Tools", "colors": ["#050506", "#111116", "#f6f7fb", "#9ca3af", "#0099ff"]},
-            {"id": "spotify-audio", "label": "Spotify Audio", "category": "Media", "colors": ["#0b0b0b", "#181818", "#ffffff", "#b3b3b3", "#1db954"]},
-            {"id": "pinterest-discovery", "label": "Pinterest Discovery", "category": "Social & Media", "colors": ["#ffffff", "#f7f7f7", "#111111", "#767676", "#e60023"]},
-            {"id": "nike-performance", "label": "Nike Performance", "category": "Consumer", "colors": ["#f5f5f5", "#ffffff", "#111111", "#666666", "#fa5400"]},
-            {"id": "tesla-product", "label": "Tesla Product", "category": "Automotive", "colors": ["#f4f4f4", "#ffffff", "#171a20", "#5c5e62", "#e82127"]},
-            {"id": "bmw-premium", "label": "BMW Premium", "category": "Automotive", "colors": ["#f6f7f8", "#ffffff", "#101820", "#6b7280", "#1c69d4"]},
-            {"id": "nvidia-ai", "label": "NVIDIA AI", "category": "Enterprise AI", "colors": ["#0b0f0a", "#111a10", "#f7fee7", "#9ca3af", "#76b900"]},
-            {"id": "ibm-carbon", "label": "IBM Carbon", "category": "Enterprise", "colors": ["#f4f4f4", "#ffffff", "#161616", "#6f6f6f", "#0f62fe"]},
-            {"id": "material-google", "label": "Google Material", "category": "Platform", "colors": ["#f8fafd", "#ffffff", "#1f1f1f", "#5f6368", "#1a73e8"]},
-            {"id": "microsoft-fluent", "label": "Microsoft Fluent", "category": "Platform", "colors": ["#f5f5f5", "#ffffff", "#1b1a19", "#605e5c", "#0078d4"]},
-            {"id": "atlassian-team", "label": "Atlassian Team", "category": "Collaboration", "colors": ["#f7f8f9", "#ffffff", "#172b4d", "#626f86", "#0c66e4"]},
-            {"id": "mailchimp-friendly", "label": "Mailchimp Friendly", "category": "Marketing", "colors": ["#ffe01b", "#fff8dc", "#241c15", "#6b5d4d", "#007c89"]},
-            {"id": "dropbox-work", "label": "Dropbox Work", "category": "Productivity", "colors": ["#f7f5f2", "#ffffff", "#1e1919", "#736c64", "#0061ff"]},
-            {"id": "wise-fintech", "label": "Wise Fintech", "category": "Fintech", "colors": ["#f5f6ef", "#ffffff", "#163300", "#51624a", "#9fe870"]},
-            {"id": "revolut-finance", "label": "Revolut Finance", "category": "Fintech", "colors": ["#f7f7fb", "#ffffff", "#101828", "#667085", "#191cff"]},
-            {"id": "coinbase-crypto", "label": "Coinbase Crypto", "category": "Fintech", "colors": ["#f7f8fa", "#ffffff", "#0a0b0d", "#5b616e", "#0052ff"]},
-            {"id": "duolingo-playful", "label": "Duolingo Playful", "category": "Education", "colors": ["#f7fff0", "#ffffff", "#1f2937", "#6b7280", "#58cc02"]},
-            {"id": "theverge-editorial", "label": "The Verge Editorial", "category": "Editorial", "colors": ["#0b0b0f", "#17171f", "#ffffff", "#a1a1aa", "#e2127a"]},
-            {"id": "wired-magazine", "label": "WIRED Magazine", "category": "Editorial", "colors": ["#f5f2ec", "#ffffff", "#111111", "#555555", "#e31b23"]},
-            {"id": "runwayml-cinematic", "label": "Runway Cinematic", "category": "Media AI", "colors": ["#050505", "#111111", "#f5f5f5", "#8a8a8a", "#d7ff5f"]},
-            {"id": "huggingface-community", "label": "Hugging Face Community", "category": "AI & LLM", "colors": ["#fff8e7", "#ffffff", "#1f2937", "#6b7280", "#ffcc4d"]},
-            {"id": "posthog-analytics", "label": "PostHog Analytics", "category": "Analytics", "colors": ["#fff7ed", "#ffffff", "#1c1917", "#78716c", "#f97316"]},
-            {"id": "sentry-ops", "label": "Sentry Ops", "category": "Developer Tools", "colors": ["#120f1f", "#1d1830", "#f8fafc", "#a8a3b8", "#6f42c1"]},
-            {"id": "mintlify-docs", "label": "Mintlify Docs", "category": "Developer Docs", "colors": ["#f8fafc", "#ffffff", "#0f172a", "#64748b", "#16a34a"]},
-            {"id": "resend-email", "label": "Resend Email", "category": "Developer Tools", "colors": ["#fafafa", "#ffffff", "#111111", "#737373", "#000000"]},
-            {"id": "shadcn-system", "label": "shadcn System", "category": "Component Systems", "colors": ["#fafafa", "#ffffff", "#09090b", "#71717a", "#18181b"]},
-            {"id": "xiaohongshu-social", "label": "Xiaohongshu Social", "category": "Social & Commerce", "colors": ["#ffffff", "#f5f5f5", "#303034", "#8a8a8f", "#ff2442"]},
-        ],
+        "designSystems": _design_system_options(),
+
     }
+
+
+@router.get("/system-doc/{preset_id}")
+async def design_system_doc(preset_id: str):
+    """Return the design system markdown documentation for a preset ID.
+
+    Used by the design studio to inject rich design-system context into generation prompts.
+    Returns a substantial excerpt from the document.
+    """
+    # Sanitize to prevent path traversal
+    safe_id = preset_id.strip().lower()
+    if not safe_id or any(ch in safe_id for ch in ("/", "\\", "..", "\x00")):
+        raise HTTPException(status_code=400, detail="Invalid preset ID")
+
+    doc_slug = _PRESET_ID_TO_DOC.get(safe_id, safe_id)
+    doc_path = _DESIGN_SYSTEMS_DIR / f"{doc_slug}.md"
+
+    if not doc_path.exists() or not doc_path.is_file():
+        raise HTTPException(status_code=404, detail=f"No design system doc found for '{preset_id}'")
+
+    content = doc_path.read_text(encoding="utf-8")
+    # Include enough source material for model families that need explicit tokens,
+    # component rules, and readability guidance from the selected system.
+    return {"preset_id": preset_id, "doc_slug": doc_slug, "content": content[:_DESIGN_SYSTEM_DOC_MAX_CHARS]}

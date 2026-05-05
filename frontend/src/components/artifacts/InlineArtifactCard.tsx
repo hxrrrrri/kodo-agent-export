@@ -35,7 +35,15 @@ const SPEEDS = [
   { label: '4×', value: 4 },
 ]
 
-/** Inject pause/speed postMessage bridge into HTML artifact entry file */
+const RESPONSIVE_INJECT = `<meta name="viewport" content="width=device-width,initial-scale=1,shrink-to-fit=no">
+<style>
+*,*::before,*::after{box-sizing:border-box}
+html{overflow-x:hidden;width:100%;scroll-behavior:smooth}
+body{width:100%;max-width:100%;overflow-x:hidden;min-height:100%}
+img,video,canvas,svg,iframe,table{max-width:100%;height:auto}
+</style>`
+
+/** Inject pause/speed postMessage bridge + responsive CSS into HTML artifact entry file */
 function injectBridge(artifact: ArtifactV2): ArtifactV2 {
   if (!ANIMATABLE.has(artifact.type)) return artifact
   if (artifact.type !== 'html' && artifact.type !== 'html-multi') return artifact
@@ -68,9 +76,21 @@ function injectBridge(artifact: ArtifactV2): ArtifactV2 {
 
   const files = artifact.files.map((f, i) => {
     if (i !== 0 && f.path !== (artifact.entrypoint || 'index.html')) return f
-    const content = /<\/body>/i.test(f.content)
-      ? f.content.replace(/<\/body>/i, bridge + '</body>')
-      : f.content + bridge
+
+    let content = f.content
+
+    // Inject responsive meta + CSS into <head> if present, otherwise prepend
+    if (/<head[^>]*>/i.test(content)) {
+      content = content.replace(/<head[^>]*>/i, (m) => m + '\n' + RESPONSIVE_INJECT)
+    } else if (!/<meta\s[^>]*name=["']viewport["']/i.test(content)) {
+      content = RESPONSIVE_INJECT + '\n' + content
+    }
+
+    // Inject animation bridge before </body>
+    content = /<\/body>/i.test(content)
+      ? content.replace(/<\/body>/i, bridge + '</body>')
+      : content + bridge
+
     return { ...f, content }
   })
   return { ...artifact, files }
@@ -176,8 +196,9 @@ export function InlineArtifactCard({ artifact }: Props) {
   // Adaptive height: taller for complex types, compact for code/markdown
   const previewHeight = (() => {
     if (['code', 'markdown', 'dot'].includes(artifact.type)) return 'auto'
-    if (['mermaid', 'svg'].includes(artifact.type)) return 240
-    return 380
+    if (['mermaid', 'svg'].includes(artifact.type)) return 280
+    // HTML/React websites: use viewport-relative so they always show fully
+    return 'clamp(520px, 60vh, 720px)'
   })()
 
   return (
@@ -409,7 +430,8 @@ export function InlineArtifactCard({ artifact }: Props) {
           border: 'none',
           background: 'transparent',
           height: view === 'preview' && livePreview ? previewHeight : 'auto',
-          maxHeight: view === 'preview' ? 520 : 400,
+          maxHeight: view === 'preview' ? 'none' : 400,
+          resize: view === 'preview' && livePreview ? 'vertical' : 'none',
         }}
       >
         {view === 'preview' && livePreview ? (

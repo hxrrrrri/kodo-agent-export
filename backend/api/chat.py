@@ -241,6 +241,8 @@ class ChatRequest(BaseModel):
     content: str | list[dict[str, Any]] | None = Field(default=None)
     image_attachment: dict[str, str] | None = Field(default=None)
     artifact_mode: bool = Field(default=False)
+    disable_tools: bool = Field(default=False)
+    max_tokens: int | None = Field(default=None, ge=512, le=65536)
     session_id: str | None = Field(default=None, max_length=128)
     project_dir: str | None = Field(default=None, max_length=1024)
     mode: str | None = Field(default=None, max_length=64)
@@ -1027,15 +1029,20 @@ async def send_message(req: ChatRequest, request: Request):
             yield f"data: {json.dumps(todo_plan_event)}\n\n"
 
         try:
-            async for event in runner.stream(
-                session_id=session_id,
-                messages=session_messages,
-                project_dir=project_dir,
-                mode=effective_mode,
-                approval_callback=approval_callback,
-                model_override=stored_model_override or None,
-                artifact_mode=bool(req.artifact_mode),
-            ):
+            runner_kwargs: dict[str, Any] = {
+                "session_id": session_id,
+                "messages": session_messages,
+                "project_dir": project_dir,
+                "mode": effective_mode,
+                "approval_callback": approval_callback,
+                "model_override": stored_model_override or None,
+                "artifact_mode": bool(req.artifact_mode),
+                "disable_tools": bool(req.disable_tools),
+            }
+            if req.max_tokens is not None:
+                runner_kwargs["max_tokens"] = req.max_tokens
+
+            async for event in runner.stream(**runner_kwargs):
                 if event.get("type") == "text":
                     assistant_parts.append(str(event.get("content", "")))
                 if event["type"] == "done" and isinstance(event.get("usage"), dict):

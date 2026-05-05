@@ -11,7 +11,7 @@ import { AdvisorReview, ArtifactItem, ArtifactRef, Message, PreviewItem, useChat
 import { buildApiHeaders, parseApiError } from '../lib/api'
 import { ToolCallCard } from './ToolCallCard'
 import { InlineArtifactCard } from './artifacts/InlineArtifactCard'
-import { TodoPanel } from './TodoPanel'
+// TodoPanel import removed — plans render inline via ReactMarkdown checkboxes
 
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -1103,10 +1103,7 @@ export function MessageBubble({
         </div>
       )}
 
-      {/* Inline task plan — auto-shown for heavy tasks (3+ items) */}
-      {message.todoItems && message.todoItems.length > 0 && (
-        <TodoPanel items={message.todoItems} />
-      )}
+      {/* todo_plan/todo_update events from backend update todoItems — state kept for agentic flows */}
 
       {/* Artifacts v2 refs */}
       {message.artifactRefs && message.artifactRefs.length > 0 && (

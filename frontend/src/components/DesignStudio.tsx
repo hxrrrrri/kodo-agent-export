@@ -1,6 +1,6 @@
 import {
   useState, useRef, useEffect, useCallback, useMemo, KeyboardEvent,
-  MouseEvent as ReactMouseEvent,
+  MouseEvent as ReactMouseEvent, ReactNode,
 } from 'react'
 import {
   Monitor, Tablet, Smartphone, Download, RefreshCw,
@@ -8,22 +8,122 @@ import {
   ExternalLink, Wand2, SplitSquareHorizontal, Maximize2,
   Minimize2, ChevronRight, ChevronDown, RotateCcw, Copy,
   MessageSquare, Share2, Package, Printer, Save,
-  Folder, FolderOpen, Loader, ArrowLeft, Square, CheckSquare,
-  StopCircle, Pencil, Plus, Clock,
+  Folder, FolderOpen, Loader, ArrowLeft, CheckSquare,
+  StopCircle, Pencil, Plus, Clock, Images, Film, Sparkles,
+  Layers, Search,
 } from 'lucide-react'
 import { buildApiHeaders } from '../lib/api'
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter'
 import { vscDarkPlus } from 'react-syntax-highlighter/dist/esm/styles/prism'
+import ReactMarkdown from 'react-markdown'
+import remarkGfm from 'remark-gfm'
 import JSZip from 'jszip'
 import VisualWebEditorArtifact, { VisualEditorSourcePayload } from './VisualWebEditorArtifact'
+import { DESIGN_SYSTEM_PRESETS as BUNDLED_DESIGN_SYSTEM_PRESETS } from '../lib/designSystemPresets'
 
 const API = '/api/chat'
 export const DESIGN_STUDIO_STORAGE_KEY = 'kodo.design-studio.state.v1'
 const MAX_PERSISTED_MESSAGES = 40
 const MAX_PERSISTED_HISTORY = 20
 const MAX_PERSISTED_MESSAGE_FILE_CHARS = 200000
+const MAX_CHAT_MESSAGE_CHARS = 7600
+const MAX_CHAT_CONTEXT_CHARS = 3200
+const MAX_CHAT_ASSET_CHARS = 900
+const DESIGN_GENERATION_MAX_TOKENS = 16384
 
-// ─── Types ──────────────────────────────────────────────────────────────────
+function truncateText(value: string, maxChars: number): string {
+  if (value.length <= maxChars) return value
+  if (maxChars <= 80) return value.slice(0, maxChars)
+  return `${value.slice(0, maxChars - 48).trimEnd()}\n...[truncated for request size]`
+}
+
+function formatApiErrorDetail(detail: unknown, fallback: string): string {
+  if (typeof detail === 'string') return detail
+  if (Array.isArray(detail)) {
+    const sizeError = detail.find((item) => {
+      if (!item || typeof item !== 'object') return false
+      const msg = 'msg' in item ? String((item as { msg?: unknown }).msg || '') : ''
+      return msg.includes('at most 12000')
+    })
+    if (sizeError) {
+      return 'The design brief was too large to send. Kodo compacted future prompts automatically; try sending again.'
+    }
+    return detail
+      .map((item) => {
+        if (!item || typeof item !== 'object') return String(item)
+        const loc = 'loc' in item ? (item as { loc?: unknown }).loc : undefined
+        const msg = 'msg' in item ? (item as { msg?: unknown }).msg : undefined
+        return [Array.isArray(loc) ? loc.join('.') : '', msg ? String(msg) : ''].filter(Boolean).join(': ')
+      })
+      .filter(Boolean)
+      .join('\n') || fallback
+  }
+  if (detail && typeof detail === 'object') {
+    try { return JSON.stringify(detail) } catch { return fallback }
+  }
+  return fallback
+}
+
+export function buildChatMessagePayload(contextSections: string[], prefix: string, prompt: string): string {
+  const compactedSections = contextSections.map((section) => truncateText(section, MAX_CHAT_CONTEXT_CHARS))
+  const build = (sections: string[]) => [
+    prefix,
+    sections.length > 0 ? `${sections.join('\n\n')}\n\n` : '',
+    prompt,
+  ].join('')
+
+  const full = build(compactedSections)
+  if (full.length <= MAX_CHAT_MESSAGE_CHARS) return full
+
+  const reserved = prefix.length + prompt.length + 4
+  const contextBudget = Math.max(0, MAX_CHAT_MESSAGE_CHARS - reserved)
+  if (contextBudget <= 0) {
+    return `${prefix}${truncateText(prompt, Math.max(500, MAX_CHAT_MESSAGE_CHARS - prefix.length))}`
+  }
+
+  const nextSections: string[] = []
+  let remaining = contextBudget
+  compactedSections.forEach((section, index) => {
+    if (remaining <= 0) return
+    const remainingSections = compactedSections.length - index - 1
+    const sectionBudget = Math.max(260, remaining - remainingSections * 260)
+    const next = truncateText(section, sectionBudget)
+    nextSections.push(next)
+    remaining -= next.length + 2
+  })
+
+  return truncateText(build(nextSections), MAX_CHAT_MESSAGE_CHARS)
+}
+
+function streamErrorMessage(event: Record<string, unknown>): string {
+  return String(event.message || event.error || event.detail || 'The model stream failed before returning a response.')
+}
+
+function planItemsFromTodos(todos: unknown): { id: string; text: string; done: boolean }[] {
+  if (!Array.isArray(todos)) return []
+  return todos
+    .map((todo, index) => {
+      if (!todo || typeof todo !== 'object') return null
+      const row = todo as Record<string, unknown>
+      const title = String(row.title || row.text || '').trim()
+      if (!title) return null
+      return {
+        id: String(row.id || `step-${index + 1}`),
+        text: title,
+        done: String(row.status || '').toLowerCase() === 'completed',
+      }
+    })
+    .filter((item): item is { id: string; text: string; done: boolean } => item !== null)
+}
+
+function textFromStreamEvent(event: Record<string, unknown>): string {
+  const type = String(event.type || '').toLowerCase()
+  if (type !== 'text' && type !== 'assistant_text' && type !== 'content_delta') return ''
+  const value = event.content ?? event.text ?? event.delta
+  return typeof value === 'string' ? value : ''
+}
+
+// â”€â”€â”€ Types â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 type DeviceMode = 'desktop' | 'tablet' | 'mobile'
 type ViewMode = 'preview' | 'code' | 'split' | 'editor'
@@ -143,6 +243,17 @@ const DESIGN_MODES: Record<DesignMode, {
   },
 }
 
+interface DesignTokenRow {
+  name: string
+  value: string
+  description: string
+}
+
+interface DesignTokenGroup {
+  label: string
+  tokens: DesignTokenRow[]
+}
+
 interface DesignSystemPreset {
   id: string
   label: string
@@ -152,519 +263,300 @@ interface DesignSystemPreset {
   bodyFont: string
   summary: string
   prompt: string
+  logoUrl?: string
+  sourceUrl?: string
+  livePreviewHtml?: string
+  tokenGroups?: DesignTokenGroup[]
+  extractedAt?: string
+  extraction?: {
+    generator?: string
+    cssVarCount?: number
+    sourceCssFiles?: number
+    sourceStyleBlocks?: number
+  }
 }
 
-const DESIGN_SYSTEM_PRESETS: DesignSystemPreset[] = [
-  {
-    id: 'neutral-modern',
-    label: 'Neutral Modern',
-    category: 'Starter',
-    colors: ['#fafafa', '#ffffff', '#111827', '#6b7280', '#2563eb'],
-    displayFont: 'Inter, system-ui, sans-serif',
-    bodyFont: 'Inter, system-ui, sans-serif',
-    summary: 'Quiet modern software UI with clean spacing, strong hierarchy, and restrained blue accent.',
-    prompt: 'Use neutral surfaces, compact hierarchy, hairline borders, practical product screenshots, and one restrained blue accent. Avoid decorative gradients.',
-  },
-  {
-    id: 'claude-warm',
-    label: 'Claude Warm Editorial',
-    category: 'AI & LLM',
-    colors: ['#f5f4ed', '#faf9f5', '#141413', '#5e5d59', '#c96442'],
-    displayFont: 'Georgia, Iowan Old Style, serif',
-    bodyFont: 'system-ui, -apple-system, Segoe UI, sans-serif',
-    summary: 'Parchment canvas, serif headlines, terracotta accent, warm neutral editorial rhythm.',
-    prompt: 'Use warm parchment backgrounds, Georgia-style serif display type, terracotta accent, warm neutrals only, soft ring borders, and essay-like section pacing. Avoid cool blue-gray palettes.',
-  },
-  {
-    id: 'linear-minimal',
-    label: 'Linear Minimal',
-    category: 'Developer Tools',
-    colors: ['#fbfbfc', '#ffffff', '#171717', '#737373', '#5e6ad2'],
-    displayFont: 'Inter, system-ui, sans-serif',
-    bodyFont: 'Inter, system-ui, sans-serif',
-    summary: 'Precise product UI with crisp borders, compact typography, and one violet-blue accent.',
-    prompt: 'Use tight software-native spacing, one saturated accent, subtle panels, status pills, keyboardable controls, and product-first composition. No oversized marketing illustrations.',
-  },
-  {
-    id: 'vercel-mono',
-    label: 'Vercel Mono',
-    category: 'Developer Tools',
-    colors: ['#ffffff', '#fafafa', '#000000', '#666666', '#000000'],
-    displayFont: 'Geist, Inter, system-ui, sans-serif',
-    bodyFont: 'Geist, Inter, system-ui, sans-serif',
-    summary: 'Black-and-white developer aesthetic with strong type, command surfaces, and exact spacing.',
-    prompt: 'Use monochrome surfaces, exact 1px borders, command-line and deployment metaphors, sharp contrast, and restrained interaction polish. Do not add color unless it communicates state.',
-  },
-  {
-    id: 'stripe-gradient',
-    label: 'Stripe Product',
-    category: 'Fintech',
-    colors: ['#f6f9fc', '#ffffff', '#0a2540', '#425466', '#635bff'],
-    displayFont: 'Inter, system-ui, sans-serif',
-    bodyFont: 'Inter, system-ui, sans-serif',
-    summary: 'Fintech polish with layered product surfaces, careful gradients, and data-rich UI.',
-    prompt: 'Use financial-product clarity, layered cards, precise data examples, rich but controlled gradients, diagonal rhythm when useful, and trust-building copy.',
-  },
-  {
-    id: 'apple-glass',
-    label: 'Apple Glass',
-    category: 'Consumer',
-    colors: ['#f5f5f7', '#ffffff', '#1d1d1f', '#6e6e73', '#0071e3'],
-    displayFont: 'SF Pro Display, system-ui, sans-serif',
-    bodyFont: 'SF Pro Text, system-ui, sans-serif',
-    summary: 'Premium consumer layout with large product imagery, calm surfaces, and cinematic pacing.',
-    prompt: 'Use product-first hero composition, large clear media, calm gray surfaces, precise copy, generous whitespace, and restrained blue CTAs. No fake device renders.',
-  },
-  {
-    id: 'airbnb-warm',
-    label: 'Airbnb Warm',
-    category: 'Marketplace',
-    colors: ['#fff8f6', '#ffffff', '#222222', '#717171', '#ff385c'],
-    displayFont: 'Circular, Inter, system-ui, sans-serif',
-    bodyFont: 'Circular, Inter, system-ui, sans-serif',
-    summary: 'Human marketplace UI with warm cards, photography-forward layout, and friendly interactions.',
-    prompt: 'Use human-centered copy, warm whitespace, photography-led cards, rounded but disciplined controls, and clear booking/filter interactions.',
-  },
-  {
-    id: 'notion-editorial',
-    label: 'Notion Editorial',
-    category: 'Productivity',
-    colors: ['#fbfbfa', '#ffffff', '#2f3437', '#787774', '#2383e2'],
-    displayFont: 'Inter, system-ui, sans-serif',
-    bodyFont: 'Inter, system-ui, sans-serif',
-    summary: 'Document-native product design with database cues, blocks, and quiet utility.',
-    prompt: 'Use document blocks, database rows, calm neutral surfaces, sparse icons, and content hierarchy that feels editable and structured.',
-  },
-  {
-    id: 'supabase-dev',
-    label: 'Supabase Dev',
-    category: 'Backend & Data',
-    colors: ['#0f1512', '#151f1a', '#f8fafc', '#8b949e', '#3ecf8e'],
-    displayFont: 'Inter, system-ui, sans-serif',
-    bodyFont: 'Inter, system-ui, sans-serif',
-    summary: 'Dark developer dashboard with database objects, green signal color, and terminal confidence.',
-    prompt: 'Use dark database-native UI, green success accents, schema/table metaphors, code snippets, tabular density, and clear developer onboarding flow.',
-  },
-  {
-    id: 'figma-creative',
-    label: 'Figma Creative',
-    category: 'Design Tools',
-    colors: ['#ffffff', '#f5f5f5', '#1f1f1f', '#6b7280', '#a259ff'],
-    displayFont: 'Inter, system-ui, sans-serif',
-    bodyFont: 'Inter, system-ui, sans-serif',
-    summary: 'Creative tool surface with palettes, layers, collaborative cursors, and expressive controls.',
-    prompt: 'Use canvas metaphors, layer panels, swatches, selection outlines, collaborative presence, and playful but purposeful accent use.',
-  },
-  {
-    id: 'github-utility',
-    label: 'GitHub Utility',
-    category: 'Developer Tools',
-    colors: ['#0d1117', '#161b22', '#f0f6fc', '#8b949e', '#2f81f7'],
-    displayFont: 'system-ui, -apple-system, Segoe UI, sans-serif',
-    bodyFont: 'system-ui, -apple-system, Segoe UI, sans-serif',
-    summary: 'Dense engineering UI with repos, diffs, checks, issues, and exact state treatment.',
-    prompt: 'Use dense engineering information, diff/check/status patterns, tabular lists, issue labels, monospace code, and exact empty/error states.',
-  },
-  {
-    id: 'shopify-commerce',
-    label: 'Shopify Commerce',
-    category: 'Commerce',
-    colors: ['#f3f6ef', '#ffffff', '#1f2d1f', '#60705c', '#008060'],
-    displayFont: 'Inter, system-ui, sans-serif',
-    bodyFont: 'Inter, system-ui, sans-serif',
-    summary: 'Merchant-first commerce system with trustworthy green accents and operational panels.',
-    prompt: 'Use merchant operations language, commerce metrics, product grids, inventory/order states, trustworthy green accents, and practical workflow density.',
-  },
-  {
-    id: 'magazine-bold',
-    label: 'Magazine Bold',
-    category: 'Editorial',
-    colors: ['#f8f1e8', '#fffaf2', '#111111', '#6a5b4f', '#d13f22'],
-    displayFont: 'Georgia, Times New Roman, serif',
-    bodyFont: 'Inter, system-ui, sans-serif',
-    summary: 'Large serif headlines, editorial spreads, pull quotes, and strong visual pacing.',
-    prompt: 'Use magazine spread composition, oversized serif headlines, pull quotes, asymmetric columns, captions, and one decisive image or data figure.',
-  },
-  {
-    id: 'neo-brutal',
-    label: 'Neo Brutal',
-    category: 'Experimental',
-    colors: ['#fffdf2', '#ffffff', '#111111', '#333333', '#ff4d00'],
-    displayFont: 'Arial Black, Impact, system-ui, sans-serif',
-    bodyFont: 'ui-monospace, SFMono-Regular, Menlo, monospace',
-    summary: 'Hard borders, loud type, minimal radius, and intentionally assertive composition.',
-    prompt: 'Use strong black borders, almost no radius, loud display type, asymmetric grids, visible structure, and one hot accent. No soft shadows or glass.',
-  },
-  {
-    id: 'luxury-premium',
-    label: 'Luxury Premium',
-    category: 'Luxury',
-    colors: ['#0b0a08', '#17130f', '#f7efe4', '#b7a58d', '#c8a45d'],
-    displayFont: 'Didot, Bodoni 72, Georgia, serif',
-    bodyFont: 'Avenir Next, Inter, system-ui, sans-serif',
-    summary: 'Dark premium surfaces, refined serif type, gold restraint, and high-end spacing.',
-    prompt: 'Use dark premium surfaces, elegant serif display type, gold used sparingly, cinematic product focus, and restrained copy. Avoid busy card grids.',
-  },
-  {
-    id: 'japanese-minimal',
-    label: 'Japanese Minimal',
-    category: 'Editorial',
-    colors: ['#f7f3ea', '#fffdf8', '#20201d', '#706a60', '#9b2c1f'],
-    displayFont: 'Hiragino Mincho ProN, Yu Mincho, Georgia, serif',
-    bodyFont: 'system-ui, -apple-system, Segoe UI, sans-serif',
-    summary: 'Quiet asymmetry, paper texture cues, sparse accents, and refined negative space.',
-    prompt: 'Use asymmetry, quiet paper-like surfaces, sparse warm accent, calm vertical rhythm, and labels/captions that feel typeset rather than decorated.',
-  },
-  {
-    id: 'cyberpunk-neon',
-    label: 'Cyberpunk Neon',
-    category: 'Futuristic',
-    colors: ['#070812', '#111827', '#e5faff', '#7dd3fc', '#00f5d4'],
-    displayFont: 'Orbitron, Rajdhani, system-ui, sans-serif',
-    bodyFont: 'Inter, system-ui, sans-serif',
-    summary: 'Futuristic panels, neon accents, kinetic data, and dark sci-fi atmosphere.',
-    prompt: 'Use neon accents with restraint, dark high-contrast panels, scanline or HUD motifs only when useful, kinetic data modules, and cinematic lighting. Avoid generic purple gradients.',
-  },
-  {
-    id: 'openai-research',
-    label: 'OpenAI Research',
-    category: 'AI & LLM',
-    colors: ['#f7f7f2', '#ffffff', '#111111', '#6b6962', '#10a37f'],
-    displayFont: 'Sohne, Inter, system-ui, sans-serif',
-    bodyFont: 'Sohne, Inter, system-ui, sans-serif',
-    summary: 'Research-product clarity with quiet neutrals, confident copy, and minimal green signal.',
-    prompt: 'Use research-lab restraint, clean prose, neutral layouts, sparse green accents, careful diagrams, and accessible product examples. Avoid sci-fi AI cliches.',
-  },
-  {
-    id: 'anthropic-editorial',
-    label: 'Anthropic Editorial',
-    category: 'AI & LLM',
-    colors: ['#f3efe7', '#fbfaf7', '#191714', '#6f6860', '#d97757'],
-    displayFont: 'Tiempos, Georgia, serif',
-    bodyFont: 'Inter, system-ui, sans-serif',
-    summary: 'Warm research editorial with serif scale, measured spacing, and muted clay accent.',
-    prompt: 'Use warm paper surfaces, serif-led hierarchy, calm product framing, measured copy, and clay accents. Keep the layout humane and not dashboard-heavy.',
-  },
-  {
-    id: 'cursor-agentic',
-    label: 'Cursor Agentic',
-    category: 'Developer Tools',
-    colors: ['#0c0d10', '#15171c', '#f4f4f5', '#9ca3af', '#7c3aed'],
-    displayFont: 'Inter, system-ui, sans-serif',
-    bodyFont: 'JetBrains Mono, ui-monospace, monospace',
-    summary: 'Coding-agent workbench with command surfaces, diffs, composer states, and purple signal.',
-    prompt: 'Use developer-agent UI patterns: editors, diffs, command bars, file trees, context chips, and precise status feedback. Purple is a signal, not a background wash.',
-  },
-  {
-    id: 'raycast-command',
-    label: 'Raycast Command',
-    category: 'Productivity',
-    colors: ['#111113', '#1c1c21', '#f5f5f7', '#a1a1aa', '#ff6363'],
-    displayFont: 'Inter, system-ui, sans-serif',
-    bodyFont: 'Inter, system-ui, sans-serif',
-    summary: 'Fast command-center UI with keyboard-first lists, hotkeys, and crisp dark surfaces.',
-    prompt: 'Use command palette structure, keyboard hints, dense list rows, crisp icons, strong empty states, and fast interaction affordances.',
-  },
-  {
-    id: 'webflow-creator',
-    label: 'Webflow Creator',
-    category: 'Design Tools',
-    colors: ['#0b0d18', '#111827', '#f8fafc', '#94a3b8', '#4353ff'],
-    displayFont: 'Inter, system-ui, sans-serif',
-    bodyFont: 'Inter, system-ui, sans-serif',
-    summary: 'Creator-platform polish with canvas, component panels, site previews, and blue energy.',
-    prompt: 'Use creator-tool patterns: canvas previews, component controls, publishing states, responsive breakpoints, and practical visual polish.',
-  },
-  {
-    id: 'canva-playful',
-    label: 'Canva Playful',
-    category: 'Design Tools',
-    colors: ['#f8fbff', '#ffffff', '#1f2937', '#64748b', '#00c4cc'],
-    displayFont: 'Inter, system-ui, sans-serif',
-    bodyFont: 'Inter, system-ui, sans-serif',
-    summary: 'Accessible creative workspace with friendly color, template grids, and approachable controls.',
-    prompt: 'Use template-first creative UI, friendly controls, colorful accents, approachable language, and clear preview/edit affordances. Keep it structured, not childish.',
-  },
-  {
-    id: 'miro-workshop',
-    label: 'Miro Workshop',
-    category: 'Collaboration',
-    colors: ['#fff8d8', '#ffffff', '#1f2937', '#6b7280', '#ffd02f'],
-    displayFont: 'Inter, system-ui, sans-serif',
-    bodyFont: 'Inter, system-ui, sans-serif',
-    summary: 'Collaborative board energy with sticky-note semantics, workshop flows, and yellow accent.',
-    prompt: 'Use board/collaboration metaphors, sticky notes, voting, cursors, facilitation controls, and optimistic yellow accents with disciplined layout.',
-  },
-  {
-    id: 'framer-motion',
-    label: 'Framer Motion',
-    category: 'Design Tools',
-    colors: ['#050506', '#111116', '#f6f7fb', '#9ca3af', '#0099ff'],
-    displayFont: 'Inter, system-ui, sans-serif',
-    bodyFont: 'Inter, system-ui, sans-serif',
-    summary: 'High-motion creator site aesthetic with crisp dark canvas and blue interaction cues.',
-    prompt: 'Use motion-aware composition, timeline/state metaphors, sharp product previews, and precise interaction copy. Avoid animated clutter.',
-  },
-  {
-    id: 'spotify-audio',
-    label: 'Spotify Audio',
-    category: 'Media',
-    colors: ['#0b0b0b', '#181818', '#ffffff', '#b3b3b3', '#1db954'],
-    displayFont: 'Circular, Inter, system-ui, sans-serif',
-    bodyFont: 'Circular, Inter, system-ui, sans-serif',
-    summary: 'Audio-first dark interface with strong playlists, media rows, and green playback signal.',
-    prompt: 'Use audio/media hierarchy, album grids, playback controls, queue states, dark surfaces, and green only for active listening or primary action.',
-  },
-  {
-    id: 'pinterest-discovery',
-    label: 'Pinterest Discovery',
-    category: 'Social & Media',
-    colors: ['#ffffff', '#f7f7f7', '#111111', '#767676', '#e60023'],
-    displayFont: 'Inter, system-ui, sans-serif',
-    bodyFont: 'Inter, system-ui, sans-serif',
-    summary: 'Visual discovery grids with masonry rhythm, save flows, and decisive red actions.',
-    prompt: 'Use masonry/image discovery, intent chips, save/share states, visual-first cards, and concise overlays. Avoid generic symmetrical card grids.',
-  },
-  {
-    id: 'nike-performance',
-    label: 'Nike Performance',
-    category: 'Consumer',
-    colors: ['#f5f5f5', '#ffffff', '#111111', '#666666', '#fa5400'],
-    displayFont: 'Helvetica Neue, Arial Black, system-ui, sans-serif',
-    bodyFont: 'Helvetica Neue, Inter, system-ui, sans-serif',
-    summary: 'Performance retail with bold type, product motion, and high-contrast orange energy.',
-    prompt: 'Use athlete/product-first imagery, bold type, confident contrast, product specs, drops, and motion cues. Keep CTAs hard-working and direct.',
-  },
-  {
-    id: 'tesla-product',
-    label: 'Tesla Product',
-    category: 'Automotive',
-    colors: ['#f4f4f4', '#ffffff', '#171a20', '#5c5e62', '#e82127'],
-    displayFont: 'Inter, system-ui, sans-serif',
-    bodyFont: 'Inter, system-ui, sans-serif',
-    summary: 'Minimal automotive product storytelling with clean specs and direct purchase flows.',
-    prompt: 'Use product-first composition, specs, configurator states, clean photo zones, and restrained red for action/status. Avoid decorative car cliches.',
-  },
-  {
-    id: 'bmw-premium',
-    label: 'BMW Premium',
-    category: 'Automotive',
-    colors: ['#f6f7f8', '#ffffff', '#101820', '#6b7280', '#1c69d4'],
-    displayFont: 'Inter, system-ui, sans-serif',
-    bodyFont: 'Inter, system-ui, sans-serif',
-    summary: 'Premium mobility UI with precision grids, cool neutrals, and confident blue.',
-    prompt: 'Use premium automotive restraint, clear configurator/state flows, technical specs, immersive media, and precise blue accents.',
-  },
-  {
-    id: 'nvidia-ai',
-    label: 'NVIDIA AI',
-    category: 'Enterprise AI',
-    colors: ['#0b0f0a', '#111a10', '#f7fee7', '#9ca3af', '#76b900'],
-    displayFont: 'Inter, system-ui, sans-serif',
-    bodyFont: 'Inter, system-ui, sans-serif',
-    summary: 'AI infrastructure design with black-green contrast, technical diagrams, and enterprise trust.',
-    prompt: 'Use technical diagrams, GPU/infrastructure metaphors, enterprise proof, dark surfaces, and green as a performance signal.',
-  },
-  {
-    id: 'ibm-carbon',
-    label: 'IBM Carbon',
-    category: 'Enterprise',
-    colors: ['#f4f4f4', '#ffffff', '#161616', '#6f6f6f', '#0f62fe'],
-    displayFont: 'IBM Plex Sans, Inter, system-ui, sans-serif',
-    bodyFont: 'IBM Plex Sans, Inter, system-ui, sans-serif',
-    summary: 'Enterprise grid discipline with Carbon-like spacing, data density, and blue action states.',
-    prompt: 'Use enterprise information architecture, strong grid, data tables, precise forms, accessibility-first states, and IBM Plex-style type rhythm.',
-  },
-  {
-    id: 'material-google',
-    label: 'Google Material',
-    category: 'Platform',
-    colors: ['#f8fafd', '#ffffff', '#1f1f1f', '#5f6368', '#1a73e8'],
-    displayFont: 'Google Sans, Roboto, system-ui, sans-serif',
-    bodyFont: 'Roboto, Inter, system-ui, sans-serif',
-    summary: 'Material-style product UI with clear elevation, system components, and blue primary actions.',
-    prompt: 'Use Material interaction states, clear elevation hierarchy, accessible forms, navigation rails, and practical Google-style system behavior.',
-  },
-  {
-    id: 'microsoft-fluent',
-    label: 'Microsoft Fluent',
-    category: 'Platform',
-    colors: ['#f5f5f5', '#ffffff', '#1b1a19', '#605e5c', '#0078d4'],
-    displayFont: 'Segoe UI, Inter, system-ui, sans-serif',
-    bodyFont: 'Segoe UI, Inter, system-ui, sans-serif',
-    summary: 'Fluent productivity UI with panes, ribbons, command bars, and enterprise blue.',
-    prompt: 'Use productivity panes, command bars, contextual menus, dense tables, accessible focus states, and Fluent-style spacing.',
-  },
-  {
-    id: 'atlassian-team',
-    label: 'Atlassian Team',
-    category: 'Collaboration',
-    colors: ['#f7f8f9', '#ffffff', '#172b4d', '#626f86', '#0c66e4'],
-    displayFont: 'Inter, system-ui, sans-serif',
-    bodyFont: 'Inter, system-ui, sans-serif',
-    summary: 'Team software UI with work items, boards, status colors, and practical hierarchy.',
-    prompt: 'Use work-management flows, boards, issue states, breadcrumbs, compact lists, and sensible team collaboration affordances.',
-  },
-  {
-    id: 'mailchimp-friendly',
-    label: 'Mailchimp Friendly',
-    category: 'Marketing',
-    colors: ['#ffe01b', '#fff8dc', '#241c15', '#6b5d4d', '#007c89'],
-    displayFont: 'Cooper Black, Georgia, serif',
-    bodyFont: 'Inter, system-ui, sans-serif',
-    summary: 'Friendly marketing tooling with yellow identity, playful serif type, and practical campaign UI.',
-    prompt: 'Use campaign-builder patterns, friendly copy, warm yellow accents, helpful empty states, and tasteful illustration only when it supports workflow.',
-  },
-  {
-    id: 'dropbox-work',
-    label: 'Dropbox Work',
-    category: 'Productivity',
-    colors: ['#f7f5f2', '#ffffff', '#1e1919', '#736c64', '#0061ff'],
-    displayFont: 'Sharp Grotesk, Inter, system-ui, sans-serif',
-    bodyFont: 'Atlas Grotesk, Inter, system-ui, sans-serif',
-    summary: 'File/workspace system with crisp blue actions, organized content, and collaboration details.',
-    prompt: 'Use file/workspace metaphors, sharing permissions, previews, folders, collaboration status, and crisp blue primary actions.',
-  },
-  {
-    id: 'wise-fintech',
-    label: 'Wise Fintech',
-    category: 'Fintech',
-    colors: ['#f5f6ef', '#ffffff', '#163300', '#51624a', '#9fe870'],
-    displayFont: 'Inter, system-ui, sans-serif',
-    bodyFont: 'Inter, system-ui, sans-serif',
-    summary: 'Money-transfer clarity with lime action, transparent comparisons, and trust-first copy.',
-    prompt: 'Use transparent pricing/comparison modules, calculator controls, trust cues, lime as primary action, and no vague financial claims.',
-  },
-  {
-    id: 'revolut-finance',
-    label: 'Revolut Finance',
-    category: 'Fintech',
-    colors: ['#f7f7fb', '#ffffff', '#101828', '#667085', '#191cff'],
-    displayFont: 'Inter, system-ui, sans-serif',
-    bodyFont: 'Inter, system-ui, sans-serif',
-    summary: 'Consumer finance app polish with cards, balances, security, and confident blue.',
-    prompt: 'Use banking/card flows, balance states, transaction lists, security cues, and confident app-first product presentation.',
-  },
-  {
-    id: 'coinbase-crypto',
-    label: 'Coinbase Crypto',
-    category: 'Fintech',
-    colors: ['#f7f8fa', '#ffffff', '#0a0b0d', '#5b616e', '#0052ff'],
-    displayFont: 'Inter, system-ui, sans-serif',
-    bodyFont: 'Inter, system-ui, sans-serif',
-    summary: 'Crypto-finance clarity with asset tables, portfolio states, and strict blue trust.',
-    prompt: 'Use asset tables, portfolio cards, price deltas, verification states, compliance copy, and restrained blue action patterns.',
-  },
-  {
-    id: 'duolingo-playful',
-    label: 'Duolingo Playful',
-    category: 'Education',
-    colors: ['#f7fff0', '#ffffff', '#1f2937', '#6b7280', '#58cc02'],
-    displayFont: 'Inter, system-ui, sans-serif',
-    bodyFont: 'Inter, system-ui, sans-serif',
-    summary: 'Learning app energy with progress loops, achievements, and friendly green feedback.',
-    prompt: 'Use lesson/progress loops, streaks, levels, friendly microcopy, and green success states. Keep the interface usable for real learning.',
-  },
-  {
-    id: 'theverge-editorial',
-    label: 'The Verge Editorial',
-    category: 'Editorial',
-    colors: ['#0b0b0f', '#17171f', '#ffffff', '#a1a1aa', '#e2127a'],
-    displayFont: 'Georgia, Times New Roman, serif',
-    bodyFont: 'Inter, system-ui, sans-serif',
-    summary: 'Tech publication energy with bold editorial rhythm, dark contrast, and hot magenta.',
-    prompt: 'Use editorial tech-magazine hierarchy, strong headlines, issue/date metadata, media modules, and hot accent sparingly.',
-  },
-  {
-    id: 'wired-magazine',
-    label: 'WIRED Magazine',
-    category: 'Editorial',
-    colors: ['#f5f2ec', '#ffffff', '#111111', '#555555', '#e31b23'],
-    displayFont: 'Helvetica Neue, Arial Black, system-ui, sans-serif',
-    bodyFont: 'Georgia, Times New Roman, serif',
-    summary: 'High-contrast magazine system with bold covers, red rules, and analytical storytelling.',
-    prompt: 'Use magazine cover/spread discipline, bold headline locks, captions, red rules, and strong article packaging.',
-  },
-  {
-    id: 'runwayml-cinematic',
-    label: 'Runway Cinematic',
-    category: 'Media AI',
-    colors: ['#050505', '#111111', '#f5f5f5', '#8a8a8a', '#d7ff5f'],
-    displayFont: 'Inter, system-ui, sans-serif',
-    bodyFont: 'Inter, system-ui, sans-serif',
-    summary: 'Cinematic AI creation UI with black canvas, timeline controls, and acid highlight.',
-    prompt: 'Use cinematic media creation patterns, timelines, prompt controls, gallery previews, render states, and neon-lime accents with restraint.',
-  },
-  {
-    id: 'huggingface-community',
-    label: 'Hugging Face Community',
-    category: 'AI & LLM',
-    colors: ['#fff8e7', '#ffffff', '#1f2937', '#6b7280', '#ffcc4d'],
-    displayFont: 'Inter, system-ui, sans-serif',
-    bodyFont: 'Inter, system-ui, sans-serif',
-    summary: 'Open AI community UI with model cards, datasets, approachable yellow, and technical metadata.',
-    prompt: 'Use model/dataset cards, community metadata, benchmarks, tabs, tags, and approachable yellow accents without turning technical content into cartoons.',
-  },
-  {
-    id: 'posthog-analytics',
-    label: 'PostHog Analytics',
-    category: 'Analytics',
-    colors: ['#fff7ed', '#ffffff', '#1c1917', '#78716c', '#f97316'],
-    displayFont: 'Inter, system-ui, sans-serif',
-    bodyFont: 'Inter, system-ui, sans-serif',
-    summary: 'Product analytics with event pipelines, charts, feature flags, and orange builder energy.',
-    prompt: 'Use analytics dashboards, event streams, funnels, flags, compact charts, and orange as a product-builder signal.',
-  },
-  {
-    id: 'sentry-ops',
-    label: 'Sentry Ops',
-    category: 'Developer Tools',
-    colors: ['#120f1f', '#1d1830', '#f8fafc', '#a8a3b8', '#6f42c1'],
-    displayFont: 'Inter, system-ui, sans-serif',
-    bodyFont: 'Inter, system-ui, sans-serif',
-    summary: 'Observability UI with issues, traces, releases, severity, and pragmatic dark panels.',
-    prompt: 'Use observability patterns, error grouping, traces, releases, severity badges, and operational workflows with clear escalation paths.',
-  },
-  {
-    id: 'mintlify-docs',
-    label: 'Mintlify Docs',
-    category: 'Developer Docs',
-    colors: ['#f8fafc', '#ffffff', '#0f172a', '#64748b', '#16a34a'],
-    displayFont: 'Inter, system-ui, sans-serif',
-    bodyFont: 'Inter, system-ui, sans-serif',
-    summary: 'Modern developer docs with sidebar IA, code tabs, API examples, and green freshness.',
-    prompt: 'Use docs-native layout, search, sidebar navigation, code tabs, API examples, callouts, and responsive reading surfaces.',
-  },
-  {
-    id: 'resend-email',
-    label: 'Resend Email',
-    category: 'Developer Tools',
-    colors: ['#fafafa', '#ffffff', '#111111', '#737373', '#000000'],
-    displayFont: 'Geist, Inter, system-ui, sans-serif',
-    bodyFont: 'Geist, Inter, system-ui, sans-serif',
-    summary: 'Email infrastructure minimalism with black-white precision, logs, and deliverability states.',
-    prompt: 'Use email developer patterns, logs, DNS records, API snippets, delivery states, and black-white minimal precision.',
-  },
-  {
-    id: 'shadcn-system',
-    label: 'shadcn System',
-    category: 'Component Systems',
-    colors: ['#fafafa', '#ffffff', '#09090b', '#71717a', '#18181b'],
-    displayFont: 'Inter, system-ui, sans-serif',
-    bodyFont: 'Inter, system-ui, sans-serif',
-    summary: 'Composable component library style with neutral tokens, slots, variants, and exact states.',
-    prompt: 'Use component-system thinking, variants, tokens, neutral surfaces, crisp controls, accessible focus rings, and copy that feels implementation-ready.',
-  },
-  {
-    id: 'xiaohongshu-social',
-    label: 'Xiaohongshu Social',
-    category: 'Social & Commerce',
-    colors: ['#ffffff', '#f5f5f5', '#303034', '#8a8a8f', '#ff2442'],
-    displayFont: 'PingFang SC, Inter, system-ui, sans-serif',
-    bodyFont: 'PingFang SC, Inter, system-ui, sans-serif',
-    summary: 'Lifestyle social commerce with white canvas, red engagement states, and image-led feeds.',
-    prompt: 'Use image-led social commerce, tabs, engagement states, creator metadata, clean white surfaces, and red only for active/action states.',
-  },
+interface UserDesignPreset extends DesignSystemPreset {
+  isUserDefined: true
+  createdAt: number
+}
+
+const DESIGN_SYSTEM_PRESETS = BUNDLED_DESIGN_SYSTEM_PRESETS as DesignSystemPreset[]
+
+const USER_DS_KEY = 'kodo.user.design.systems.v1'
+
+function readUserDesignSystems(): UserDesignPreset[] {
+  try {
+    if (typeof localStorage === 'undefined') return []
+    const parsed = JSON.parse(localStorage.getItem(USER_DS_KEY) || '[]')
+    return Array.isArray(parsed) ? parsed.filter((item) => item && typeof item.id === 'string') : []
+  } catch {
+    return []
+  }
+}
+
+function allDesignSystemPresets(userSystems?: UserDesignPreset[]): DesignSystemPreset[] {
+  return [...(userSystems ?? readUserDesignSystems()), ...DESIGN_SYSTEM_PRESETS]
+}
+
+function useUserDesignSystems() {
+  const [systems, setSystems] = useState<UserDesignPreset[]>(readUserDesignSystems)
+  const save = (preset: UserDesignPreset) => setSystems(prev => {
+    const next = [preset, ...prev.filter(p => p.id !== preset.id)]
+    localStorage.setItem(USER_DS_KEY, JSON.stringify(next))
+    return next
+  })
+  const remove = (id: string) => setSystems(prev => {
+    const next = prev.filter(p => p.id !== id)
+    localStorage.setItem(USER_DS_KEY, JSON.stringify(next))
+    return next
+  })
+  return { systems, save, remove }
+}
+
+const PRESET_LOGOS: Record<string, string> = {
+  'claude-warm': 'https://github.com/anthropics.png?size=40',
+  'openai-research': 'https://github.com/openai.png?size=40',
+  'anthropic-editorial': 'https://github.com/anthropics.png?size=40',
+  'huggingface-community': 'https://github.com/huggingface.png?size=40',
+  'mistral-ai': 'https://github.com/mistralai.png?size=40',
+  'elevenlabs-audio': 'https://github.com/elevenlabs.png?size=40',
+  'ollama-local': 'https://github.com/ollama.png?size=40',
+  'together-ai': 'https://github.com/togethercomputer.png?size=40',
+  'opencode-ai': 'https://github.com/opencode-ai.png?size=40',
+  'minimax-ai': 'https://github.com/MiniMax-AI.png?size=40',
+  'voltagent': 'https://github.com/VoltAgent.png?size=40',
+  'cohere-enterprise': 'https://github.com/cohere-ai.png?size=40',
+  'xai-mono': 'https://github.com/xai-org.png?size=40',
+  'deepseek-tech': 'https://github.com/deepseek-ai.png?size=40',
+  'linear-minimal': 'https://github.com/linear.png?size=40',
+  'vercel-mono': 'https://github.com/vercel.png?size=40',
+  'cursor-agentic': 'https://www.google.com/s2/favicons?domain=cursor.sh&sz=64',
+  'supabase-dev': 'https://github.com/supabase.png?size=40',
+  'github-utility': 'https://github.com/github.png?size=40',
+  'raycast-command': 'https://github.com/raycast.png?size=40',
+  'warp-terminal': 'https://github.com/warpdotdev.png?size=40',
+  'expo-platform': 'https://github.com/expo.png?size=40',
+  'hashicorp-infra': 'https://github.com/hashicorp.png?size=40',
+  'sentry-ops': 'https://github.com/getsentry.png?size=40',
+  'mintlify-docs': 'https://github.com/mintlify.png?size=40',
+  'resend-email': 'https://github.com/resend.png?size=40',
+  'replicate-ml': 'https://github.com/replicate.png?size=40',
+  'composio-dev': 'https://github.com/ComposioHQ.png?size=40',
+  'posthog-analytics': 'https://github.com/PostHog.png?size=40',
+  'arc-browser': 'https://www.google.com/s2/favicons?domain=arc.net&sz=64',
+  'stripe-gradient': 'https://github.com/stripe.png?size=40',
+  'coinbase-crypto': 'https://github.com/coinbase.png?size=40',
+  'revolut-finance': 'https://www.google.com/s2/favicons?domain=revolut.com&sz=64',
+  'wise-fintech': 'https://www.google.com/s2/favicons?domain=wise.com&sz=64',
+  'binance-crypto': 'https://www.google.com/s2/favicons?domain=binance.com&sz=64',
+  'mastercard-brand': 'https://github.com/mastercard.png?size=40',
+  'kraken-exchange': 'https://www.google.com/s2/favicons?domain=kraken.com&sz=64',
+  'apple-glass': 'https://github.com/apple.png?size=40',
+  'airbnb-warm': 'https://github.com/airbnb.png?size=40',
+  'spotify-audio': 'https://github.com/spotify.png?size=40',
+  'nike-performance': 'https://www.google.com/s2/favicons?domain=nike.com&sz=64',
+  'starbucks-brand': 'https://github.com/starbucks.png?size=40',
+  'meta-store': 'https://github.com/facebook.png?size=40',
+  'tesla-product': 'https://www.google.com/s2/favicons?domain=tesla.com&sz=64',
+  'ferrari-red': 'https://www.google.com/s2/favicons?domain=ferrari.com&sz=64',
+  'lamborghini-hex': 'https://www.google.com/s2/favicons?domain=lamborghini.com&sz=64',
+  'bugatti-mono': 'https://www.google.com/s2/favicons?domain=bugatti.com&sz=64',
+  'porsche-precision': 'https://www.google.com/s2/favicons?domain=porsche.com&sz=64',
+  'mercedes-luxury': 'https://www.google.com/s2/favicons?domain=mercedes-benz.com&sz=64',
+  'renault-aurora': 'https://github.com/renault.png?size=40',
+  'spacex-stark': 'https://www.google.com/s2/favicons?domain=spacex.com&sz=64',
+  'figma-creative': 'https://github.com/figma.png?size=40',
+  'framer-motion': 'https://github.com/framer.png?size=40',
+  'webflow-creator': 'https://github.com/webflow.png?size=40',
+  'canva-playful': 'https://github.com/Canva.png?size=40',
+  'miro-workshop': 'https://github.com/miroapp.png?size=40',
+  'airtable-db': 'https://github.com/Airtable.png?size=40',
+  'clay-agency': 'https://github.com/clay-run.png?size=40',
+  'shadcn-system': 'https://github.com/shadcn-ui.png?size=40',
+  'theverge-editorial': 'https://www.google.com/s2/favicons?domain=theverge.com&sz=64',
+  'wired-magazine': 'https://www.google.com/s2/favicons?domain=wired.com&sz=64',
+  'ibm-carbon': 'https://github.com/ibm.png?size=40',
+  'intercom-friendly': 'https://github.com/intercom.png?size=40',
+  'atlassian-team': 'https://github.com/atlassian.png?size=40',
+  'material-google': 'https://github.com/google.png?size=40',
+  'microsoft-fluent': 'https://github.com/microsoft.png?size=40',
+  'salesforce-crm': 'https://github.com/salesforce.png?size=40',
+  'superhuman-email': 'https://www.google.com/s2/favicons?domain=superhuman.com&sz=64',
+  'hubspot-marketing': 'https://github.com/HubSpot.png?size=40',
+  'pagerduty-incident': 'https://github.com/PagerDuty.png?size=40',
+  'nvidia-ai': 'https://github.com/NVIDIA.png?size=40',
+  'playstation-dark': 'https://www.google.com/s2/favicons?domain=playstation.com&sz=64',
+  'mongodb-db': 'https://github.com/mongodb.png?size=40',
+  'sanity-cms': 'https://github.com/sanity-io.png?size=40',
+  'lovable-builder': 'https://github.com/lovablelabs.png?size=40',
+  'clickhouse-db': 'https://github.com/ClickHouse.png?size=40',
+  'datadog-ops': 'https://github.com/DataDog.png?size=40',
+  'vodafone-brand': 'https://github.com/vodafone.png?size=40',
+  'netflix-streaming': 'https://github.com/Netflix.png?size=40',
+  'discord-community': 'https://github.com/discord.png?size=40',
+  'notion-editorial': 'https://github.com/makenotion.png?size=40',
+  'dropbox-work': 'https://github.com/dropbox.png?size=40',
+  'cal-scheduling': 'https://github.com/calcom.png?size=40',
+  'loom-video': 'https://github.com/loomhq.png?size=40',
+  'zapier-orange': 'https://github.com/zapier.png?size=40',
+  'mailchimp-friendly': 'https://github.com/mailchimp.png?size=40',
+  'amazon-commerce': 'https://github.com/amzn.png?size=40',
+  'runwayml-cinematic': 'https://github.com/runwayml.png?size=40',
+  'pinterest': 'https://github.com/pinterest.png?size=40',
+  'shopify': 'https://www.google.com/s2/favicons?domain=shopify.com&sz=64',
+  'apple': 'https://github.com/apple.png?size=40',
+  'airbnb': 'https://github.com/airbnb.png?size=40',
+  'bugatti': 'https://www.google.com/s2/favicons?domain=bugatti.com&sz=64',
+  'ferrari': 'https://www.google.com/s2/favicons?domain=ferrari.com&sz=64',
+  'lamborghini': 'https://www.google.com/s2/favicons?domain=lamborghini.com&sz=64',
+  'renault': 'https://www.google.com/s2/favicons?domain=renault.com&sz=64',
+  'spacex': 'https://www.google.com/s2/favicons?domain=spacex.com&sz=64',
+  'tesla': 'https://www.google.com/s2/favicons?domain=tesla.com&sz=64',
+  'nike': 'https://www.google.com/s2/favicons?domain=nike.com&sz=64',
+  'starbucks': 'https://github.com/starbucks.png?size=40',
+  'xiaohongshu-social': 'https://www.google.com/s2/favicons?domain=xiaohongshu.com&sz=64',
+  'notion': 'https://github.com/makenotion.png?size=40',
+  'airtable': 'https://github.com/Airtable.png?size=40',
+  'cal': 'https://github.com/calcom.png?size=40',
+  'clay': 'https://www.google.com/s2/favicons?domain=clay.com&sz=64',
+  'figma': 'https://github.com/figma.png?size=40',
+  'framer': 'https://github.com/framer.png?size=40',
+  'lovable': 'https://github.com/lovablelabs.png?size=40',
+  'miro': 'https://github.com/miroapp.png?size=40',
+  'sanity': 'https://github.com/sanity-io.png?size=40',
+  'webflow': 'https://github.com/webflow.png?size=40',
+  'zapier': 'https://github.com/zapier.png?size=40',
+  'cursor': 'https://www.google.com/s2/favicons?domain=cursor.sh&sz=64',
+  'raycast': 'https://github.com/raycast.png?size=40',
+  'resend': 'https://github.com/resend.png?size=40',
+  'clickhouse': 'https://github.com/ClickHouse.png?size=40',
+  'ibm': 'https://github.com/ibm.png?size=40',
+  'intercom': 'https://github.com/intercom.png?size=40',
+  'mongodb': 'https://github.com/mongodb.png?size=40',
+  'superhuman': 'https://www.google.com/s2/favicons?domain=superhuman.com&sz=64',
+  'vodafone': 'https://github.com/vodafone.png?size=40',
+  'binance': 'https://www.google.com/s2/favicons?domain=binance.com&sz=64',
+  'coinbase': 'https://github.com/coinbase.png?size=40',
+  'kraken': 'https://www.google.com/s2/favicons?domain=kraken.com&sz=64',
+  'mastercard': 'https://github.com/mastercard.png?size=40',
+  'revolut': 'https://www.google.com/s2/favicons?domain=revolut.com&sz=64',
+  'wise': 'https://www.google.com/s2/favicons?domain=wise.com&sz=64',
+  'nvidia': 'https://github.com/NVIDIA.png?size=40',
+  'playstation': 'https://www.google.com/s2/favicons?domain=playstation.com&sz=64',
+  'theverge': 'https://www.google.com/s2/favicons?domain=theverge.com&sz=64',
+  'wired': 'https://www.google.com/s2/favicons?domain=wired.com&sz=64',
+  'substack-newsletter': 'https://www.google.com/s2/favicons?domain=substack.com&sz=64',
+}
+
+// â”€â”€â”€ Prompt Gallery â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+
+type PromptTemplate = {
+  id: string
+  title: string
+  description: string
+  category: 'image' | 'video' | 'motion' | 'web' | 'deck' | 'social'
+  prompt: string
+  tags: string[]
+}
+
+const PROMPT_GALLERY: PromptTemplate[] = [
+  // Image templates
+  { id: 'img-01', title: 'Swiss Style Poster', description: 'Bold typographic poster with Swiss International grid', category: 'image', tags: ['poster', 'typography', 'print'],
+    prompt: 'Swiss International style poster, bold Helvetica Neue typography, strict grid alignment, primary red and black on white, geometric precision, 1960s Zurich aesthetic, ultra-high resolution, print-ready' },
+  { id: 'img-02', title: 'Product Key Art', description: 'Clean product hero image on minimal background', category: 'image', tags: ['product', 'marketing'],
+    prompt: 'Premium product photograph, centered composition on pure white background, three-point studio lighting from upper left, sharp product focus, soft shadow below, commercial photography aesthetic, ultra high resolution' },
+  { id: 'img-03', title: 'Dark Tech Poster', description: 'Dark cyberpunk-inspired developer conference poster', category: 'image', tags: ['tech', 'poster', 'dark'],
+    prompt: 'Dark tech conference poster, deep navy background, circuit board geometric lines as subtle texture, bold sans-serif headline in electric blue, minimalist futuristic aesthetic, Dribbble-worthy digital art' },
+  { id: 'img-04', title: 'Editorial Portrait', description: 'Magazine-style editorial portrait composition', category: 'image', tags: ['portrait', 'editorial', 'magazine'],
+    prompt: 'Editorial magazine portrait, warm directional lighting, subject at 2/3 turn, shallow depth of field, Leica M aesthetic, natural film grain, fashion-magazine color grading, confident composed expression' },
+  { id: 'img-05', title: 'Minimal App Icon', description: 'Clean iOS-style app icon with simple geometric mark', category: 'image', tags: ['icon', 'app', 'mobile'],
+    prompt: 'iOS app icon, rounded square 1024x1024, centered geometric minimal symbol, gradient from deep blue to purple, glossy surface treatment, subtle inner shadow, Apple Human Interface Guidelines compliant style' },
+  { id: 'img-06', title: 'Data Visualization Art', description: 'Beautiful abstract data art from flow patterns', category: 'image', tags: ['data', 'abstract', 'art'],
+    prompt: 'Abstract data visualization art, fluid flow field lines, overlapping translucent curves, deep black background, electric cyan and magenta palette, resembles particle physics simulation, gallery-quality digital artwork' },
+  { id: 'img-07', title: 'Brand Mark Exploration', description: 'Geometric abstract logo concept on gradient', category: 'image', tags: ['logo', 'branding'],
+    prompt: 'Abstract logo mark exploration, bold geometric shapes, interlocking forms, single color on white, professional brand identity concept, vector-clean edges, timeless mark design' },
+  { id: 'img-08', title: 'Social Media Avatar', description: 'Professional headshot-style avatar for social profiles', category: 'image', tags: ['avatar', 'social', 'portrait'],
+    prompt: 'Professional LinkedIn-style profile photo, soft natural window light, neutral gray studio background, subject in business casual attire, genuine smile, sharp focus on eyes, bokeh background blur' },
+  { id: 'img-09', title: 'Infographic Header', description: 'Bold visual header for a data-driven infographic', category: 'image', tags: ['infographic', 'header'],
+    prompt: 'Bold editorial infographic header illustration, isometric city buildings, data charts integrated into architecture, vibrant blue and teal palette on dark navy, flat illustration style, editorial quality' },
+  { id: 'img-10', title: 'Event Banner', description: 'Conference or event promotional banner', category: 'image', tags: ['event', 'banner', 'marketing'],
+    prompt: 'Professional conference banner, 1920x1080, bold headline text zone top-left, speaker/stage photography zone right, brand color gradient overlay, clean sans-serif typography, corporate but dynamic energy' },
+  { id: 'img-11', title: 'Luxury Product Photo', description: 'High-end luxury product photography style', category: 'image', tags: ['luxury', 'product', 'premium'],
+    prompt: 'Luxury product photography, dark velvet or marble surface, single product centered, dramatic Rembrandt lighting, deep shadows, one specular highlight, editorial luxury magazine aesthetic, HermÃ¨s or Bottega quality' },
+  { id: 'img-12', title: 'Startup Feature Illustration', description: 'Friendly tech illustration for product marketing', category: 'image', tags: ['illustration', 'startup', 'feature'],
+    prompt: 'Product feature illustration, clean flat design, isometric perspective, three human figures collaborating around floating UI elements, bright accent colors on white, Notion or Linear website illustration style' },
+  // Video / Seedance templates
+  { id: 'vid-01', title: 'Product Launch Reveal', description: '15-second cinematic product reveal sequence', category: 'video', tags: ['product', 'reveal', 'launch'],
+    prompt: 'Cinematic 15-second product reveal, black void background, product emerges from darkness with dramatic lighting, slow 360Â° rotation, fog particle effects, building orchestral score vibe, Apple-product-launch quality' },
+  { id: 'vid-02', title: 'Brand Story Short', description: 'Emotional brand narrative in 15 seconds', category: 'video', tags: ['brand', 'story', 'emotional'],
+    prompt: '15-second brand story, golden hour exterior shots, real people in natural settings, product integrated naturally into daily life, warm cinematic color grade, gentle music implied, honest and human' },
+  { id: 'vid-03', title: 'Tech Demo Reel', description: 'Fast-cut technical product demonstration', category: 'video', tags: ['tech', 'demo', 'SaaS'],
+    prompt: '15-second rapid-cut tech product demo, screen recordings of UI animated, split-screen comparisons, smooth transitions, clean corporate energy, blue and white palette, startup pitch video aesthetic' },
+  { id: 'vid-04', title: 'Social Media Teaser', description: 'Punchy social-first teaser for new announcement', category: 'video', tags: ['social', 'teaser', 'announcement'],
+    prompt: '15-second social teaser video, square format, punchy text reveals on black, rhythmic cut to music beat implied, neon accent colors, ending on product logo lock-up with call to action' },
+  { id: 'vid-05', title: 'Conference Opener', description: 'High-energy conference opening title sequence', category: 'video', tags: ['conference', 'opener', 'event'],
+    prompt: '15-second conference opening sequence, light particles converging into event logo, dramatic orchestral build, 3D volumetric light rays, dark environment, cinematic wide aspect ratio, event branding colors' },
+  // Motion / HyperFrames templates
+  { id: 'mot-01', title: 'Kinetic Logo Reveal', description: 'Animated logo reveal with kinetic typography', category: 'motion', tags: ['logo', 'reveal', 'kinetic'],
+    prompt: 'Kinetic logo reveal animation, letters fly in from off-screen with spring easing, stagger 0.1s per character, settle into final centered position, accent underline draws in after, total duration 1.8s, clean dark background' },
+  { id: 'mot-02', title: 'Data Dashboard Intro', description: 'Animated dashboard with numbers counting up', category: 'motion', tags: ['dashboard', 'data', 'numbers'],
+    prompt: 'Dashboard number reveal animation, four KPI cards staggered in from bottom, numbers count up from zero with easing, sparklines draw in after, color transitions from neutral to accent on completion, 2.5s total' },
+  { id: 'mot-03', title: 'Feature Spotlight', description: 'Product feature highlight with floating UI elements', category: 'motion', tags: ['feature', 'product', 'UI'],
+    prompt: 'Product feature spotlight loop, central interface mockup, three feature labels orbit with gentle float, connecting lines draw in sequence, subtle glow pulse on active element, seamless 4s loop, dark premium background' },
+  { id: 'mot-04', title: 'Social Story Template', description: 'Animated Instagram story with text reveals', category: 'motion', tags: ['social', 'story', 'instagram'],
+    prompt: 'Instagram story animation, 1080x1920, bold headline slides in from left, supporting text fades in below, brand chip appears top-left, background is dark gradient with subtle noise, total 3s for screenshot capture' },
+  { id: 'mot-05', title: 'Conference Countdown', description: 'Dramatic countdown timer with particle effects', category: 'motion', tags: ['countdown', 'event', 'conference'],
+    prompt: 'Conference countdown display, large countdown numbers with flip-clock animation, particle burst on each second transition, event name above in bold caps, logo below, dark atmospheric background, total 5s loop' },
+  { id: 'mot-06', title: 'Orbital Brand Loop', description: 'Rotating orbital rings brand identity animation', category: 'motion', tags: ['brand', 'orbit', 'loop'],
+    prompt: 'Brand orbital loop, three concentric SVG rings rotating at different speeds (20s/12s/7s), central monogram mark, ring text labels, display serif headline below, dark full-bleed stage, infinite seamless CSS animation' },
+  { id: 'mot-07', title: 'Slide Transition Pack', description: 'Smooth presentation slide reveal transitions', category: 'motion', tags: ['presentation', 'transition', 'slides'],
+    prompt: 'Presentation slide transition animation, content slides in from right on each advance, headline enters with scale-up ease, supporting content fades in staggered, GSAP timeline-based, clean corporate aesthetic' },
+  // Web design templates
+  { id: 'web-01', title: 'SaaS Hero Section', description: 'High-converting above-fold hero for a SaaS product', category: 'web', tags: ['saas', 'hero', 'landing'],
+    prompt: 'Build a SaaS product hero section: headline that states the core outcome, two-line subhead expanding on it, primary and secondary CTA buttons, product screenshot or demo mockup below, trust strip with logos beneath. No purple gradients.' },
+  { id: 'web-02', title: 'Developer Tool Landing', description: 'Dark developer-focused product landing page', category: 'web', tags: ['developer', 'dark', 'landing'],
+    prompt: 'Dark developer tool landing page using Linear or Vercel design system. Monochrome palette, hero with code snippet, 3-feature grid, pricing table, footer. Keyboard-first affordances visible. No stock photos.' },
+  { id: 'web-03', title: 'Agency Portfolio', description: 'Creative agency portfolio with case studies', category: 'web', tags: ['portfolio', 'agency', 'creative'],
+    prompt: 'Creative agency portfolio home. Bold typographic hero, case study grid (4 projects with thumbnails), services section (3 categories), team strip, contact CTA. Editorial Monocle direction. Serif headlines.' },
+  { id: 'web-04', title: 'E-Commerce Product Page', description: 'Product detail page with gallery and purchase flow', category: 'web', tags: ['ecommerce', 'product', 'purchase'],
+    prompt: 'E-commerce product detail page. Left: image gallery with thumbnail strip. Right: product name, price, variant selectors (color, size), Add to Cart CTA, shipping info, specs accordion, reviews section. Mobile-first layout.' },
+  { id: 'web-05', title: 'Pricing Page', description: 'Clean three-tier pricing with feature comparison', category: 'web', tags: ['pricing', 'SaaS', 'conversion'],
+    prompt: 'Three-tier pricing page (Starter/Pro/Enterprise), monthly/annual toggle, middle tier highlighted as Most Popular, feature comparison table below, FAQ accordion, enterprise contact strip at bottom. No fake pricing.' },
+  { id: 'web-06', title: 'Docs Site Home', description: 'Documentation hub with search and category grid', category: 'web', tags: ['docs', 'developer', 'documentation'],
+    prompt: 'Developer documentation home. Search bar hero, quick-start snippet, 6-category grid (Getting Started, API Reference, Guides, Examples, SDKs, Changelog), version selector in header. Mintlify quality.' },
+  { id: 'web-07', title: 'Blog Home', description: 'Editorial blog with featured article and post grid', category: 'web', tags: ['blog', 'editorial', 'reading'],
+    prompt: 'Editorial blog home with warm tone. Featured article hero (full-width, serif headline, author metadata). Below: 6-post grid with category tags, reading times. Subscription CTA at bottom. Magazine Bold direction.' },
+  { id: 'web-08', title: 'Startup Landing Page', description: 'Modern startup landing with all conversion sections', category: 'web', tags: ['startup', 'landing', 'conversion'],
+    prompt: 'Complete startup landing page. Hero -> social proof logos -> features 3-col -> how it works steps -> testimonials 2-col -> pricing 3 tiers -> final CTA -> footer. Modern Minimal direction. Real copy throughout.' },
+  // Deck templates
+  { id: 'deck-01', title: 'Startup Pitch Deck', description: '12-slide VC pitch deck with all standard sections', category: 'deck', tags: ['pitch', 'startup', 'fundraising'],
+    prompt: 'Build a 12-slide startup pitch deck HTML presentation: Cover, Problem, Solution, Market Size, Product Demo, Business Model, Traction, Team, Competition, Financials, Ask, Closing. Dark professional theme, keyboard navigation.' },
+  { id: 'deck-02', title: 'Tech Talk Slides', description: 'Conference presentation for a technical topic', category: 'deck', tags: ['conference', 'tech', 'talk'],
+    prompt: 'Technical conference talk deck, 15 slides. Cover -> agenda -> 10 content slides with code snippets, architecture diagrams, and comparison tables -> key takeaways -> Q&A. Dark theme, large code blocks, speaker notes.' },
+  { id: 'deck-03', title: 'Product Launch Deck', description: 'Internal product launch announcement presentation', category: 'deck', tags: ['product', 'launch', 'announcement'],
+    prompt: 'Product launch presentation deck, 10 slides. Cover -> what we built -> who it\'s for -> demo screenshots (3) -> key metrics targets -> rollout timeline -> pricing -> next steps. Clean brand theme.' },
+  { id: 'deck-04', title: 'Weekly Team Update', description: 'Team status update deck for async viewing', category: 'deck', tags: ['team', 'weekly', 'status'],
+    prompt: 'Weekly team update deck, 8 slides. Cover (week + team) -> wins this week (bullets) -> metrics dashboard -> blockers/risks -> shipping next week -> callouts/thanks -> announcements. Clean minimal theme, readable at speed.' },
+  // Social templates
+  { id: 'soc-01', title: 'Founder Insight Carousel', description: '3-card carousel sharing a business insight', category: 'social', tags: ['carousel', 'founder', 'insight'],
+    prompt: 'Three-card LinkedIn/Instagram carousel. Connected headline: "The biggest mistake -> founders make -> in year one." Dark full-bleed background, serif italic headline, brand chip top-left. Each card 1080x1080.' },
+  { id: 'soc-02', title: 'Product Stats Carousel', description: '3-card carousel showing product metrics and proof', category: 'social', tags: ['carousel', 'metrics', 'proof'],
+    prompt: 'Three-card social carousel showing product traction: card 1 has the headline metric, card 2 shows how it works, card 3 has the CTA. Dark background, large numbers, tight tracking.' },
+  { id: 'soc-03', title: 'Tutorial Step Carousel', description: '3-card tutorial showing a how-to process', category: 'social', tags: ['carousel', 'tutorial', 'howto'],
+    prompt: 'Three-card tutorial carousel. Step 1 -> Step 2 -> Step 3, each card shows one clear action. Connected headline flows across cards as one sentence. Icons or diagrams in each card body. Clean light background.' },
+]
+
+type GalleryCategory = 'all' | PromptTemplate['category']
+
+const GALLERY_CATEGORIES: { id: GalleryCategory; label: string }[] = [
+  { id: 'all', label: 'All' },
+  { id: 'web', label: 'Web' },
+  { id: 'deck', label: 'Decks' },
+  { id: 'social', label: 'Social' },
+  { id: 'image', label: 'Images' },
+  { id: 'video', label: 'Video' },
+  { id: 'motion', label: 'Motion' },
 ]
 
 const DESIGN_DIRECTIONS: Record<DesignDirection, {
@@ -925,7 +817,7 @@ interface ProjectSummary {
   fileNames: string[]
 }
 
-// ─── Helpers ────────────────────────────────────────────────────────────────
+// â”€â”€â”€ Helpers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 function genId() { return Math.random().toString(36).slice(2, 11) }
 
@@ -1278,6 +1170,98 @@ function getFileIcon(name: string): string {
   return FILE_ICONS[ext] || 'FILE'
 }
 
+function looksLikeHtmlDocument(content: string): boolean {
+  const trimmed = content.trim()
+  if (!trimmed) return false
+  return /^(?:<!doctype\s+html|<html[\s>])/i.test(trimmed)
+    || (/<html[\s>]/i.test(trimmed) && /<\/html>/i.test(trimmed))
+}
+
+function extractHtmlDocument(content: string, allowPartial = false): string | null {
+  const normalized = normalizeMalformedHtml(content)
+  const startMatch = normalized.match(/<!doctype\s+html|<html[\s>]/i)
+  if (!startMatch || startMatch.index === undefined) return null
+  const endMatch = /<\/html>/i.exec(normalized.slice(startMatch.index))
+  const candidate = (() => {
+    if (endMatch && endMatch.index !== undefined) {
+      const end = startMatch.index + endMatch.index + endMatch[0].length
+      return normalized.slice(startMatch.index, end).trim()
+    }
+    return allowPartial ? normalized.slice(startMatch.index).trim() : ''
+  })()
+  return looksLikeHtmlDocument(candidate) ? candidate : null
+}
+
+const DESIGN_FILE_NAME_RE = /^[\w@./ ()-]+\.(?:html?|css|jsx?|tsx?|js|ts|svg|json|md|markdown)$/i
+
+function stripLeadingFileNameLine(content: string): { content: string; name?: string } {
+  const lines = String(content || '').replace(/^\uFEFF/, '').split(/\r?\n/)
+  const firstContentLine = lines.findIndex((line) => line.trim().length > 0)
+  if (firstContentLine < 0) return { content }
+
+  const candidate = normalizeDesignPath(lines[firstContentLine].trim().replace(/^["'`]+|["'`:]+$/g, ''))
+  if (!candidate || !DESIGN_FILE_NAME_RE.test(candidate)) return { content }
+
+  return {
+    content: [...lines.slice(0, firstContentLine), ...lines.slice(firstContentLine + 1)].join('\n').trimStart(),
+    name: candidate,
+  }
+}
+
+function extractTrailingOpenFence(content: string): { info: string; code: string } | null {
+  const lastFence = content.lastIndexOf('```')
+  if (lastFence < 0) return null
+  const afterFence = content.slice(lastFence + 3)
+  const newlineIndex = afterFence.indexOf('\n')
+  if (newlineIndex < 0) return null
+  const code = afterFence.slice(newlineIndex + 1)
+  if (!code.trim() || code.includes('```')) return null
+  return {
+    info: afterFence.slice(0, newlineIndex).trim(),
+    code,
+  }
+}
+
+function parseFenceInfo(info: string, index: number): { lang: string; name: string } | null {
+  const tokens = info.split(/\s+/).filter(Boolean)
+  const firstToken = (tokens[0] || '').toLowerCase()
+  const hasKnownLang = firstToken ? KNOWN_FENCE_LANGS.has(firstToken) : false
+
+  if (firstToken === 'artifact') {
+    const attrs: Record<string, string> = {}
+    tokens.slice(1).forEach((token) => {
+      const match = token.match(/^([a-zA-Z_:-]+)=(?:"([^"]*)"|'([^']*)'|(.+))$/)
+      if (match) attrs[match[1].toLowerCase()] = match[2] || match[3] || match[4] || ''
+    })
+    const artifactType = (attrs.type || '').toLowerCase()
+    const lang = artifactType === 'react' ? 'jsx' : artifactType
+    if (!KNOWN_FENCE_LANGS.has(lang)) return null
+    const ext = LANG_EXT[lang] || lang
+    const rawId = (attrs.id || attrs.title || `artifact-${index}`).toLowerCase()
+    const slug = rawId.replace(/[^a-z0-9._/-]+/g, '-').replace(/^-+|-+$/g, '') || `artifact-${index}`
+    return {
+      lang,
+      name: lang === 'html' ? 'index.html' : normalizeDesignPath(slug.endsWith(`.${ext}`) ? slug : `${slug}.${ext}`) || `artifact-${index}.${ext}`,
+    }
+  }
+
+  if (hasKnownLang) {
+    return {
+      lang: firstToken,
+      name: tokens.length > 1 ? tokens.slice(1).join(' ').trim() : (firstToken === 'html' ? 'index.html' : ''),
+    }
+  }
+
+  if (tokens.length === 1) {
+    const maybePath = normalizeDesignPath(tokens[0])
+    if (maybePath && /\.\w+$/.test(maybePath)) {
+      return { lang: inferLanguageFromFileName(maybePath), name: maybePath }
+    }
+  }
+
+  return null
+}
+
 export function extractFiles(content: string): DesignFile[] {
   const re = /```([^\n`]*)\n([\s\S]*?)```/g
   const files: DesignFile[] = []
@@ -1285,28 +1269,20 @@ export function extractFiles(content: string): DesignFile[] {
   let m: RegExpExecArray | null
   let idx = 0
 
-  while ((m = re.exec(content)) !== null) {
-    const info = (m[1] || '').trim()
-    const code = m[2] || ''
-    if (!code.trim()) continue
+  const addFenceFile = (rawInfo: string, rawCode: string): boolean => {
+    const info = (rawInfo || '').trim()
+    const stripped = stripLeadingFileNameLine(rawCode || '')
+    const code = stripped.content
+    if (!code.trim()) return false
 
-    const tokens = info.split(/\s+/).filter(Boolean)
-    const firstToken = (tokens[0] || '').toLowerCase()
-    const hasKnownLang = firstToken ? KNOWN_FENCE_LANGS.has(firstToken) : false
-
-    let lang = hasKnownLang ? firstToken : ''
-    let name = ''
-
-    if (hasKnownLang && tokens.length > 1) {
-      name = tokens.slice(1).join(' ').trim()
-    } else if (!hasKnownLang && tokens.length === 1) {
-      const maybePath = normalizeDesignPath(tokens[0])
-      if (maybePath && /\.\w+$/.test(maybePath)) {
-        name = maybePath
-      }
-    }
-
-    if (!name && !lang) continue
+    const normalizedHtmlCode = sanitizeDesignFileContent('index.html', 'html', code)
+    const parsed = parseFenceInfo(info, idx + 1)
+      || (stripped.name ? { lang: inferLanguageFromFileName(stripped.name), name: stripped.name } : null)
+      || (looksLikeHtmlDocument(normalizedHtmlCode)
+        ? { lang: 'html', name: 'index.html' }
+        : null)
+    if (!parsed) return false
+    let { lang, name } = parsed
 
     if (!name) {
       idx += 1
@@ -1333,15 +1309,24 @@ export function extractFiles(content: string): DesignFile[] {
       seen.add(dedupeKey)
       files.push({ id: genId(), name, language: lang, content: sanitizedCode })
     }
+    return true
+  }
+
+  while ((m = re.exec(content)) !== null) {
+    addFenceFile(m[1] || '', m[2] || '')
+  }
+
+  const trailingOpenFence = extractTrailingOpenFence(content)
+  if (trailingOpenFence) {
+    addFenceFile(trailingOpenFence.info, trailingOpenFence.code)
   }
 
   // Fallback: treat raw HTML (no code fence) as index.html
   if (files.length === 0) {
     const trimmed = content.trim()
-    const sanitized = sanitizeDesignFileContent('index.html', 'html', trimmed)
-    const lower = sanitized.toLowerCase()
-    if (lower.startsWith('<!doctype') || lower.startsWith('<html')) {
-      files.push({ id: genId(), name: 'index.html', language: 'html', content: sanitized })
+    const htmlDocument = extractHtmlDocument(trimmed, true) || sanitizeDesignFileContent('index.html', 'html', trimmed)
+    if (looksLikeHtmlDocument(htmlDocument)) {
+      files.push({ id: genId(), name: 'index.html', language: 'html', content: htmlDocument })
     }
   }
 
@@ -1405,6 +1390,18 @@ function dedupePlanItems(items: string[]): string[] {
     deduped.push(cleaned)
   }
   return deduped
+}
+
+/**
+ * Progressive checkbox tick — replaces first `tickCount` occurrences of
+ * `- [ ]` with `- [x]` in streaming text. Pass Infinity to tick all.
+ */
+export function tickCheckboxesInText(text: string, tickCount: number): string {
+  let count = 0
+  return text.replace(/- \[ \] /g, () => {
+    count++
+    return count <= tickCount ? '- [x] ' : '- [ ] '
+  })
 }
 
 export function extractPlanItemsFromAssistant(content: string): string[] {
@@ -1551,7 +1548,7 @@ const STARTERS = [
   { icon: 'REV', label: 'Critique', prompt: 'Review the current design with a scored critique across hierarchy, craft, usability, accessibility, originality, and provide a concrete improved version.' },
 ]
 
-// ─── Project Storage ─────────────────────────────────────────────────────────
+// â”€â”€â”€ Project Storage â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 const DS_PROJECTS_INDEX = 'kodo.ds.projects.v1'
 const dsProjectKey = (id: string) => `kodo.ds.p.${id}`
@@ -1598,7 +1595,7 @@ function saveProjectToStorage(project: DesignProject): void {
     }
     summaries.unshift(summary)
     localStorage.setItem(DS_PROJECTS_INDEX, JSON.stringify(summaries))
-  } catch { /* quota — ignore */ }
+  } catch { /* quota â€” ignore */ }
 }
 
 function loadProjectFromStorage(id: string): DesignProject | null {
@@ -1709,17 +1706,17 @@ function migrateOldDesignData(): void {
   } catch { /* */ }
 }
 
-// ─── Design System ───────────────────────────────────────────────────────────
+// â”€â”€â”€ Design System â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 const DS_DESIGN_SYSTEM_KEY = 'kodo.ds.designSystem.v1'
 
 const DEFAULT_DESIGN_SYSTEM: DesignSystemConfig = {
-  brandName: '', presetId: 'neutral-modern',
+  brandName: '', presetId: 'claude',
   fidelity: 'high-fidelity', direction: 'auto', surface: 'auto',
   motion: 'subtle', deviceFrame: 'auto',
   audience: '', scale: '', brandAssets: '',
-  primaryColor: '#6366f1', secondaryColor: '#8b5cf6',
-  accentColor: '#06b6d4', fontFamily: 'Inter, system-ui, sans-serif',
+  primaryColor: '#cc785c', secondaryColor: '#141413',
+  accentColor: '#cc785c', fontFamily: 'Inter, system-ui, sans-serif',
   borderRadius: 'md', style: 'minimal', customRules: '',
 }
 
@@ -1728,9 +1725,10 @@ function loadDesignSystem(): DesignSystemConfig {
     const raw = localStorage.getItem(DS_DESIGN_SYSTEM_KEY)
     if (!raw) return { ...DEFAULT_DESIGN_SYSTEM }
     const parsed = { ...DEFAULT_DESIGN_SYSTEM, ...JSON.parse(raw) } as DesignSystemConfig
+    const presets = allDesignSystemPresets()
     return {
       ...parsed,
-      presetId: DESIGN_SYSTEM_PRESETS.some((preset) => preset.id === parsed.presetId) ? parsed.presetId : DEFAULT_DESIGN_SYSTEM.presetId,
+      presetId: presets.some((preset) => preset.id === parsed.presetId) ? parsed.presetId : DEFAULT_DESIGN_SYSTEM.presetId,
       fidelity: parsed.fidelity === 'wireframe' || parsed.fidelity === 'production' ? parsed.fidelity : 'high-fidelity',
       direction: Object.keys(DESIGN_DIRECTIONS).includes(parsed.direction) ? parsed.direction : 'auto',
       surface: Object.keys(DESIGN_SURFACES).includes(parsed.surface) ? parsed.surface : 'auto',
@@ -1745,21 +1743,30 @@ function saveDesignSystem(ds: DesignSystemConfig): void {
 }
 
 export function buildDesignSystemPrompt(ds: DesignSystemConfig): string {
-  const preset = DESIGN_SYSTEM_PRESETS.find((row) => row.id === ds.presetId) || DESIGN_SYSTEM_PRESETS[0]
+  const preset = allDesignSystemPresets().find((row) => row.id === ds.presetId) || DESIGN_SYSTEM_PRESETS[0]
   const direction = DESIGN_DIRECTIONS[ds.direction] || DESIGN_DIRECTIONS.auto
   const lines: string[] = ['Kodo Creative Brief and Design System:']
-  lines.push(`- Fidelity: ${ds.fidelity} — ${FIDELITY_PROMPTS[ds.fidelity]}`)
-  lines.push(`- Surface: ${ds.surface} — ${DESIGN_SURFACES[ds.surface]}`)
-  lines.push(`- Motion: ${ds.motion} — ${MOTION_PROMPTS[ds.motion]}`)
-  lines.push(`- Device frame: ${ds.deviceFrame} — ${DEVICE_FRAME_PROMPTS[ds.deviceFrame]}`)
-  lines.push(`- Design system preset: ${preset.label} (${preset.category}) — ${preset.summary}`)
-  lines.push(`- Preset rules: ${preset.prompt}`)
-  lines.push(`- Visual direction: ${direction.label} — ${direction.summary}`)
+  lines.push(`- Fidelity: ${ds.fidelity} â€” ${FIDELITY_PROMPTS[ds.fidelity]}`)
+  lines.push(`- Surface: ${ds.surface} â€” ${DESIGN_SURFACES[ds.surface]}`)
+  lines.push(`- Motion: ${ds.motion} â€” ${MOTION_PROMPTS[ds.motion]}`)
+  lines.push(`- Device frame: ${ds.deviceFrame} â€” ${DEVICE_FRAME_PROMPTS[ds.deviceFrame]}`)
+  lines.push(`- Design system preset: ${preset.label} (${preset.category}) â€” ${preset.summary}`)
+  lines.push(`- Preset rules: ${truncateText(preset.prompt, 3200)}`)
+  if (preset.sourceUrl) lines.push(`- Extracted source URL: ${preset.sourceUrl}`)
+  if (preset.extraction) {
+    const facts = [
+      preset.extraction.generator,
+      typeof preset.extraction.cssVarCount === 'number' ? `${preset.extraction.cssVarCount} CSS variables` : '',
+      typeof preset.extraction.sourceCssFiles === 'number' ? `${preset.extraction.sourceCssFiles} linked stylesheets` : '',
+    ].filter(Boolean).join(', ')
+    if (facts) lines.push(`- Extraction metadata: ${facts}`)
+  }
+  lines.push(`- Visual direction: ${direction.label} â€” ${direction.summary}`)
   lines.push(`- Direction rules: ${direction.prompt}`)
   if (ds.brandName) lines.push(`- Brand: ${ds.brandName}`)
   if (ds.audience) lines.push(`- Audience: ${ds.audience}`)
   if (ds.scale) lines.push(`- Scope/scale: ${ds.scale}`)
-  if (ds.brandAssets) lines.push(`- Brand/context assets available: ${ds.brandAssets}`)
+  if (ds.brandAssets) lines.push(`- Brand/context assets available: ${truncateText(ds.brandAssets, 700)}`)
   lines.push(`- Primary color: ${ds.primaryColor}`)
   lines.push(`- Secondary color: ${ds.secondaryColor}`)
   lines.push(`- Accent color: ${ds.accentColor}`)
@@ -1767,15 +1774,15 @@ export function buildDesignSystemPrompt(ds: DesignSystemConfig): string {
   const radii: Record<DesignSystemConfig['borderRadius'], string> = { none: '0px', sm: '4px', md: '8px', lg: '16px', full: '9999px' }
   lines.push(`- Border radius: ${radii[ds.borderRadius]}`)
   lines.push(`- Visual style: ${ds.style}`)
-  if (ds.customRules) lines.push(`- Rules: ${ds.customRules}`)
+  if (ds.customRules) lines.push(`- Rules: ${truncateText(ds.customRules, 900)}`)
   lines.push('- Discovery discipline: if required context is missing, ask a compact batch of questions or render three directions instead of guessing one generic answer.')
   return lines.join('\n')
 }
 
-// ─── Sub-components ──────────────────────────────────────────────────────────
+// â”€â”€â”€ Sub-components â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 function buildDesignSystemPresetPatch(presetId: string): Partial<DesignSystemConfig> {
-  const preset = DESIGN_SYSTEM_PRESETS.find((row) => row.id === presetId) || DESIGN_SYSTEM_PRESETS[0]
+  const preset = allDesignSystemPresets().find((row) => row.id === presetId) || DESIGN_SYSTEM_PRESETS[0]
   return {
     presetId: preset.id,
     primaryColor: preset.colors[4] || DEFAULT_DESIGN_SYSTEM.primaryColor,
@@ -1822,7 +1829,7 @@ function DragHandle({ onDrag, handleId, order }: { onDrag: (delta: number) => vo
   )
 }
 
-// ─── Project Picker ──────────────────────────────────────────────────────────
+// â”€â”€â”€ Project Picker â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 interface ProjectPickerProps {
   projects: ProjectSummary[]
@@ -1887,7 +1894,7 @@ export function ProjectPicker({ projects, onOpen, onDelete, onCreate, onClose }:
         ) : (
           <>
             <div style={{ fontSize: 11, letterSpacing: '0.08em', color: 'var(--text-2)', fontFamily: 'var(--font-mono)', marginBottom: 16, fontWeight: 600 }}>
-              YOUR PROJECTS — {projects.length}
+              YOUR PROJECTS â€” {projects.length}
             </div>
             <div style={{
               display: 'grid',
@@ -1988,7 +1995,538 @@ export function ProjectPicker({ projects, onOpen, onDelete, onCreate, onClose }:
   )
 }
 
-// ─── Main component ──────────────────────────────────────────────────────────
+// â”€â”€â”€ Design System Showcase â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+
+function hexLuminance(hex: string): number {
+  const h = hex.replace('#', '')
+  if (h.length !== 6) return 0.5
+  const r = parseInt(h.slice(0, 2), 16) / 255
+  const g = parseInt(h.slice(2, 4), 16) / 255
+  const b = parseInt(h.slice(4, 6), 16) / 255
+  const toLinear = (c: number) => c <= 0.03928 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4)
+  return 0.2126 * toLinear(r) + 0.7152 * toLinear(g) + 0.0722 * toLinear(b)
+}
+
+function generateShowcaseHTML(preset: DesignSystemPreset): string {
+  const [bg, surface, text, muted, accent] = preset.colors
+  const bgLum = hexLuminance(bg)
+  const accentLum = hexLuminance(accent)
+  const isDark = bgLum < 0.18
+  // Button text on accent: use black if accent is bright (lum > 0.35), else white
+  const accentOnText = accentLum > 0.35 ? '#000000' : '#ffffff'
+  const borderColor = isDark ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.1)'
+  const surfaceShadow = isDark ? '0 2px 12px rgba(0,0,0,0.4)' : '0 2px 12px rgba(0,0,0,0.08)'
+  const shortName = preset.label.split(' ')[0]
+
+  // Determine Google Fonts to load based on display font
+  const fontFamilyRaw = preset.displayFont.split(',')[0].trim().replace(/'/g, '')
+  const systemFonts = ['Inter', 'system-ui', '-apple-system', 'Segoe UI', 'Arial', 'Helvetica', 'Georgia', 'Times New Roman', 'monospace', 'sans-serif', 'serif', 'Geist', 'Circular', 'SF Pro', 'IBM Plex', 'GT Walsheim', 'Cooper Black', 'Space Grotesk', 'PolySans', 'Optimistic VF', 'Tiempos', 'Rajdhani', 'Orbitron', 'Sharp Grotesk', 'Atlas Grotesk', 'Sohne', 'Lexend']
+  const needsGoogleFont = !systemFonts.some(f => fontFamilyRaw.toLowerCase().includes(f.toLowerCase()))
+  const googleFontFamilies: string[] = []
+  if (needsGoogleFont) googleFontFamilies.push(fontFamilyRaw)
+  const bodyFontRaw = preset.bodyFont.split(',')[0].trim().replace(/'/g, '')
+  if (bodyFontRaw !== fontFamilyRaw && !systemFonts.some(f => bodyFontRaw.toLowerCase().includes(f.toLowerCase()))) {
+    googleFontFamilies.push(bodyFontRaw)
+  }
+  const googleFontLink = googleFontFamilies.length > 0
+    ? `<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link href="https://fonts.googleapis.com/css2?${googleFontFamilies.map(f => `family=${encodeURIComponent(f)}:wght@400;600;700;800;900`).join('&')}&display=swap" rel="stylesheet">`
+    : ''
+
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+${googleFontLink}
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+:root{
+  --bg:${bg};--surface:${surface};--text:${text};--muted:${muted};--accent:${accent};
+  --font-display:${preset.displayFont};--font-body:${preset.bodyFont};
+  --border:${borderColor};--shadow:${surfaceShadow};
+}
+html{font-size:16px;-webkit-font-smoothing:antialiased}
+body{background:var(--bg);color:var(--text);font-family:var(--font-body);min-height:100vh;overflow-x:hidden}
+
+/* Nav */
+nav{display:flex;align-items:center;gap:32px;padding:0 40px;height:60px;border-bottom:1px solid var(--border);position:sticky;top:0;background:var(--bg);z-index:10}
+.nav-logo{display:flex;align-items:center;gap:10px;font-family:var(--font-display);font-weight:800;font-size:17px;color:var(--text);text-decoration:none;letter-spacing:-0.02em}
+.nav-logo-dot{width:26px;height:26px;border-radius:8px;background:var(--accent);display:grid;place-items:center}
+.nav-logo-dot-inner{width:10px;height:10px;border-radius:50%;background:var(--bg);opacity:0.9}
+.nav-links{display:flex;gap:24px;margin-left:8px;list-style:none}
+.nav-links a{color:var(--muted);font-size:14px;text-decoration:none;font-weight:500;transition:color 0.15s}
+.nav-links a:hover{color:var(--text)}
+.nav-actions{margin-left:auto;display:flex;align-items:center;gap:10px}
+.btn-ghost{background:none;border:1px solid var(--border);color:var(--muted);font-size:13px;font-weight:500;padding:7px 16px;border-radius:8px;cursor:pointer;font-family:var(--font-body)}
+.btn-primary{background:var(--accent);border:none;color:${accentOnText};font-size:13px;font-weight:700;padding:8px 18px;border-radius:8px;cursor:pointer;font-family:var(--font-body);display:flex;align-items:center;gap:6px}
+
+/* Breadcrumb */
+.breadcrumb{padding:20px 40px 0;display:flex;align-items:center;gap:8px}
+.breadcrumb-item{font-size:11px;font-weight:600;letter-spacing:0.08em;text-transform:uppercase;color:var(--muted)}
+.breadcrumb-sep{font-size:11px;color:var(--border)}
+.breadcrumb-active{color:var(--accent);background:${accent}22;padding:3px 10px;border-radius:999px;font-size:11px;font-weight:700;letter-spacing:0.06em}
+
+/* Hero */
+.hero{padding:52px 40px 60px;max-width:780px}
+.hero-eyebrow{font-size:12px;font-weight:700;letter-spacing:0.1em;text-transform:uppercase;color:var(--accent);margin-bottom:18px}
+.hero-headline{font-family:var(--font-display);font-size:clamp(36px,5vw,58px);font-weight:800;line-height:1.05;letter-spacing:-0.03em;color:var(--text);margin-bottom:20px}
+.hero-headline .accent-word{color:var(--accent)}
+.hero-sub{font-size:17px;color:var(--muted);line-height:1.6;max-width:520px;margin-bottom:36px}
+.hero-actions{display:flex;align-items:center;gap:14px;flex-wrap:wrap}
+.btn-hero{background:var(--accent);border:none;color:${accentOnText};font-size:15px;font-weight:700;padding:14px 28px;border-radius:10px;cursor:pointer;font-family:var(--font-body);display:flex;align-items:center;gap:8px}
+.btn-secondary{background:none;border:1px solid var(--border);color:var(--text);font-size:15px;font-weight:500;padding:13px 24px;border-radius:10px;cursor:pointer;font-family:var(--font-body)}
+.trust-badges{display:flex;gap:28px;margin-top:36px;flex-wrap:wrap}
+.trust-badge{font-size:12px;color:var(--muted)}
+.trust-badge strong{color:var(--text);font-weight:700}
+
+/* Trust strip */
+.trust-strip{padding:32px 40px;border-top:1px solid var(--border);border-bottom:1px solid var(--border)}
+.trust-strip-label{font-size:11px;font-weight:700;letter-spacing:0.1em;text-transform:uppercase;color:var(--muted);text-align:center;margin-bottom:20px}
+.trust-logos{display:flex;justify-content:center;align-items:center;gap:40px;flex-wrap:wrap}
+.trust-logo{font-size:14px;font-weight:700;color:var(--muted);letter-spacing:-0.01em;opacity:0.6}
+
+/* Features */
+.features{padding:64px 40px}
+.section-label{font-size:11px;font-weight:700;letter-spacing:0.1em;text-transform:uppercase;color:var(--accent);margin-bottom:12px}
+.section-headline{font-family:var(--font-display);font-size:clamp(24px,3vw,36px);font-weight:800;letter-spacing:-0.02em;line-height:1.15;color:var(--text);margin-bottom:40px;max-width:500px}
+.features-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:20px}
+.feature-card{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:24px;box-shadow:var(--shadow)}
+.feature-icon{width:40px;height:40px;border-radius:10px;background:${accent}22;display:grid;place-items:center;margin-bottom:16px;font-size:18px}
+.feature-title{font-size:15px;font-weight:700;color:var(--text);margin-bottom:8px;letter-spacing:-0.01em}
+.feature-desc{font-size:13px;color:var(--muted);line-height:1.55}
+
+/* Stats */
+.stats{padding:48px 40px;border-top:1px solid var(--border)}
+.stats-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:32px}
+.stat-value{font-family:var(--font-display);font-size:40px;font-weight:800;letter-spacing:-0.04em;color:var(--text);margin-bottom:6px}
+.stat-label{font-size:13px;color:var(--muted);font-weight:500}
+</style>
+</head>
+<body>
+
+<nav>
+  <a href="#" class="nav-logo">
+    <span class="nav-logo-dot"><span class="nav-logo-dot-inner"></span></span>
+    ${shortName}
+  </a>
+  <ul class="nav-links">
+    <li><a href="#">Product</a></li>
+    <li><a href="#">Workspace</a></li>
+    <li><a href="#">Pricing</a></li>
+    <li><a href="#">Docs</a></li>
+    <li><a href="#">Customers</a></li>
+  </ul>
+  <div class="nav-actions">
+    <button class="btn-ghost">Sign in</button>
+    <button class="btn-primary">Get started -></button>
+  </div>
+</nav>
+
+<div class="breadcrumb">
+  <span class="breadcrumb-item">${preset.label.toUpperCase()}</span>
+  <span class="breadcrumb-sep">â€º</span>
+  <span class="breadcrumb-active">LIVE PREVIEW</span>
+</div>
+
+<section class="hero">
+  <div class="hero-eyebrow">${preset.category} Design System</div>
+  <h1 class="hero-headline">The system that makes<br><span class="accent-word">${shortName}</span> feel like ${shortName}.</h1>
+  <p class="hero-sub">${preset.summary}</p>
+  <div class="hero-actions">
+    <button class="btn-hero">Start a free trial -></button>
+    <button class="btn-secondary">See it in action</button>
+  </div>
+  <div class="trust-badges">
+    <span class="trust-badge"><strong>4.9</strong> Â· App Store rating</span>
+    <span class="trust-badge"><strong>SOC 2</strong> Â· Type II compliant</span>
+    <span class="trust-badge"><strong>120k+</strong> active teams</span>
+  </div>
+</section>
+
+<div class="trust-strip">
+  <div class="trust-strip-label">Trusted by teams shipping serious work</div>
+  <div class="trust-logos">
+    <span class="trust-logo">Northwind</span>
+    <span class="trust-logo">Pioneer</span>
+    <span class="trust-logo">Lattice</span>
+    <span class="trust-logo">Atlas Co.</span>
+    <span class="trust-logo">Voltage</span>
+    <span class="trust-logo">Foundry</span>
+  </div>
+</div>
+
+<section class="features">
+  <div class="section-label">Platform features</div>
+  <h2 class="section-headline">Everything your team needs to move fast</h2>
+  <div class="features-grid">
+    <div class="feature-card">
+      <div class="feature-icon">â—†</div>
+      <div class="feature-title">Design system tokens</div>
+      <div class="feature-desc">Consistent visual language across every surface. One source of truth for your entire product.</div>
+    </div>
+    <div class="feature-card">
+      <div class="feature-icon">â¬¡</div>
+      <div class="feature-title">Component library</div>
+      <div class="feature-desc">Production-ready components built on your design tokens. Ship features 3Ã— faster.</div>
+    </div>
+    <div class="feature-card">
+      <div class="feature-icon">â–²</div>
+      <div class="feature-title">Live preview</div>
+      <div class="feature-desc">See changes in real time across desktop, tablet, and mobile breakpoints instantly.</div>
+    </div>
+  </div>
+</section>
+
+<section class="stats">
+  <div class="stats-grid">
+    <div>
+      <div class="stat-value">3Ã—</div>
+      <div class="stat-label">Faster feature delivery</div>
+    </div>
+    <div>
+      <div class="stat-value">98%</div>
+      <div class="stat-label">Designer satisfaction score</div>
+    </div>
+    <div>
+      <div class="stat-value">120k+</div>
+      <div class="stat-label">Teams using this system</div>
+    </div>
+  </div>
+</section>
+
+</body>
+</html>`
+}
+
+function generateTokensContent(preset: DesignSystemPreset) {
+  if (preset.tokenGroups?.length) return preset.tokenGroups
+
+  const tokenGroups = [
+    {
+      label: 'Color Palette',
+      tokens: [
+        { name: '--color-bg', value: preset.colors[0], description: 'Page background' },
+        { name: '--color-surface', value: preset.colors[1], description: 'Card / panel surface' },
+        { name: '--color-text', value: preset.colors[2], description: 'Primary text' },
+        { name: '--color-muted', value: preset.colors[3], description: 'Secondary / muted text' },
+        { name: '--color-accent', value: preset.colors[4] || preset.colors[2], description: 'Brand accent / CTA' },
+      ],
+    },
+    {
+      label: 'Typography',
+      tokens: [
+        { name: '--font-display', value: preset.displayFont.split(',')[0].replace(/'/g, '').trim(), description: 'Headlines & display text' },
+        { name: '--font-body', value: preset.bodyFont.split(',')[0].replace(/'/g, '').trim(), description: 'Body copy & UI labels' },
+        { name: '--font-size-display', value: '48â€“72px', description: 'Hero headlines' },
+        { name: '--font-size-h1', value: '36â€“48px', description: 'Page titles' },
+        { name: '--font-size-body', value: '15â€“16px', description: 'Body text' },
+        { name: '--line-height-body', value: '1.5â€“1.6', description: 'Reading line height' },
+      ],
+    },
+    {
+      label: 'Spacing & Radius',
+      tokens: [
+        { name: '--spacing-unit', value: '8px', description: 'Base spacing unit' },
+        { name: '--spacing-sm', value: '8px', description: 'Tight spacing' },
+        { name: '--spacing-md', value: '16px', description: 'Default gap' },
+        { name: '--spacing-lg', value: '32px', description: 'Section spacing' },
+        { name: '--radius-sm', value: '6px', description: 'Input / badge radius' },
+        { name: '--radius-md', value: '10px', description: 'Card / button radius' },
+        { name: '--radius-lg', value: '16px', description: 'Panel / modal radius' },
+      ],
+    },
+  ]
+  return tokenGroups
+}
+
+const GETDESIGN_MD_SLUGS: Record<string, string> = {
+  'claude-warm': 'claude',
+  'mistral-ai': 'mistral.ai',
+  'elevenlabs-audio': 'elevenlabs',
+  'ollama-local': 'ollama',
+  'together-ai': 'together.ai',
+  'opencode-ai': 'opencode.ai',
+  'minimax-ai': 'minimax',
+  'voltagent': 'voltagent',
+  'cohere-enterprise': 'cohere',
+  'xai-mono': 'x.ai',
+  'linear-minimal': 'linear.app',
+  'vercel-mono': 'vercel',
+  'cursor-agentic': 'cursor',
+  'supabase-dev': 'supabase',
+  'raycast-command': 'raycast',
+  'warp-terminal': 'warp',
+  'expo-platform': 'expo',
+  'hashicorp-infra': 'hashicorp',
+  'sentry-ops': 'sentry',
+  'mintlify-docs': 'mintlify',
+  'resend-email': 'resend',
+  'replicate-ml': 'replicate',
+  'composio-dev': 'composio',
+  'posthog-analytics': 'posthog',
+  'stripe-gradient': 'stripe',
+  'coinbase-crypto': 'coinbase',
+  'revolut-finance': 'revolut',
+  'wise-fintech': 'wise',
+  'binance-crypto': 'binance',
+  'mastercard-brand': 'mastercard',
+  'kraken-exchange': 'kraken',
+  'apple-glass': 'apple',
+  'airbnb-warm': 'airbnb',
+  'spotify-audio': 'spotify',
+  'nike-performance': 'nike',
+  'starbucks-brand': 'starbucks',
+  'meta-store': 'meta',
+  'tesla-product': 'tesla',
+  'bmw-premium': 'bmw',
+  'bmw-m-sport': 'bmw-m',
+  'ferrari-red': 'ferrari',
+  'lamborghini-hex': 'lamborghini',
+  'bugatti-mono': 'bugatti',
+  'renault-aurora': 'renault',
+  'spacex-stark': 'spacex',
+  'figma-creative': 'figma',
+  'framer-motion': 'framer',
+  'webflow-creator': 'webflow',
+  'miro-workshop': 'miro',
+  'airtable-db': 'airtable',
+  'clay-agency': 'clay',
+  'theverge-editorial': 'theverge',
+  'wired-magazine': 'wired',
+  'ibm-carbon': 'ibm',
+  'intercom-friendly': 'intercom',
+  'superhuman-email': 'superhuman',
+  'nvidia-ai': 'nvidia',
+  'playstation-dark': 'playstation',
+  'mongodb-db': 'mongodb',
+  'sanity-cms': 'sanity',
+  'lovable-builder': 'lovable',
+  'clickhouse-db': 'clickhouse',
+  'vodafone-brand': 'vodafone',
+  'notion-editorial': 'notion',
+  'cal-scheduling': 'cal',
+  'zapier-orange': 'zapier',
+  'runwayml-cinematic': 'runwayml',
+  'openai-research': 'openai-research',
+  'anthropic-editorial': 'anthropic-editorial',
+  'huggingface-community': 'huggingface-community',
+  'deepseek-tech': 'deepseek-tech',
+  'github-utility': 'github-utility',
+  'arc-browser': 'arc-browser',
+  'fintech-dark': 'fintech-dark',
+  'porsche-precision': 'porsche-precision',
+  'mercedes-luxury': 'mercedes-luxury',
+  'canva-playful': 'canva-playful',
+  'shadcn-system': 'shadcn-system',
+  'magazine-bold': 'magazine-bold',
+  'japanese-minimal': 'japanese-minimal',
+  'substack-newsletter': 'substack-newsletter',
+  'atlassian-team': 'atlassian-team',
+  'material-google': 'material-google',
+  'microsoft-fluent': 'microsoft-fluent',
+  'salesforce-crm': 'salesforce-crm',
+  'hubspot-marketing': 'hubspot-marketing',
+  'pagerduty-incident': 'pagerduty-incident',
+  'datadog-ops': 'datadog-ops',
+  'netflix-streaming': 'netflix-streaming',
+  'discord-community': 'discord-community',
+  'gaming-esports': 'gaming-esports',
+  'dropbox-work': 'dropbox-work',
+  'loom-video': 'loom-video',
+  'mailchimp-friendly': 'mailchimp-friendly',
+  'xiaohongshu-social': 'xiaohongshu-social',
+  'amazon-commerce': 'amazon-commerce',
+  'neo-brutal': 'neo-brutal',
+  'neobrutalism': 'neobrutalism',
+  'glassmorphism': 'glassmorphism',
+  'claymorphism': 'claymorphism',
+  'retro-80s': 'retro-80s',
+  'cosmic-space': 'cosmic-space',
+  'luxury-premium': 'luxury-premium',
+  'cyberpunk-neon': 'cyberpunk-neon',
+  'warmth-organic': 'warmth-organic',
+}
+
+function DesignSystemPreviewModal({
+  preset,
+  onClose,
+  onSelect,
+}: {
+  preset: DesignSystemPreset
+  onClose: () => void
+  onSelect: () => void
+}) {
+  const liveSlug = GETDESIGN_MD_SLUGS[preset.id] || preset.id
+  const hasLivePreview = Boolean(liveSlug || preset.livePreviewHtml)
+  const defaultTab = hasLivePreview ? 'live' : 'showcase'
+  const [tab, setTab] = useState<'showcase' | 'tokens' | 'live'>(defaultTab as 'showcase' | 'tokens' | 'live')
+  const [fullscreen, setFullscreen] = useState(false)
+  const showcaseHTML = generateShowcaseHTML(preset)
+  const tokenGroups = generateTokensContent(preset)
+  const iframeRef = useRef<HTMLIFrameElement>(null)
+
+  useEffect(() => {
+    setTab(hasLivePreview ? 'live' : 'showcase')
+  }, [preset.id, hasLivePreview])
+
+  useEffect(() => {
+    const handler = (e: globalThis.KeyboardEvent) => { if (e.key === 'Escape') onClose() }
+    window.addEventListener('keydown', handler)
+    return () => window.removeEventListener('keydown', handler)
+  }, [onClose])
+
+  return (
+    <div
+      style={{
+        position: 'fixed', inset: 0, zIndex: 2000,
+        background: 'rgba(0,0,0,0.6)',
+        display: 'grid', placeItems: 'center',
+        backdropFilter: 'blur(4px)',
+      }}
+      onClick={e => { if (e.target === e.currentTarget) onClose() }}
+    >
+      <div
+        style={{
+          background: '#ffffff',
+          borderRadius: fullscreen ? 0 : 14,
+          boxShadow: '0 32px 80px rgba(0,0,0,0.35)',
+          display: 'flex', flexDirection: 'column',
+          width: fullscreen ? '100vw' : 'min(92vw, 1100px)',
+          height: fullscreen ? '100vh' : 'min(90vh, 780px)',
+          overflow: 'hidden',
+          position: fullscreen ? 'fixed' : 'relative',
+          inset: fullscreen ? 0 : 'auto',
+        }}
+      >
+        {/* Modal header */}
+        <div style={{
+          display: 'flex', alignItems: 'center', gap: 14,
+          padding: '14px 18px',
+          borderBottom: '1px solid #e5e7eb',
+          flexShrink: 0,
+        }}>
+          {/* Logo or color swatch */}
+          {(preset.logoUrl || PRESET_LOGOS[preset.id]) ? (
+            <img
+              src={preset.logoUrl || PRESET_LOGOS[preset.id]}
+              alt={preset.label}
+              width={36} height={36}
+              style={{ borderRadius: 8, border: '1px solid #e5e7eb', flexShrink: 0, objectFit: 'cover', background: '#f3f4f6' }}
+              onError={(e) => { (e.target as HTMLImageElement).style.display = 'none' }}
+            />
+          ) : (
+            <div style={{
+              width: 36, height: 36, borderRadius: 8, overflow: 'hidden',
+              display: 'grid', gridTemplateColumns: '1fr 1fr', flexShrink: 0,
+              border: '1px solid #e5e7eb',
+            }}>
+              {preset.colors.slice(0, 4).map((c, index) => (
+                <span key={`${c}-${index}`} style={{ background: c }} />
+              ))}
+            </div>
+          )}
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ fontSize: 15, fontWeight: 700, color: '#111827', letterSpacing: '-0.01em' }}>{preset.label}</div>
+            <div style={{ fontSize: 12, color: '#6b7280', marginTop: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{preset.summary}</div>
+          </div>
+          {/* Tab pills */}
+          <div style={{ display: 'flex', gap: 4, background: '#f3f4f6', borderRadius: 8, padding: 3 }}>
+            {([...(hasLivePreview ? ['live'] : []), 'showcase', 'tokens'] as const).map(t => (
+              <button key={t} type="button" onClick={() => setTab(t as 'showcase' | 'tokens' | 'live')}
+                style={{
+                  padding: '5px 14px', borderRadius: 6, border: 'none', fontSize: 12, fontWeight: 600,
+                  cursor: 'pointer',
+                  background: tab === t ? '#ffffff' : 'transparent',
+                  color: tab === t ? '#111827' : '#6b7280',
+                  boxShadow: tab === t ? '0 1px 3px rgba(0,0,0,0.1)' : 'none',
+                }}>
+                {t === 'live' ? 'Live Preview' : t === 'showcase' ? 'Showcase' : 'Tokens'}
+              </button>
+            ))}
+          </div>
+          {/* Action buttons */}
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+            <button type="button" onClick={() => setFullscreen(f => !f)}
+              style={{ display: 'flex', alignItems: 'center', gap: 5, background: 'none', border: '1px solid #e5e7eb', borderRadius: 7, color: '#6b7280', fontSize: 12, fontWeight: 500, padding: '6px 12px', cursor: 'pointer' }}>
+              {fullscreen ? <Minimize2 size={13} /> : <Maximize2 size={13} />}
+              {fullscreen ? 'Exit' : 'Fullscreen'}
+            </button>
+            <button type="button" onClick={onSelect}
+              style={{ background: preset.colors[4] || '#111827', border: 'none', borderRadius: 7, color: '#fff', fontSize: 12, fontWeight: 700, padding: '7px 14px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 5 }}>
+              <Plus size={13} /> Use System
+            </button>
+            <button type="button" onClick={onClose}
+              style={{ background: 'none', border: '1px solid #e5e7eb', borderRadius: 7, color: '#6b7280', width: 32, height: 32, display: 'grid', placeItems: 'center', cursor: 'pointer' }}>
+              âœ•
+            </button>
+          </div>
+        </div>
+
+        {/* Live Preview tab: extracted or local saved HTML */}
+        {tab === 'live' && hasLivePreview && (
+          preset.livePreviewHtml ? (
+            <iframe
+              srcDoc={preset.livePreviewHtml}
+              title={`${preset.label} live preview`}
+              style={{ flex: 1, border: 'none', width: '100%' }}
+              sandbox="allow-same-origin"
+            />
+          ) : (
+            <iframe
+              src={`/design-previews/${String(liveSlug).replace(/\./g, '-')}.html`}
+              title={`${preset.label} live preview`}
+              style={{ flex: 1, border: 'none', width: '100%' }}
+              sandbox="allow-same-origin"
+            />
+          )
+        )}
+
+        {/* Showcase tab: live iframe */}
+        {tab === 'showcase' && (
+          <iframe
+            ref={iframeRef}
+            srcDoc={showcaseHTML}
+            title={`${preset.label} showcase`}
+            style={{ flex: 1, border: 'none', width: '100%' }}
+            sandbox="allow-same-origin"
+          />
+        )}
+
+        {/* Tokens tab */}
+        {tab === 'tokens' && (
+          <div style={{ flex: 1, overflow: 'auto', padding: '20px 24px' }}>
+            {tokenGroups.map(group => (
+              <div key={group.label} style={{ marginBottom: 28 }}>
+                <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: '0.08em', textTransform: 'uppercase', color: '#6b7280', marginBottom: 10 }}>{group.label}</div>
+                <div style={{ border: '1px solid #e5e7eb', borderRadius: 10, overflow: 'hidden' }}>
+                  {group.tokens.map((token, i) => (
+                    <div key={token.name} style={{
+                      display: 'grid', gridTemplateColumns: '220px 1fr 1fr',
+                      alignItems: 'center', padding: '10px 14px', gap: 16,
+                      borderTop: i > 0 ? '1px solid #e5e7eb' : 'none',
+                      background: i % 2 === 0 ? '#fff' : '#f9fafb',
+                    }}>
+                      <code style={{ fontSize: 12, fontFamily: 'ui-monospace, monospace', color: '#7c3aed', background: '#f5f3ff', padding: '2px 6px', borderRadius: 4 }}>{token.name}</code>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                        {String(token.value).startsWith('#') && (
+                          <span style={{ width: 20, height: 20, borderRadius: 5, background: token.value, border: '1px solid #e5e7eb', flexShrink: 0 }} />
+                        )}
+                        <span style={{ fontSize: 13, fontWeight: 600, color: '#111827', fontFamily: String(token.value).startsWith('#') ? 'ui-monospace, monospace' : 'inherit' }}>{token.value}</span>
+                      </div>
+                      <span style={{ fontSize: 12, color: '#6b7280' }}>{token.description}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
+// â”€â”€â”€ Main component â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 function OpenDesignProjectPicker({ projects, onOpen, onDelete, onCreate, onClose }: {
   projects: ProjectSummary[]
@@ -2003,10 +2541,116 @@ function OpenDesignProjectPicker({ projects, onOpen, onDelete, onCreate, onClose
   const [name, setName] = useState('')
   const [presetId, setPresetId] = useState(DEFAULT_DESIGN_SYSTEM.presetId)
   const [fidelity, setFidelity] = useState<DesignFidelity>('high-fidelity')
-  const selectedPreset = DESIGN_SYSTEM_PRESETS.find((preset) => preset.id === presetId) || DESIGN_SYSTEM_PRESETS[0]
-  const featuredPresets = DESIGN_SYSTEM_PRESETS.slice(0, 12)
+  const [mainTab, setMainTab] = useState<'designs' | 'gallery' | 'systems'>('designs')
+  const [galleryCategory, setGalleryCategory] = useState<GalleryCategory>('all')
+  const [gallerySearch, setGallerySearch] = useState('')
+  const [systemSearch, setSystemSearch] = useState('')
+  const [previewPreset, setPreviewPreset] = useState<DesignSystemPreset | null>(null)
+  const [dsSearch, setDsSearch] = useState('')
+  const { systems: userSystems, save: saveUserSystem, remove: removeUserSystem } = useUserDesignSystems()
+  const [importUrl, setImportUrl] = useState('')
+  const [importing, setImporting] = useState(false)
+  const [importError, setImportError] = useState('')
+  const [importResult, setImportResult] = useState<UserDesignPreset | null>(null)
+  const allPresets = [...userSystems, ...DESIGN_SYSTEM_PRESETS]
+  const selectedPreset = allPresets.find((preset) => preset.id === presetId) || DESIGN_SYSTEM_PRESETS[0]
+
+  const handleImportUrl = async () => {
+    if (!importUrl.trim()) return
+    setImporting(true); setImportError(''); setImportResult(null)
+    try {
+      const resp = await fetch('/api/design/extract-theme', {
+        method: 'POST',
+        headers: buildApiHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify({ url: importUrl.trim() }),
+      })
+      if (!resp.ok) { const e = await resp.json(); throw new Error(e.detail || 'Extraction failed') }
+      const data = await resp.json()
+      const preset: UserDesignPreset = {
+        ...data,
+        id: typeof data.id === 'string' && data.id.trim() ? data.id : `user-${Date.now()}`,
+        label: typeof data.label === 'string' && data.label.trim() ? data.label : 'Imported Design System',
+        category: 'My Design Systems',
+        colors: Array.isArray(data.colors) && data.colors.length >= 5 ? data.colors.slice(0, 5) : ['#ffffff', '#f8fafc', '#111827', '#64748b', '#2563eb'],
+        displayFont: typeof data.displayFont === 'string' ? data.displayFont : 'Inter, system-ui, sans-serif',
+        bodyFont: typeof data.bodyFont === 'string' ? data.bodyFont : 'Inter, system-ui, sans-serif',
+        summary: typeof data.summary === 'string' ? data.summary : 'Imported design system.',
+        prompt: typeof data.prompt === 'string' ? data.prompt : 'Use the extracted colors, typography, and spacing to create on-brand designs.',
+        isUserDefined: true,
+        createdAt: Date.now(),
+        sourceUrl: importUrl.trim(),
+      }
+      saveUserSystem(preset)
+      setPresetId(preset.id)
+      setImportResult(preset)
+      setPreviewPreset(preset)
+      setDsSearch('')
+    } catch (e) {
+      setImportError(e instanceof Error ? e.message : 'Unknown error')
+    } finally { setImporting(false) }
+  }
   const createLabel = projects.length === 0 ? 'Create your first design' : 'Create'
+
+  // Grouped + filtered design systems for the Designs tab
+  const groupedPresets = useMemo(() => {
+    const q = dsSearch.trim().toLowerCase()
+    const allCategories = Array.from(new Set(DESIGN_SYSTEM_PRESETS.map(p => p.category)))
+    const userGroup = userSystems.length > 0 ? [{ category: 'My Design Systems', presets: userSystems as DesignSystemPreset[] }] : []
+
+    if (!q) {
+      return [
+        ...userGroup,
+        ...allCategories.map(cat => ({ category: cat, presets: DESIGN_SYSTEM_PRESETS.filter(p => p.category === cat) })),
+      ]
+    }
+
+    const categoryHits = new Set(allCategories.filter(cat => cat.toLowerCase().includes(q)))
+    const presetHits = new Set(
+      DESIGN_SYSTEM_PRESETS
+        .filter(p => p.label.toLowerCase().includes(q) || p.summary.toLowerCase().includes(q))
+        .map(p => p.id)
+    )
+    const userHits = userSystems.filter(p => p.label.toLowerCase().includes(q) || p.summary.toLowerCase().includes(q))
+
+    return [
+      ...(userHits.length > 0 ? [{ category: 'My Design Systems', presets: userHits as DesignSystemPreset[] }] : []),
+      ...allCategories
+        .map(cat => ({
+          category: cat,
+          presets: categoryHits.has(cat)
+            ? DESIGN_SYSTEM_PRESETS.filter(p => p.category === cat)
+            : DESIGN_SYSTEM_PRESETS.filter(p => p.category === cat && presetHits.has(p.id)),
+        }))
+        .filter(g => g.presets.length > 0),
+    ]
+  }, [dsSearch, userSystems])
+
+  const totalFilteredCount = groupedPresets.reduce((n, g) => n + g.presets.length, 0)
   const createDraft = () => onCreate({ name: name.trim() || undefined, mode, presetId, fidelity })
+
+  const filteredGallery = PROMPT_GALLERY.filter((t) => {
+    if (galleryCategory !== 'all' && t.category !== galleryCategory) return false
+    if (gallerySearch) {
+      const q = gallerySearch.toLowerCase()
+      return t.title.toLowerCase().includes(q) || t.description.toLowerCase().includes(q) || t.tags.some(tag => tag.includes(q))
+    }
+    return true
+  })
+
+  const filteredSystems = allPresets.filter((p) => {
+    if (!systemSearch) return true
+    const q = systemSearch.toLowerCase()
+    return p.label.toLowerCase().includes(q) || p.category.toLowerCase().includes(q) || p.summary.toLowerCase().includes(q)
+  })
+
+  const galleryIconMap: Record<PromptTemplate['category'], ReactNode> = {
+    image: <Images size={14} />, video: <Film size={14} />, motion: <Sparkles size={14} />,
+    web: <Monitor size={14} />, deck: <Layers size={14} />, social: <Share2 size={14} />,
+  }
+  const galleryColorMap: Record<PromptTemplate['category'], string> = {
+    image: '#8b5cf6', video: '#ef4444', motion: '#f59e0b',
+    web: '#3b82f6', deck: '#10b981', social: '#ec4899',
+  }
 
   return (
     <div style={{
@@ -2097,13 +2741,20 @@ function OpenDesignProjectPicker({ projects, onOpen, onDelete, onCreate, onClose
                 onChange={(event) => setPresetId(event.target.value)}
                 style={{ width: '100%', background: 'var(--bg-2)', border: '1px solid var(--border)', borderRadius: 7, color: 'var(--text-0)', fontSize: 11, padding: '7px 8px', outline: 'none' }}
               >
+                {userSystems.length > 0 && (
+                  <optgroup label="My Design Systems">
+                    {userSystems.map((preset) => (
+                      <option key={preset.id} value={preset.id}>{preset.label}</option>
+                    ))}
+                  </optgroup>
+                )}
                 {DESIGN_SYSTEM_PRESETS.map((preset) => (
                   <option key={preset.id} value={preset.id}>{preset.category} / {preset.label}</option>
                 ))}
               </select>
               <div style={{ display: 'flex', gap: 4, marginTop: 7 }}>
-                {selectedPreset.colors.map((color) => (
-                  <span key={color} title={color} style={{ height: 16, flex: 1, borderRadius: 4, background: color, border: '1px solid var(--border)' }} />
+                {selectedPreset.colors.map((color, index) => (
+                  <span key={`${color}-${index}`} title={color} style={{ height: 16, flex: 1, borderRadius: 4, background: color, border: '1px solid var(--border)' }} />
                 ))}
               </div>
               <div style={{ color: 'var(--text-2)', fontSize: 10, lineHeight: 1.45, marginTop: 6 }}>{selectedPreset.summary}</div>
@@ -2163,94 +2814,339 @@ function OpenDesignProjectPicker({ projects, onOpen, onDelete, onCreate, onClose
 
         <main style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', background: 'var(--bg-0)' }}>
           <div style={{ height: 45, borderBottom: '1px solid var(--border)', display: 'flex', alignItems: 'center', padding: '0 22px', gap: 20 }}>
-            {['Designs', 'Examples', 'Design systems'].map((tab, index) => (
-              <button key={tab} type="button"
-                style={{ background: 'none', border: 'none', color: index === 0 ? 'var(--text-0)' : 'var(--text-2)', fontSize: 12, fontWeight: index === 0 ? 700 : 500, cursor: 'pointer' }}>
-                {tab}
+            {([['designs', 'Designs'], ['gallery', 'Prompt Gallery'], ['systems', 'Design Systems']] as [typeof mainTab, string][]).map(([id, label]) => (
+              <button key={id} type="button" onClick={() => setMainTab(id)}
+                style={{ background: 'none', border: 'none', borderBottom: mainTab === id ? '2px solid var(--accent)' : '2px solid transparent', color: mainTab === id ? 'var(--text-0)' : 'var(--text-2)', fontSize: 12, fontWeight: mainTab === id ? 700 : 500, cursor: 'pointer', padding: '0 0 2px', height: 43 }}>
+                {label}
               </button>
             ))}
             <div style={{ flex: 1 }} />
-            <input
-              placeholder="Search..."
-              style={{ width: 220, background: 'var(--bg-1)', border: '1px solid var(--border)', borderRadius: 7, color: 'var(--text-1)', padding: '7px 9px', fontSize: 12, outline: 'none' }}
-            />
+            {mainTab === 'gallery' && (
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6, background: 'var(--bg-1)', border: '1px solid var(--border)', borderRadius: 7, padding: '0 9px' }}>
+                <Search size={13} color="var(--text-2)" />
+                <input value={gallerySearch} onChange={e => setGallerySearch(e.target.value)}
+                  placeholder="Search templates..." style={{ width: 200, background: 'none', border: 'none', color: 'var(--text-1)', padding: '7px 0', fontSize: 12, outline: 'none' }} />
+              </div>
+            )}
+            {mainTab === 'systems' && (
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6, background: 'var(--bg-1)', border: '1px solid var(--border)', borderRadius: 7, padding: '0 9px' }}>
+                <Search size={13} color="var(--text-2)" />
+                <input value={systemSearch} onChange={e => setSystemSearch(e.target.value)}
+                  placeholder="Search design systems..." style={{ width: 220, background: 'none', border: 'none', color: 'var(--text-1)', padding: '7px 0', fontSize: 12, outline: 'none' }} />
+              </div>
+            )}
           </div>
 
           <div style={{ flex: 1, overflow: 'auto', padding: '24px 22px' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 18 }}>
-              <span style={{ padding: '5px 10px', borderRadius: 999, background: 'var(--text-0)', color: 'var(--bg-0)', fontSize: 11, fontWeight: 700 }}>Recent</span>
-              <span style={{ padding: '5px 10px', borderRadius: 999, border: '1px solid var(--border)', color: 'var(--text-2)', fontSize: 11 }}>Your designs</span>
-            </div>
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(190px, 1fr))', gap: 14, marginBottom: 28 }}>
-              <button type="button" onClick={createDraft}
-                style={{ border: '1px dashed var(--border-bright)', background: 'var(--bg-1)', borderRadius: 8, minHeight: 132, color: 'var(--text-2)', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', flexDirection: 'column', gap: 8 }}>
-                <Plus size={20} />
-                <span style={{ fontSize: 12, fontWeight: 700 }}>New sketch</span>
-              </button>
-              {projects.map(p => (
-                <div
-                  key={p.id}
-                  style={{ borderRadius: 8, border: `1px solid ${hoveredId === p.id ? 'var(--accent)' : 'var(--border)'}`, background: 'var(--bg-1)', overflow: 'hidden', cursor: 'pointer', boxShadow: hoveredId === p.id ? '0 12px 40px rgba(0,0,0,0.22)' : 'none' }}
-                  onMouseEnter={() => setHoveredId(p.id)}
-                  onMouseLeave={() => setHoveredId(null)}
-                  onClick={() => onOpen(p.id)}
-                >
-                  <div style={{ height: 88, background: 'linear-gradient(135deg, var(--bg-2), var(--bg-3))', display: 'grid', placeItems: 'center' }}>
-                    <div style={{ width: 38, height: 42, borderRadius: 5, background: 'var(--bg-0)', border: '1px solid var(--border)', boxShadow: '0 8px 24px rgba(0,0,0,0.22)' }} />
-                  </div>
-                  <div style={{ padding: '9px 10px' }}>
-                    <div style={{ fontWeight: 700, fontSize: 12, color: 'var(--text-0)', marginBottom: 3, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{p.name}</div>
-                    <div style={{ fontSize: 10, color: 'var(--text-2)' }}>Updated {new Date(p.updatedAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}</div>
-                    <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 7 }}>
-                      {confirmDelete === p.id ? (
-                        <>
-                          <button type="button" onClick={e => { e.stopPropagation(); onDelete(p.id); setConfirmDelete(null) }} style={{ fontSize: 10, padding: '2px 6px', borderRadius: 4, border: 'none', background: '#ff4040', color: '#fff', cursor: 'pointer' }}>Delete</button>
-                          <button type="button" onClick={e => { e.stopPropagation(); setConfirmDelete(null) }} style={{ fontSize: 10, padding: '2px 6px', borderRadius: 4, border: 'none', background: 'transparent', color: 'var(--text-2)', cursor: 'pointer' }}>Cancel</button>
-                        </>
-                      ) : (
-                        <button type="button" onClick={e => { e.stopPropagation(); setConfirmDelete(p.id) }} style={{ background: 'transparent', border: 'none', color: 'var(--text-2)', cursor: 'pointer', display: 'flex', padding: 2 }} title="Delete design">
-                          <Trash2 size={12} />
-                        </button>
-                      )}
+
+            {/* â”€â”€ Designs Tab â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */}
+            {mainTab === 'designs' && (<>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(190px, 1fr))', gap: 14, marginBottom: 28 }}>
+                <button type="button" onClick={createDraft}
+                  style={{ border: '1px dashed var(--border-bright)', background: 'var(--bg-1)', borderRadius: 8, minHeight: 132, color: 'var(--text-2)', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', flexDirection: 'column', gap: 8 }}>
+                  <Plus size={20} />
+                  <span style={{ fontSize: 12, fontWeight: 700 }}>New sketch</span>
+                </button>
+                {projects.map(p => (
+                  <div
+                    key={p.id}
+                    style={{ borderRadius: 8, border: `1px solid ${hoveredId === p.id ? 'var(--accent)' : 'var(--border)'}`, background: 'var(--bg-1)', overflow: 'hidden', cursor: 'pointer', boxShadow: hoveredId === p.id ? '0 12px 40px rgba(0,0,0,0.22)' : 'none' }}
+                    onMouseEnter={() => setHoveredId(p.id)}
+                    onMouseLeave={() => setHoveredId(null)}
+                    onClick={() => onOpen(p.id)}
+                  >
+                    <div style={{ height: 88, background: 'linear-gradient(135deg, var(--bg-2), var(--bg-3))', display: 'grid', placeItems: 'center' }}>
+                      <div style={{ width: 38, height: 42, borderRadius: 5, background: 'var(--bg-0)', border: '1px solid var(--border)', boxShadow: '0 8px 24px rgba(0,0,0,0.22)' }} />
                     </div>
+                    <div style={{ padding: '9px 10px' }}>
+                      <div style={{ fontWeight: 700, fontSize: 12, color: 'var(--text-0)', marginBottom: 3, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{p.name}</div>
+                      <div style={{ fontSize: 10, color: 'var(--text-2)' }}>Updated {new Date(p.updatedAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}</div>
+                      <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 7 }}>
+                        {confirmDelete === p.id ? (
+                          <>
+                            <button type="button" onClick={e => { e.stopPropagation(); onDelete(p.id); setConfirmDelete(null) }} style={{ fontSize: 10, padding: '2px 6px', borderRadius: 4, border: 'none', background: '#ff4040', color: '#fff', cursor: 'pointer' }}>Delete</button>
+                            <button type="button" onClick={e => { e.stopPropagation(); setConfirmDelete(null) }} style={{ fontSize: 10, padding: '2px 6px', borderRadius: 4, border: 'none', background: 'transparent', color: 'var(--text-2)', cursor: 'pointer' }}>Cancel</button>
+                          </>
+                        ) : (
+                          <button type="button" onClick={e => { e.stopPropagation(); setConfirmDelete(p.id) }} style={{ background: 'transparent', border: 'none', color: 'var(--text-2)', cursor: 'pointer', display: 'flex', padding: 2 }} title="Delete design">
+                            <Trash2 size={12} />
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+              {/* â”€â”€ Design Systems header + search â”€â”€ */}
+              <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 14 }}>
+                <div style={{ fontSize: 10, letterSpacing: '0.1em', color: 'var(--text-2)', fontFamily: 'var(--font-mono)', whiteSpace: 'nowrap' }}>
+                  ALL DESIGN SYSTEMS â€” {allPresets.length} systems
+                </div>
+                <div style={{ flex: 1, display: 'flex', alignItems: 'center', gap: 7, background: 'var(--bg-2)', border: '1px solid var(--border)', borderRadius: 8, padding: '0 10px', height: 32 }}>
+                  <Search size={12} color="var(--text-2)" style={{ flexShrink: 0 }} />
+                  <input
+                    value={dsSearch}
+                    onChange={e => setDsSearch(e.target.value)}
+                    placeholder="Search by name or categoryâ€¦"
+                    style={{ flex: 1, background: 'none', border: 'none', outline: 'none', color: 'var(--text-0)', fontSize: 12, fontFamily: 'inherit' }}
+                  />
+                  {dsSearch && (
+                    <button type="button" onClick={() => setDsSearch('')}
+                      style={{ background: 'none', border: 'none', color: 'var(--text-2)', cursor: 'pointer', display: 'flex', padding: 0, lineHeight: 1 }}>âœ•</button>
+                  )}
+                </div>
+                {dsSearch && (
+                  <span style={{ fontSize: 11, color: 'var(--text-2)', whiteSpace: 'nowrap', flexShrink: 0 }}>
+                    {totalFilteredCount} result{totalFilteredCount !== 1 ? 's' : ''}
+                  </span>
+                )}
+              </div>
+
+              {/* â”€â”€ No results â”€â”€ */}
+              {groupedPresets.length === 0 && (
+                <div style={{ textAlign: 'center', padding: '40px 0', color: 'var(--text-2)' }}>
+                  <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 4 }}>No design systems match "{dsSearch}"</div>
+                  <div style={{ fontSize: 11 }}>Try searching by name (e.g. "Stripe") or category (e.g. "Fintech")</div>
+                </div>
+              )}
+
+              {/* â”€â”€ Grouped sections â”€â”€ */}
+              {groupedPresets.map(group => (
+                <div key={group.category} style={{ marginBottom: 28 }}>
+                  {/* Category heading */}
+                  <div style={{
+                    display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10,
+                  }}>
+                    <span style={{
+                      fontSize: 10, fontWeight: 700, letterSpacing: '0.1em',
+                      textTransform: 'uppercase', color: 'var(--text-2)',
+                      fontFamily: 'var(--font-mono)',
+                    }}>
+                      {group.category}
+                    </span>
+                    <span style={{
+                      fontSize: 10, color: 'var(--text-2)',
+                      background: 'var(--bg-2)', border: '1px solid var(--border)',
+                      borderRadius: 999, padding: '1px 7px',
+                    }}>
+                      {group.presets.length}
+                    </span>
+                    <span style={{ flex: 1, height: 1, background: 'var(--border)' }} />
+                  </div>
+
+                  {/* Preset cards */}
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(210px, 1fr))', gap: 8 }}>
+                    {group.presets.map(preset => {
+                      const logo = preset.logoUrl || PRESET_LOGOS[preset.id]
+                      const isUser = (preset as UserDesignPreset).isUserDefined
+                      return (
+                        <div key={preset.id} role="button" tabIndex={0}
+                          onClick={() => setPreviewPreset(preset)}
+                          onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setPreviewPreset(preset) } }}
+                          title={`Preview ${preset.label}`}
+                          style={{
+                            textAlign: 'left',
+                            border: `1px solid ${presetId === preset.id ? 'var(--accent)' : 'var(--border)'}`,
+                            background: presetId === preset.id ? 'var(--accent-dim)' : 'var(--bg-1)',
+                            borderRadius: 8, padding: 10, color: 'var(--text-1)',
+                            cursor: 'pointer', display: 'flex', gap: 9, alignItems: 'center',
+                          }}>
+                          {logo ? (
+                            <img src={logo} alt={preset.label} width={34} height={34}
+                              style={{ borderRadius: 7, border: '1px solid var(--border)', flexShrink: 0, objectFit: 'cover', background: 'var(--bg-2)' }}
+                              onError={(e) => { (e.target as HTMLImageElement).style.display = 'none' }}
+                            />
+                          ) : (
+                            <span style={{ width: 34, height: 34, display: 'grid', gridTemplateColumns: '1fr 1fr', borderRadius: 7, overflow: 'hidden', border: '1px solid var(--border)', flexShrink: 0 }}>
+                              {preset.colors.slice(0, 4).map((color, index) => <span key={`${color}-${index}`} style={{ background: color }} />)}
+                            </span>
+                          )}
+                          <span style={{ minWidth: 0, flex: 1 }}>
+                            <span style={{ display: 'block', fontSize: 12, fontWeight: 700, color: 'var(--text-0)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{preset.label}</span>
+                            <span style={{ display: 'block', fontSize: 10, color: 'var(--text-2)', marginTop: 2, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', lineHeight: 1.4 }}>{preset.summary.slice(0, 48)}{preset.summary.length > 48 ? '…' : ''}</span>
+                          </span>
+                          {isUser && (
+                            <button type="button" onClick={e => { e.stopPropagation(); removeUserSystem(preset.id); if (presetId === preset.id) setPresetId(DEFAULT_DESIGN_SYSTEM.presetId) }}
+                              title="Delete" style={{ background: 'none', border: 'none', color: 'var(--text-2)', cursor: 'pointer', padding: 2, flexShrink: 0, display: 'flex' }}>
+                              <Trash2 size={11} />
+                            </button>
+                          )}
+                          {presetId === preset.id && !isUser && (
+                            <span style={{ marginLeft: 'auto', flexShrink: 0, width: 8, height: 8, borderRadius: '50%', background: 'var(--accent)' }} />
+                          )}
+                        </div>
+                      )
+                    })}
                   </div>
                 </div>
               ))}
-            </div>
 
-            <div style={{ fontSize: 10, letterSpacing: '0.1em', color: 'var(--text-2)', fontFamily: 'var(--font-mono)', marginBottom: 10 }}>DESIGN SYSTEMS</div>
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(210px, 1fr))', gap: 10 }}>
-              {featuredPresets.map((preset) => (
-                <button
-                  key={preset.id}
-                  type="button"
-                  onClick={() => setPresetId(preset.id)}
-                  style={{
-                    textAlign: 'left',
-                    border: `1px solid ${presetId === preset.id ? 'var(--accent)' : 'var(--border)'}`,
-                    background: presetId === preset.id ? 'var(--accent-dim)' : 'var(--bg-1)',
-                    borderRadius: 8,
-                    padding: 10,
-                    color: 'var(--text-1)',
-                    cursor: 'pointer',
-                    display: 'flex',
-                    gap: 9,
-                    alignItems: 'center',
-                  }}
-                >
-                  <span style={{ width: 34, height: 34, display: 'grid', gridTemplateColumns: '1fr 1fr', borderRadius: 7, overflow: 'hidden', border: '1px solid var(--border)', flexShrink: 0 }}>
-                    {preset.colors.slice(0, 4).map((color) => <span key={color} style={{ background: color }} />)}
-                  </span>
-                  <span style={{ minWidth: 0 }}>
-                    <span style={{ display: 'block', fontSize: 12, fontWeight: 700, color: 'var(--text-0)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{preset.label}</span>
-                    <span style={{ display: 'block', fontSize: 10, color: 'var(--text-2)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{preset.category}</span>
-                  </span>
-                </button>
-              ))}
-            </div>
+              {/* URL Import section */}
+              <div style={{ marginTop: 24, padding: '16px', border: '1px dashed var(--border-bright)', borderRadius: 10, background: 'var(--bg-1)' }}>
+                <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: '0.1em', textTransform: 'uppercase', color: 'var(--text-2)', fontFamily: 'var(--font-mono)', marginBottom: 10 }}>
+                  Import from any website
+                </div>
+                <div style={{ display: 'flex', gap: 8 }}>
+                  <input
+                    value={importUrl}
+                    onChange={e => setImportUrl(e.target.value)}
+                    onKeyDown={e => { if (e.key === 'Enter') handleImportUrl() }}
+                    placeholder="https://stripe.com"
+                    style={{ flex: 1, background: 'var(--bg-2)', border: '1px solid var(--border)', borderRadius: 7, color: 'var(--text-0)', fontSize: 12, padding: '7px 10px', outline: 'none' }}
+                  />
+                  <button type="button" onClick={handleImportUrl} disabled={importing || !importUrl.trim()}
+                    style={{ background: 'var(--accent)', border: 'none', borderRadius: 7, color: '#fff', fontSize: 12, fontWeight: 700, padding: '7px 14px', cursor: importing ? 'wait' : 'pointer', opacity: importing || !importUrl.trim() ? 0.6 : 1, whiteSpace: 'nowrap' }}>
+                    {importing ? 'Extracting…' : 'Extract'}
+                  </button>
+                </div>
+                {importError && <div style={{ fontSize: 11, color: '#ef4444', marginTop: 7 }}>⚠ {importError}</div>}
+                {importResult && (
+                  <div style={{ marginTop: 10, padding: 10, background: 'var(--bg-2)', borderRadius: 8, border: '1px solid var(--border)' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+                      {importResult.logoUrl && <img src={importResult.logoUrl} alt="" width={24} height={24} style={{ borderRadius: 5 }} />}
+                      <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--text-0)' }}>{importResult.label}</span>
+                      <span style={{ fontSize: 10, color: 'var(--text-2)', flex: 1 }}>{importResult.summary.slice(0, 60)}…</span>
+                    </div>
+                    <div style={{ display: 'flex', gap: 3, marginBottom: 8 }}>
+                      {importResult.colors.map((c, index) => <span key={`${c}-${index}`} title={c} style={{ height: 12, flex: 1, borderRadius: 3, background: c, border: '1px solid var(--border)' }} />)}
+                    </div>
+                    <div style={{ display: 'flex', gap: 6 }}>
+                      <button type="button" onClick={() => setPreviewPreset(importResult)}
+                        style={{ flex: 1, background: 'var(--bg-3)', border: '1px solid var(--border)', borderRadius: 6, color: 'var(--text-1)', fontSize: 11, fontWeight: 600, padding: '5px 0', cursor: 'pointer' }}>
+                        Preview
+                      </button>
+                      <button type="button" onClick={() => { saveUserSystem(importResult); setPresetId(importResult.id); setImportResult(null); setImportUrl('') }}
+                        style={{ flex: 1, background: 'var(--accent)', border: 'none', borderRadius: 6, color: '#fff', fontSize: 11, fontWeight: 700, padding: '5px 0', cursor: 'pointer' }}>
+                        Use System
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            </>)}
+
+            {/* â”€â”€ Prompt Gallery Tab â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */}
+            {mainTab === 'gallery' && (<>
+              <div style={{ display: 'flex', gap: 8, marginBottom: 20, flexWrap: 'wrap' }}>
+                {GALLERY_CATEGORIES.map(cat => (
+                  <button key={cat.id} type="button" onClick={() => setGalleryCategory(cat.id)}
+                    style={{ display: 'flex', alignItems: 'center', gap: 5, padding: '5px 12px', borderRadius: 999, border: `1px solid ${galleryCategory === cat.id ? 'var(--accent)' : 'var(--border)'}`, background: galleryCategory === cat.id ? 'var(--accent-dim)' : 'var(--bg-1)', color: galleryCategory === cat.id ? 'var(--accent)' : 'var(--text-2)', fontSize: 11, fontWeight: 600, cursor: 'pointer' }}>
+                    {cat.label}
+                  </button>
+                ))}
+                <div style={{ marginLeft: 'auto', fontSize: 11, color: 'var(--text-2)', display: 'flex', alignItems: 'center' }}>
+                  {filteredGallery.length} template{filteredGallery.length !== 1 ? 's' : ''}
+                </div>
+              </div>
+              {filteredGallery.length === 0 ? (
+                <div style={{ textAlign: 'center', padding: '60px 0', color: 'var(--text-2)' }}>
+                  <Search size={32} style={{ opacity: 0.3, marginBottom: 12 }} />
+                  <div style={{ fontSize: 14, fontWeight: 600 }}>No templates match</div>
+                  <div style={{ fontSize: 12, marginTop: 4 }}>Try a different search or category</div>
+                </div>
+              ) : (
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(240px, 1fr))', gap: 12 }}>
+                  {filteredGallery.map(template => {
+                    const accent = galleryColorMap[template.category]
+                    return (
+                      <div key={template.id}
+                        style={{ border: '1px solid var(--border)', borderRadius: 10, background: 'var(--bg-1)', overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
+                        <div style={{ height: 64, background: `linear-gradient(135deg, ${accent}22, ${accent}11)`, display: 'flex', alignItems: 'center', justifyContent: 'center', borderBottom: '1px solid var(--border)' }}>
+                          <span style={{ width: 36, height: 36, borderRadius: 10, background: accent, display: 'grid', placeItems: 'center', color: '#fff' }}>
+                            {galleryIconMap[template.category]}
+                          </span>
+                        </div>
+                        <div style={{ padding: '12px 14px', flex: 1 }}>
+                          <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-0)', marginBottom: 3 }}>{template.title}</div>
+                          <div style={{ fontSize: 11, color: 'var(--text-2)', lineHeight: 1.4, marginBottom: 8 }}>{template.description}</div>
+                          <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', marginBottom: 10 }}>
+                            {template.tags.map(tag => (
+                              <span key={tag} style={{ fontSize: 10, padding: '2px 7px', borderRadius: 999, background: 'var(--bg-2)', color: 'var(--text-2)' }}>{tag}</span>
+                            ))}
+                          </div>
+                        </div>
+                        <div style={{ padding: '10px 14px', borderTop: '1px solid var(--border)', display: 'flex', gap: 6 }}>
+                          <button type="button"
+                            onClick={() => {
+                              const draft = { name: template.title, mode: (template.category === 'deck' ? 'deck' : template.category === 'motion' || template.category === 'video' ? 'motion' : 'web') as DesignMode, presetId, fidelity }
+                              onCreate(draft)
+                            }}
+                            style={{ flex: 1, padding: '6px 10px', border: 'none', borderRadius: 7, background: 'var(--accent)', color: '#fff', fontSize: 11, fontWeight: 700, cursor: 'pointer' }}>
+                            Use Template
+                          </button>
+                          <button type="button"
+                            title="Copy prompt"
+                            onClick={() => navigator.clipboard.writeText(template.prompt)}
+                            style={{ padding: '6px 10px', border: '1px solid var(--border)', borderRadius: 7, background: 'var(--bg-2)', color: 'var(--text-2)', fontSize: 11, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 4 }}>
+                            <Copy size={12} /> Copy
+                          </button>
+                        </div>
+                      </div>
+                    )
+                  })}
+                </div>
+              )}
+            </>)}
+
+            {/* â”€â”€ Design Systems Tab â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */}
+            {mainTab === 'systems' && (<>
+              <div style={{ fontSize: 11, color: 'var(--text-2)', marginBottom: 16 }}>
+                {filteredSystems.length} design system{filteredSystems.length !== 1 ? 's' : ''} â€” click any to select it for new designs
+              </div>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(240px, 1fr))', gap: 10 }}>
+                {filteredSystems.map((preset) => {
+                  const logo = preset.logoUrl || PRESET_LOGOS[preset.id]
+                  const isUser = (preset as UserDesignPreset).isUserDefined
+                  return (
+                    <div key={preset.id} role="button" tabIndex={0}
+                      onClick={() => setPreviewPreset(preset)}
+                      onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setPreviewPreset(preset) } }}
+                      title={`Preview ${preset.label}`}
+                      style={{ textAlign: 'left', border: `1px solid ${presetId === preset.id ? 'var(--accent)' : 'var(--border)'}`, background: presetId === preset.id ? 'var(--accent-dim)' : 'var(--bg-1)', borderRadius: 8, padding: 12, color: 'var(--text-1)', cursor: 'pointer' }}>
+                      <div style={{ display: 'flex', gap: 10, alignItems: 'center', marginBottom: 8 }}>
+                        {logo ? (
+                          <img src={logo} alt={preset.label} width={36} height={36}
+                            style={{ borderRadius: 7, border: '1px solid var(--border)', flexShrink: 0, objectFit: 'cover', background: 'var(--bg-2)' }}
+                            onError={(e) => { (e.target as HTMLImageElement).style.display = 'none' }}
+                          />
+                        ) : (
+                          <span style={{ width: 36, height: 36, display: 'grid', gridTemplateColumns: '1fr 1fr', borderRadius: 7, overflow: 'hidden', border: '1px solid var(--border)', flexShrink: 0 }}>
+                            {preset.colors.slice(0, 4).map((color, index) => <span key={`${color}-${index}`} style={{ background: color }} />)}
+                          </span>
+                        )}
+                        <span style={{ minWidth: 0, flex: 1 }}>
+                          <span style={{ display: 'block', fontSize: 13, fontWeight: 700, color: 'var(--text-0)' }}>{preset.label}</span>
+                          <span style={{ display: 'inline-block', fontSize: 10, color: 'var(--text-2)', padding: '2px 6px', borderRadius: 999, background: 'var(--bg-2)', marginTop: 2 }}>{preset.category}</span>
+                        </span>
+                        {isUser && (
+                          <button type="button" onClick={e => { e.stopPropagation(); removeUserSystem(preset.id); if (presetId === preset.id) setPresetId(DEFAULT_DESIGN_SYSTEM.presetId) }}
+                            title="Delete" style={{ background: 'none', border: 'none', color: 'var(--text-2)', cursor: 'pointer', padding: 2, flexShrink: 0, display: 'flex' }}>
+                            <Trash2 size={11} />
+                          </button>
+                        )}
+                      </div>
+                      <div style={{ fontSize: 11, color: 'var(--text-2)', lineHeight: 1.45 }}>{preset.summary}</div>
+                    </div>
+                  )
+                })}
+              </div>
+            </>)}
+
           </div>
         </main>
       </div>
+
+      {/* Design System Preview Modal */}
+      {previewPreset && (
+        <DesignSystemPreviewModal
+          preset={previewPreset}
+          onClose={() => setPreviewPreset(null)}
+          onSelect={() => {
+            setPresetId(previewPreset.id)
+            setPreviewPreset(null)
+          }}
+        />
+      )}
     </div>
   )
 }
@@ -2296,11 +3192,14 @@ export function DesignStudio({ onClose }: Props) {
   const [leftPanelTab, setLeftPanelTab] = useState<'sessions' | 'files'>('files')
   const [isRenamingProject, setIsRenamingProject] = useState(false)
   const [projectRenameInput, setProjectRenameInput] = useState('')
-  const [planItems, setPlanItems] = useState<{ id: string; text: string; done: boolean }[]>([])
+  const [, setPlanItems] = useState<{ id: string; text: string; done: boolean }[]>([])
   const [expandedArtifacts, setExpandedArtifacts] = useState<Record<string, boolean>>({})
   const [isEditingCode, setIsEditingCode] = useState(false)
   const [designSystem, setDesignSystem] = useState<DesignSystemConfig>(DEFAULT_DESIGN_SYSTEM)
+  const [designSystemDoc, setDesignSystemDoc] = useState<string>('')
   const [showDesignSystem, setShowDesignSystem] = useState(false)
+  const { systems: designPanelUserSystems } = useUserDesignSystems()
+  const designPanelPresets = useMemo(() => allDesignSystemPresets(designPanelUserSystems), [designPanelUserSystems])
   const messagesRef = useRef(messages)
   messagesRef.current = messages
   const filesRef = useRef(files)
@@ -2308,7 +3207,7 @@ export function DesignStudio({ onClose }: Props) {
 
   const messagesEndRef = useRef<HTMLDivElement>(null)
 
-  // ── Project callbacks ───────────────────────────────────────────────────────
+  // â”€â”€ Project callbacks â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   const applyProject = useCallback((project: DesignProject) => {
     setActiveProjectId(project.id)
     setProjectName(project.name)
@@ -2408,7 +3307,7 @@ export function DesignStudio({ onClose }: Props) {
     const projects = listProjectSummaries()
     setAllProjects(projects)
     setHydrated(true)
-    // Do NOT auto-open last project — show project picker instead
+    // Do NOT auto-open last project â€” show project picker instead
   }, [applyProject])
 
   useEffect(() => {
@@ -2451,6 +3350,18 @@ export function DesignStudio({ onClose }: Props) {
     return () => { abortRef.current?.abort() }
   }, [])
 
+  // Fetch design system MD doc when preset changes
+  useEffect(() => {
+    const id = designSystem.presetId
+    if (!id) { setDesignSystemDoc(''); return }
+    let cancelled = false
+    fetch(`/api/design/system-doc/${encodeURIComponent(id)}`, { headers: buildApiHeaders() })
+      .then(r => r.ok ? r.json() : null)
+      .then((d: { content?: string } | null) => { if (!cancelled && d?.content) setDesignSystemDoc(d.content) })
+      .catch(() => { /* no doc available */ })
+    return () => { cancelled = true }
+  }, [designSystem.presetId])
+
   // Fullscreen API
   useEffect(() => {
     const handler = () => setIsFullscreen(!!document.fullscreenElement)
@@ -2479,43 +3390,55 @@ export function DesignStudio({ onClose }: Props) {
     setInput('')
 
     const isFirst = messagesRef.current.length === 0
+    const DESIGN_OUTPUT_RULES = `OUTPUT CONTRACT — MANDATORY FOR EVERY RESPONSE:
+- NEVER call tools. NEVER generate <invoke>, <tool_call>, <minimax:tool_call>, or ANY XML/JSON tool-call markup.
+- NEVER write files to disk. NEVER use artifact fences.
+- Output HTML in \`\`\`html index.html fenced code blocks with ALL CSS in <style> tags and ALL JS in <script> tags.
+- You may also output separate \`\`\`css styles.css and \`\`\`js script.js fenced blocks.
+- A response with no fenced code block is INVALID. Output the code directly — no preamble, no explanation after the code.
+- Designs must be visually distinctive, pixel-perfect, accessible, and fully responsive with real copy (no lorem ipsum).`
+
     const prefix = isFirst
       ? `You are Kodo Design Studio, an expert product designer, UX strategist, motion designer, and front-end craftsperson. Your goal is to produce original, production-quality visual work that does not look AI-generated.
 
-RESPONSE FORMAT - follow this exactly:
+RESPONSE FORMAT — follow this exactly:
+
 ## Plan
-1. [Specific component or section you will build]
-2. [Next component]
-(3-8 items, each concrete and descriptive - e.g. "Sticky nav with logo, links, and CTA button")
 
-Then output all code files immediately after the plan.
+**Goal:** [One sentence: what will be built]
 
-RULES:
-- Output HTML in \`\`\`html index.html code blocks. Embed all CSS inside <style> tags and all JS inside <script> tags.
-- You may also output separate \`\`\`css styles.css and \`\`\`js script.js blocks.
-- Never reference external files that are not included in your response.
-- Designs must be visually distinctive, modern, pixel-perfect, accessible, and fully responsive.
-- Use real placeholder content (no "Lorem ipsum"). Write realistic copy for the industry/use-case.
-- Animations and micro-interactions are encouraged only when they improve comprehension or perceived quality.
-- After the plan, output ONLY code blocks — no prose, no explanations, no commentary.
-- Do NOT write markdown text between code blocks.
+### Steps
+- [ ] **[Component/Section]** — [Specific description of what you will build]
+- [ ] **[Next component]** — [Specific description]
+(4-10 steps, each concrete and descriptive — e.g. “- [ ] **Hero section** — Full-bleed dark canvas with 80px headline, sub-headline, and two pill CTAs”)
+
+Then output ALL code files immediately after the plan. Stopping after the plan is INVALID.
+
+${DESIGN_OUTPUT_RULES}
+- After the plan, output ONLY code blocks — no prose, no explanations, no commentary between blocks.
 
 `
-      : ''
+      : `REMINDER — ${DESIGN_OUTPUT_RULES}
+
+`
 
     const contextSections: string[] = [buildKodoDesignModePrompt(designMode)]
     if (projectContext.trim()) {
-      contextSections.push(`Project context:\n${projectContext.trim()}`)
+      contextSections.push(`Project context:\n${truncateText(projectContext.trim(), 1200)}`)
     }
     const dsPrompt = buildDesignSystemPrompt(designSystem)
     if (dsPrompt) contextSections.push(dsPrompt)
+
+    if (designSystemDoc.trim()) {
+              contextSections.push(`Design system reference documentation:\n${truncateText(designSystemDoc.trim(), 12000)}`)
+    }
 
     const textAssets = assets
       .filter((asset) => Boolean(asset.textContent && asset.textContent.trim()))
       .slice(0, 4)
     if (textAssets.length > 0) {
       const assetSummary = textAssets
-        .map((asset) => `--- ${asset.name} ---\n${String(asset.textContent || '').slice(0, 5000)}`)
+        .map((asset) => `--- ${asset.name} ---\n${truncateText(String(asset.textContent || ''), MAX_CHAT_ASSET_CHARS)}`)
         .join('\n\n')
       contextSections.push(`Attached codebase and design context:\n${assetSummary}`)
     }
@@ -2532,11 +3455,7 @@ RULES:
       )
     }
 
-    const fullMsg = [
-      contextSections.length > 0 ? `${contextSections.join('\n\n')}\n\n` : '',
-      prefix,
-      trimmed,
-    ].join('')
+    const fullMsg = buildChatMessagePayload(contextSections, prefix, trimmed)
 
     const uid = genId()
     const aid = genId()
@@ -2571,13 +3490,21 @@ RULES:
       const res = await fetch(`${API}/send`, {
         method: 'POST',
         headers: buildApiHeaders({ 'Content-Type': 'application/json' }),
-        body: JSON.stringify({ session_id: sid, message: fullMsg, project_dir: null, mode: 'execute', artifact_mode: true }),
+        body: JSON.stringify({
+          session_id: sid,
+          message: fullMsg,
+          project_dir: null,
+          mode: 'execute',
+          artifact_mode: false,
+          disable_tools: true,
+          max_tokens: DESIGN_GENERATION_MAX_TOKENS,
+        }),
         signal: ctrl.signal,
       })
 
       if (!res.ok) {
         let detail = `${res.status} ${res.statusText}`
-        try { const d = await res.json(); detail = d.detail || detail } catch { /* */ }
+        try { const d = await res.json(); detail = formatApiErrorDetail(d.detail, detail) } catch { /* */ }
         throw new Error(detail)
       }
       if (!res.body) throw new Error('No response body')
@@ -2585,6 +3512,8 @@ RULES:
       const reader = res.body.getReader()
       const decoder = new TextDecoder()
       let buf = '', acc = ''
+      // Track code block openings to progressively tick plan checkboxes
+      let openCodeBlocks = 0
 
       while (true) {
         const { done, value } = await reader.read()
@@ -2595,16 +3524,34 @@ RULES:
           if (!line.startsWith('data: ')) continue
           const raw = line.slice(6).trim()
           if (!raw) continue
+          let ev: Record<string, unknown>
           try {
-            const ev = JSON.parse(raw)
-            if (applyToolStartEventToDesignFiles(ev, toolDerivedFiles)) {
-              sawToolFileMutation = true
-            }
-            if (ev.type === 'text') {
-              acc += String(ev.content || '')
-              setMessages(prev => prev.map(m => m.id === aid ? { ...m, content: acc } : m))
-            }
-          } catch { /* */ }
+            ev = JSON.parse(raw) as Record<string, unknown>
+          } catch {
+            continue
+          }
+
+          if (ev.type === 'error') {
+            throw new Error(streamErrorMessage(ev))
+          }
+
+          if (ev.type === 'todo_plan' || ev.type === 'todo_update') {
+            const nextPlanItems = planItemsFromTodos(ev.todos)
+            if (nextPlanItems.length > 0) setPlanItems(nextPlanItems)
+          }
+
+          if (applyToolStartEventToDesignFiles(ev, toolDerivedFiles)) {
+            sawToolFileMutation = true
+          }
+          const textDelta = textFromStreamEvent(ev)
+          if (textDelta) {
+            acc += textDelta
+            // Count new code fence openings (``` + word) in this delta — each = one plan step starting
+            openCodeBlocks += (textDelta.match(/^```[a-zA-Z]/gm) || []).length
+            // Progressively tick plan checkboxes as code blocks appear
+            const displayContent = openCodeBlocks > 0 ? tickCheckboxesInText(acc, openCodeBlocks) : acc
+            setMessages(prev => prev.map(m => m.id === aid ? { ...m, content: displayContent } : m))
+          }
         }
       }
 
@@ -2641,27 +3588,31 @@ RULES:
           timestamp: Date.now(),
           label: `Generation ${prev.length + 1}`,
         }])
-        setMessages(prev => prev.map(m => m.id === aid ? { ...m, files: resolvedFiles } : m))
-        // Mark all plan items done when files are generated
+        // Tick all checkboxes in the final message content — all steps done
+        const fullyTickedContent = tickCheckboxesInText(acc, Infinity)
+        setMessages(prev => prev.map(m => m.id === aid ? { ...m, content: fullyTickedContent, files: resolvedFiles } : m))
         setPlanItems(prev => prev.map(item => ({ ...item, done: true })))
       } else if (acc.trim()) {
-        // No code blocks found — show raw response as a fallback text file so
+        // No code blocks found â€” show raw response as a fallback text file so
         // the user can see what the model actually returned
         const fallback: DesignFile = { id: genId(), name: 'response.txt', language: 'text', content: acc }
         setFiles([fallback])
         setSelectedFileId(fallback.id)
         setViewMode('code')
+        setError('The model returned text but no website/app code files. Try again; Kodo now enforces direct fenced-code output more strongly.')
+      } else {
+        throw new Error('No model response was returned. Check the active model/provider settings and try again.')
       }
     } catch (e: unknown) {
       if (e instanceof Error && e.name === 'AbortError') return
-      const msg = String(e)
+      const msg = e instanceof Error ? e.message : String(e)
       setError(msg)
       setMessages(prev => prev.map(m => m.id === aid ? { ...m, content: `Error: ${msg}`, isStreaming: false } : m))
     } finally {
       setMessages(prev => prev.map(m => m.id === aid ? { ...m, isStreaming: false } : m))
       setIsLoading(false)
     }
-  }, [assets, designMode, designSystem, inlineComments, isLoading, projectContext, sessionId, shareAccess])
+  }, [assets, designMode, designSystem, designSystemDoc, inlineComments, isLoading, projectContext, sessionId, shareAccess])
 
   const handleVisualEditorSourceChange = useCallback((payload: VisualEditorSourcePayload) => {
     // Strip injected harness script so it isn't double-injected on reload
@@ -2859,8 +3810,8 @@ RULES:
   const canEdit = shareAccess === 'edit'
   const canComment = shareAccess !== 'view'
   const activePreset = useMemo(
-    () => DESIGN_SYSTEM_PRESETS.find((preset) => preset.id === designSystem.presetId) || DESIGN_SYSTEM_PRESETS[0],
-    [designSystem.presetId],
+    () => designPanelPresets.find((preset) => preset.id === designSystem.presetId) || DESIGN_SYSTEM_PRESETS[0],
+    [designPanelPresets, designSystem.presetId],
   )
   const updateDesignSystem = useCallback((patch: Partial<DesignSystemConfig>) => {
     setDesignSystem((prev) => {
@@ -2932,13 +3883,32 @@ RULES:
     let codeIndex = 0
 
     while ((match = re.exec(content)) !== null) {
-      // Text before this code block
+      // Text before this code block — rendered with full markdown
       const before = content.slice(last, match.index).trim()
       if (before) {
         parts.push(
-          <span key={`text-${match.index}`} style={{ whiteSpace: 'pre-wrap', display: 'block', marginBottom: 6 }}>
-            {before}
-          </span>
+          <div key={`text-${match.index}`} style={{ marginBottom: 6 }} className="ds-md">
+            <ReactMarkdown
+              remarkPlugins={[remarkGfm]}
+              components={{
+                p: ({ children }) => <p style={{ margin: '0 0 6px', lineHeight: 1.6 }}>{children}</p>,
+                h1: ({ children }) => <h1 style={{ fontSize: 14, fontWeight: 700, margin: '8px 0 4px', color: 'var(--text-0)' }}>{children}</h1>,
+                h2: ({ children }) => <h2 style={{ fontSize: 13, fontWeight: 700, margin: '8px 0 4px', color: 'var(--text-0)' }}>{children}</h2>,
+                h3: ({ children }) => <h3 style={{ fontSize: 12, fontWeight: 600, margin: '6px 0 3px', color: 'var(--text-0)' }}>{children}</h3>,
+                strong: ({ children }) => <strong style={{ fontWeight: 700, color: 'var(--text-0)' }}>{children}</strong>,
+                em: ({ children }) => <em style={{ fontStyle: 'italic' }}>{children}</em>,
+                code: ({ children }) => <code style={{ fontFamily: 'var(--font-mono)', fontSize: 10, background: 'var(--bg-3)', border: '1px solid var(--border)', borderRadius: 3, padding: '1px 4px' }}>{children}</code>,
+                ul: ({ children }) => <ul style={{ margin: '4px 0', paddingLeft: 18 }}>{children}</ul>,
+                ol: ({ children }) => <ol style={{ margin: '4px 0', paddingLeft: 18 }}>{children}</ol>,
+                li: ({ children }) => <li style={{ margin: '2px 0', lineHeight: 1.55 }}>{children}</li>,
+                input: ({ checked }) => <input type="checkbox" checked={checked} readOnly style={{ marginRight: 5, accentColor: 'var(--accent)' }} />,
+                blockquote: ({ children }) => <blockquote style={{ borderLeft: '3px solid var(--border)', margin: '4px 0', paddingLeft: 10, color: 'var(--text-2)', fontStyle: 'italic' }}>{children}</blockquote>,
+                hr: () => <hr style={{ border: 'none', borderTop: '1px solid var(--border)', margin: '8px 0' }} />,
+              }}
+            >
+              {before}
+            </ReactMarkdown>
+          </div>
         )
       }
 
@@ -2947,9 +3917,11 @@ RULES:
       const lineCount = code.split('\n').length
       // Infer filename from fence info
       const infoTokens = info.split(/\s+/)
-      const lang = infoTokens[0] || 'text'
+      const lang = infoTokens[0] || (looksLikeHtmlDocument(code) ? 'html' : 'text')
       const possibleName = infoTokens[1] || ''
-      const fileName = possibleName && /\.\w+$/.test(possibleName) ? possibleName : `${lang || 'code'}.${LANG_EXT[lang] || lang || 'txt'}`
+      const fileName = possibleName && /\.\w+$/.test(possibleName)
+        ? possibleName
+        : (lang === 'html' ? 'index.html' : `${lang || 'code'}.${LANG_EXT[lang] || lang || 'txt'}`)
       const artifactKey = `${msg.id}-${codeIndex}`
       const isExpanded = expandedArtifacts[artifactKey] ?? false
 
@@ -2998,7 +3970,10 @@ RULES:
       const partialLangMatch = tail.match(/```([^\n`]*)/)
       const partialInfo = partialLangMatch ? partialLangMatch[1].trim() : ''
       const partialTokens = partialInfo.split(/\s+/)
-      const partialName = partialTokens[1] && /\.\w+$/.test(partialTokens[1]) ? partialTokens[1] : (partialTokens[0] ? `${partialTokens[0]}.${LANG_EXT[partialTokens[0]] || partialTokens[0]}` : 'code')
+      const partialLang = (partialTokens[0] || '').toLowerCase()
+      const partialName = partialTokens[1] && /\.\w+$/.test(partialTokens[1])
+        ? partialTokens[1]
+        : (partialLang === 'html' ? 'index.html' : (partialLang ? `${partialLang}.${LANG_EXT[partialLang] || partialLang}` : 'code'))
       parts.push(
         <div key="streaming-artifact" style={{
           background: 'var(--bg-3)', border: '1px solid var(--border)',
@@ -3007,12 +3982,31 @@ RULES:
           fontSize: 11, fontFamily: 'var(--font-mono)', color: 'var(--accent)',
         }}>
           <Loader size={11} style={{ animation: 'spin 1s linear infinite', flexShrink: 0 }} />
-          Building {partialName}…
+          Building {partialName}â€¦
         </div>
       )
     } else if (tail) {
       parts.push(
-        <span key="tail" style={{ whiteSpace: 'pre-wrap', display: 'block' }}>{tail}</span>
+        <div key="tail" style={{ marginTop: 4 }} className="ds-md">
+          <ReactMarkdown
+            remarkPlugins={[remarkGfm]}
+            components={{
+              p: ({ children }) => <p style={{ margin: '0 0 6px', lineHeight: 1.6 }}>{children}</p>,
+              h1: ({ children }) => <h1 style={{ fontSize: 14, fontWeight: 700, margin: '8px 0 4px' }}>{children}</h1>,
+              h2: ({ children }) => <h2 style={{ fontSize: 13, fontWeight: 700, margin: '8px 0 4px' }}>{children}</h2>,
+              h3: ({ children }) => <h3 style={{ fontSize: 12, fontWeight: 600, margin: '6px 0 3px' }}>{children}</h3>,
+              strong: ({ children }) => <strong style={{ fontWeight: 700, color: 'var(--text-0)' }}>{children}</strong>,
+              em: ({ children }) => <em style={{ fontStyle: 'italic' }}>{children}</em>,
+              code: ({ children }) => <code style={{ fontFamily: 'var(--font-mono)', fontSize: 10, background: 'var(--bg-3)', border: '1px solid var(--border)', borderRadius: 3, padding: '1px 4px' }}>{children}</code>,
+              ul: ({ children }) => <ul style={{ margin: '4px 0', paddingLeft: 18 }}>{children}</ul>,
+              ol: ({ children }) => <ol style={{ margin: '4px 0', paddingLeft: 18 }}>{children}</ol>,
+              li: ({ children }) => <li style={{ margin: '2px 0', lineHeight: 1.55 }}>{children}</li>,
+              input: ({ checked }) => <input type="checkbox" checked={checked} readOnly style={{ marginRight: 5, accentColor: 'var(--accent)' }} />,
+            }}
+          >
+            {tail}
+          </ReactMarkdown>
+        </div>
       )
     }
 
@@ -3219,7 +4213,7 @@ RULES:
     })
   }
 
-  // ── Styles ─────────────────────────────────────────────────────────────────
+  // â”€â”€ Styles â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   const btn = (active: boolean, accent = false) => ({
     display: 'flex', alignItems: 'center' as const, gap: 4,
     padding: '3px 8px', borderRadius: 5,
@@ -3230,7 +4224,7 @@ RULES:
     whiteSpace: 'nowrap' as const, flexShrink: 0 as const,
   })
 
-  // ── Render ─────────────────────────────────────────────────────────────────
+  // â”€â”€ Render â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
   // Show project picker when no active project
   if (!activeProjectId) {
@@ -3252,7 +4246,7 @@ RULES:
       background: 'var(--bg-0)', animation: 'fadeIn 0.15s ease',
     }} ref={containerRef}>
 
-      {/* ══ TOP BAR ══════════════════════════════════════════════════════════ */}
+      {/* â•â• TOP BAR â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• */}
       <div style={{
         display: 'flex', alignItems: 'center', gap: 6,
         padding: '0 12px', height: 48,
@@ -3443,10 +4437,10 @@ RULES:
         )}
       </div>
 
-      {/* ══ BODY ══════════════════════════════════════════════════════════════ */}
+      {/* â•â• BODY â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• */}
       <div style={{ flex: 1, minHeight: 0, display: 'flex', overflow: 'hidden' }}>
 
-        {/* ── FILE TREE ─────────────────────────────────────────────────────── */}
+        {/* â”€â”€ FILE TREE â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */}
         <div style={{
           order: 4,
           width: fileTreeOpen ? fileTreeW : 36,
@@ -3555,21 +4549,29 @@ RULES:
                   onChange={(event) => applyDesignSystemPreset(event.target.value)}
                   style={{ width: '100%', background: 'var(--bg-2)', border: '1px solid var(--border)', borderRadius: 4, color: 'var(--text-0)', fontSize: 10, padding: '3px 6px', outline: 'none', fontFamily: 'var(--font-mono)' }}
                 >
+                  {designPanelUserSystems.length > 0 && (
+                    <optgroup label="My Design Systems">
+                      {designPanelUserSystems.map((preset) => (
+                        <option key={preset.id} value={preset.id}>{preset.label}</option>
+                      ))}
+                    </optgroup>
+                  )}
                   {DESIGN_SYSTEM_PRESETS.map((preset) => (
                     <option key={preset.id} value={preset.id}>{preset.category} / {preset.label}</option>
                   ))}
                 </select>
                 <div style={{ display: 'flex', gap: 3, marginTop: 6 }}>
-                  {activePreset.colors.map((color) => (
-                    <span key={color} title={color} style={{ width: 18, height: 14, borderRadius: 3, background: color, border: '1px solid var(--border)', display: 'inline-block' }} />
+                  {activePreset.colors.map((color, index) => (
+                    <span key={`${color}-${index}`} title={color} style={{ width: 18, height: 14, borderRadius: 3, background: color, border: '1px solid var(--border)', display: 'inline-block' }} />
                   ))}
                 </div>
                 <div style={{ fontSize: 9, color: 'var(--text-2)', lineHeight: 1.45, marginTop: 5 }}>
                   {activePreset.summary}
                 </div>
                 <div style={{ display: 'grid', gap: 5, marginTop: 8, maxHeight: 210, overflowY: 'auto', paddingRight: 2 }}>
-                  {DESIGN_SYSTEM_PRESETS.map((preset) => {
+                  {designPanelPresets.map((preset) => {
                     const active = designSystem.presetId === preset.id
+                    const logo = preset.logoUrl || PRESET_LOGOS[preset.id]
                     return (
                       <button
                         key={preset.id}
@@ -3590,9 +4592,16 @@ RULES:
                           cursor: 'pointer',
                         }}
                       >
-                        <span style={{ width: 26, height: 26, display: 'grid', gridTemplateColumns: '1fr 1fr', borderRadius: 5, overflow: 'hidden', border: '1px solid var(--border)', flexShrink: 0 }}>
-                          {preset.colors.slice(0, 4).map((color) => <span key={color} style={{ background: color }} />)}
-                        </span>
+                        {logo ? (
+                          <img src={logo} alt={preset.label} width={26} height={26}
+                            style={{ borderRadius: 5, border: '1px solid var(--border)', flexShrink: 0, objectFit: 'cover', background: 'var(--bg-2)' }}
+                            onError={(e) => { (e.target as HTMLImageElement).style.display = 'none' }}
+                          />
+                        ) : (
+                          <span style={{ width: 26, height: 26, display: 'grid', gridTemplateColumns: '1fr 1fr', borderRadius: 5, overflow: 'hidden', border: '1px solid var(--border)', flexShrink: 0 }}>
+                            {preset.colors.slice(0, 4).map((color, index) => <span key={`${color}-${index}`} style={{ background: color }} />)}
+                          </span>
+                        )}
                         <span style={{ minWidth: 0, flex: 1 }}>
                           <span style={{ display: 'block', fontSize: 10, fontWeight: 700, color: 'var(--text-0)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{preset.label}</span>
                           <span style={{ display: 'block', fontSize: 8, color: 'var(--text-2)', fontFamily: 'var(--font-mono)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{preset.category}</span>
@@ -3615,8 +4624,8 @@ RULES:
                   ))}
                 </select>
                 <div style={{ display: 'flex', gap: 3, marginTop: 6 }}>
-                  {DESIGN_DIRECTIONS[designSystem.direction].colors.map((color) => (
-                    <span key={color} title={color} style={{ width: 18, height: 14, borderRadius: 3, background: color, border: '1px solid var(--border)', display: 'inline-block' }} />
+                  {DESIGN_DIRECTIONS[designSystem.direction].colors.map((color, index) => (
+                    <span key={`${color}-${index}`} title={color} style={{ width: 18, height: 14, borderRadius: 3, background: color, border: '1px solid var(--border)', display: 'inline-block' }} />
                   ))}
                 </div>
                 <div style={{ display: 'grid', gap: 7, marginTop: 8 }}>
@@ -3646,7 +4655,7 @@ RULES:
                           {active && <span style={{ fontSize: 8, color: '#fff', background: 'var(--accent)', borderRadius: 999, padding: '1px 5px', fontFamily: 'var(--font-mono)' }}>ON</span>}
                         </span>
                         <span style={{ display: 'flex', gap: 3 }}>
-                          {row.colors.map((color) => <span key={color} style={{ flex: 1, height: 12, borderRadius: 3, background: color, border: '1px solid var(--border)' }} />)}
+                          {row.colors.map((color, index) => <span key={`${color}-${index}`} style={{ flex: 1, height: 12, borderRadius: 3, background: color, border: '1px solid var(--border)' }} />)}
                         </span>
                         <span style={{ display: 'flex', alignItems: 'baseline', gap: 8, padding: '4px 0', borderTop: '1px solid var(--border)', borderBottom: '1px solid var(--border)' }}>
                           <span style={{ fontFamily: row.displayFont, fontSize: 22, lineHeight: 1, color: 'var(--text-0)' }}>Aa</span>
@@ -3844,7 +4853,7 @@ RULES:
                       display: 'flex', alignItems: 'center', gap: 6,
                       padding: '5px 10px', fontSize: 11, color: 'var(--text-1)', fontFamily: 'var(--font-mono)',
                     }}>
-                      <span style={{ fontSize: 13 }}>{a.type.startsWith('image/') ? '🖼' : '📎'}</span>
+                      <span style={{ fontSize: 13 }}>{a.type.startsWith('image/') ? 'ðŸ–¼' : 'ðŸ“Ž'}</span>
                       <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{a.name}</span>
                       <button type="button" onClick={() => setAssets(prev => prev.filter(x => x.id !== a.id))}
                         style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-2)', padding: 0 }}>
@@ -3870,7 +4879,7 @@ RULES:
                         fontFamily: 'var(--font-mono)',
                       }}>
                       <RotateCcw size={10} />
-                      {h.label || `v${history.length - i}`} — {new Date(h.timestamp).toLocaleTimeString()}
+                      {h.label || `v${history.length - i}`} â€” {new Date(h.timestamp).toLocaleTimeString()}
                     </div>
                   ))}
                 </>
@@ -3883,7 +4892,7 @@ RULES:
           <DragHandle order={3} handleId="file-tree" onDrag={d => setFileTreeW(w => Math.max(140, Math.min(420, w - d)))} />
         )}
 
-        {/* ── CENTER: PREVIEW / CODE ─────────────────────────────────────────── */}
+        {/* â”€â”€ CENTER: PREVIEW / CODE â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */}
         <div style={{ order: 2, flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
           {/* Center toolbar */}
           <div style={{
@@ -3907,7 +4916,7 @@ RULES:
               <span style={{ fontSize: 11, color: 'var(--text-1)', fontFamily: 'var(--font-mono)', display: 'flex', alignItems: 'center', gap: 4 }}>
                 {getFileIcon(selectedFile.name)} {selectedFile.name}
                 <span style={{ fontSize: 10, color: 'var(--text-2)' }}>
-                  · {selectedFile.content.split('\n').length} lines
+                  Â· {selectedFile.content.split('\n').length} lines
                 </span>
               </span>
             )}
@@ -3945,7 +4954,7 @@ RULES:
             }}>
               <Wand2 size={36} style={{ opacity: 0.2 }} />
               <div style={{ fontSize: 13, opacity: 0.6 }}>Preview will appear here</div>
-              <div style={{ fontSize: 11, opacity: 0.35 }}>Describe your design in the chat →</div>
+              <div style={{ fontSize: 11, opacity: 0.35 }}>Describe your design in the chat {'→'}</div>
             </div>
           ) : (
             <div style={{ flex: 1, minHeight: 0, overflow: 'hidden' }}>
@@ -4110,7 +5119,7 @@ RULES:
 
         <DragHandle order={1} handleId="chat" onDrag={d => setChatW(w => Math.max(260, Math.min(560, w + d)))} />
 
-        {/* ── RIGHT: CHAT ────────────────────────────────────────────────────── */}
+        {/* â”€â”€ RIGHT: CHAT â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */}
         <div style={{
           order: 0,
           width: chatW, flexShrink: 0,
@@ -4224,45 +5233,7 @@ RULES:
               </div>
             )}
 
-            {/* Plan checklist card */}
-            {planItems.length > 0 && (
-              <div style={{
-                marginBottom: 10, padding: '10px 12px', borderRadius: 10,
-                background: 'var(--bg-2)', border: '1px solid var(--border)',
-              }}>
-                <div style={{
-                  fontSize: 10, fontWeight: 700, letterSpacing: '0.08em',
-                  color: 'var(--accent)', fontFamily: 'var(--font-mono)', marginBottom: 8,
-                }}>
-                  BUILD PLAN
-                </div>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
-                  {planItems.map((item, i) => (
-                    <button
-                      key={item.id}
-                      type="button"
-                      onClick={() => setPlanItems(prev => prev.map(p => p.id === item.id ? { ...p, done: !p.done } : p))}
-                      style={{
-                        display: 'flex', alignItems: 'flex-start', gap: 7,
-                        background: 'none', border: 'none', cursor: 'pointer',
-                        textAlign: 'left', padding: '2px 0',
-                      }}
-                    >
-                      {item.done
-                        ? <CheckSquare size={13} color="var(--accent)" style={{ flexShrink: 0, marginTop: 1 }} />
-                        : <Square size={13} color="var(--text-2)" style={{ flexShrink: 0, marginTop: 1 }} />}
-                      <span style={{
-                        fontSize: 11, lineHeight: 1.45,
-                        color: item.done ? 'var(--text-2)' : 'var(--text-0)',
-                        textDecoration: item.done ? 'line-through' : 'none',
-                      }}>
-                        {i + 1}. {item.text}
-                      </span>
-                    </button>
-                  ))}
-                </div>
-              </div>
-            )}
+            {/* Plan checkboxes render inline in the assistant message via ReactMarkdown */}
 
             {messages.map(msg => (
               <div key={msg.id} style={{
@@ -4306,7 +5277,7 @@ RULES:
                 background: 'rgba(255,60,60,0.08)', border: '1px solid rgba(255,80,80,0.25)',
                 color: '#ff7070', fontSize: 11,
               }}>
-                ⚠ {error}
+                âš  {error}
               </div>
             )}
 
@@ -4379,7 +5350,7 @@ RULES:
                   void handleAssetUpload(dt.files)
                 }
               }}
-              placeholder="Describe your design or request changes — paste screenshots directly"
+              placeholder="Describe your design or request changes â€” paste screenshots directly"
               rows={3}
               style={{
                 width: '100%', resize: 'none', background: 'var(--bg-2)',

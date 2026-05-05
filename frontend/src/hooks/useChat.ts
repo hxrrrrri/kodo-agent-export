@@ -165,6 +165,15 @@ function detectCategory(title: string): TodoItem['category'] | undefined {
   return undefined
 }
 
+/** Tick the first `count` unchecked `- [ ]` boxes in markdown text to `- [x]`. */
+function tickMdCheckboxes(text: string, count: number): string {
+  let n = 0
+  return text.replace(/- \[ \] /g, () => {
+    n++
+    return n <= count ? '- [x] ' : '- [ ] '
+  })
+}
+
 function normalizeTodoItems(value: unknown): TodoItem[] | undefined {
   if (!Array.isArray(value)) return undefined
 
@@ -431,8 +440,8 @@ function persistArtifact(sessionId: string, artifact: {
   })
 }
 
-function ingestArtifactsV2(content: string): ArtifactRef[] {
-  const { artifacts } = parseArtifacts(content)
+function ingestArtifactsV2(content: string, allowIncomplete = false): ArtifactRef[] {
+  const { artifacts } = parseArtifacts(content, { allowIncomplete })
   if (artifacts.length === 0) return []
   const store = useChatStore.getState()
   const sessionId = store.sessionId || ''
@@ -445,6 +454,19 @@ function ingestArtifactsV2(content: string): ArtifactRef[] {
     }
   }
   return refs
+}
+
+function mergeArtifactRefs(existing: ArtifactRef[] | undefined, next: ArtifactRef[]): ArtifactRef[] | undefined {
+  if ((!existing || existing.length === 0) && next.length === 0) return undefined
+  const merged: ArtifactRef[] = []
+  const seen = new Set<string>()
+  for (const ref of [...(existing || []), ...next]) {
+    const key = `${ref.id}:${ref.version}`
+    if (seen.has(key)) continue
+    seen.add(key)
+    merged.push(ref)
+  }
+  return merged.length > 0 ? merged : undefined
 }
 
 function extractArtifacts(content: string, artifactModeEnabled: boolean): ArtifactItem[] | undefined {
@@ -802,7 +824,7 @@ export function useChat() {
       store.clearSessionArtifacts()
       for (const msg of messages) {
         if (msg.role === 'assistant' && typeof msg.content === 'string' && msg.content.trim()) {
-          const refs = ingestArtifactsV2(msg.content)
+          const refs = ingestArtifactsV2(msg.content, true)
           if (refs.length > 0) {
             msg.artifactRefs = refs
           }
@@ -1291,7 +1313,7 @@ export function useChat() {
               ...msg,
               content: next,
               artifacts: extractArtifacts(next, artifactModeEnabled),
-              artifactRefs: artifactRefs.length > 0 ? artifactRefs : undefined,
+              artifactRefs: artifactRefs.length > 0 ? artifactRefs : msg.artifactRefs,
               previews: extractPreviews(next),
             }
           })
@@ -1370,11 +1392,22 @@ export function useChat() {
             const autoTodos = finishedTodos.length === 0
               ? extractTodoPlanFromText(msg.content)
               : undefined
+            const resolvedTodos = finishedTodos.length > 0 ? finishedTodos : (autoTodos ?? finishedTodos)
+            // Tick checkboxes matching the number of completed backend todos
+            const completedCount = resolvedTodos.filter((t) => t.status === 'completed').length
+            const doneContent = completedCount > 0
+              ? tickMdCheckboxes(msg.content, completedCount)
+              : msg.content
+            const artifactModeEnabled = useChatStore.getState().artifactModeEnabled
+            const finalArtifactRefs = ingestArtifactsV2(doneContent, true)
             return {
               ...msg,
               isStreaming: false,
+              content: doneContent,
               usage: event.usage as Message['usage'],
-              todoItems: finishedTodos.length > 0 ? finishedTodos : (autoTodos ?? finishedTodos),
+              todoItems: resolvedTodos,
+              artifacts: extractArtifacts(doneContent, artifactModeEnabled),
+              artifactRefs: mergeArtifactRefs(msg.artifactRefs, finalArtifactRefs),
             }
           })
         }
@@ -1466,10 +1499,14 @@ export function useChat() {
         if (!silent && assistantId) {
           const todos = normalizeTodoItems(event.todos)
           if (todos && todos.length > 0) {
-            store.updateMessageById(assistantId, (msg) => ({
-              ...msg,
-              todoItems: todos,
-            }))
+            const completedCount = todos.filter((t) => t.status === 'completed').length
+            store.updateMessageById(assistantId, (msg) => {
+              // Tick the first N checkboxes in the message content to match completed todos
+              const updatedContent = completedCount > 0
+                ? tickMdCheckboxes(msg.content, completedCount)
+                : msg.content
+              return { ...msg, todoItems: todos, content: updatedContent }
+            })
           }
         }
         break

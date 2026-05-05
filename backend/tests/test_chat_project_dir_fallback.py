@@ -63,9 +63,11 @@ def test_send_uses_stored_session_project_dir_when_request_omits_it(monkeypatch,
         approval_callback=None,
         model_override: str | None = None,
         artifact_mode: bool = False,
+        disable_tools: bool = False,
     ):
         captured["runner_project_dir"] = str(project_dir or "")
         captured["artifact_mode"] = bool(artifact_mode)
+        captured["disable_tools"] = bool(disable_tools)
         yield {"type": "text", "content": "ok"}
         yield {"type": "done", "usage": {"input_tokens": 1, "output_tokens": 1, "model": "test-model"}}
 
@@ -86,7 +88,65 @@ def test_send_uses_stored_session_project_dir_when_request_omits_it(monkeypatch,
     assert response.status_code == 200
     assert captured.get("runner_project_dir") == expected_project_dir
     assert captured.get("updated_project_dir") == expected_project_dir
+    assert captured.get("disable_tools") is False
     assert '"type": "done"' in response.text
+
+
+def test_send_forwards_disable_tools_to_runner(monkeypatch):
+    monkeypatch.delenv("API_AUTH_TOKEN", raising=False)
+    monkeypatch.setattr(chat_api, "_infer_default_project_dir", lambda: None)
+
+    captured: dict[str, object] = {}
+
+    async def fake_mark_session_activity(session_id: str):
+        return {"last_active_at": "now"}
+
+    async def fake_load_session_payload(session_id: str):
+        return {
+            "session_id": session_id,
+            "metadata": {"mode": "execute"},
+            "messages": [],
+        }
+
+    async def fake_update_session_metadata(session_id: str, updates: dict, *, create_if_missing: bool = True):
+        return updates
+
+    async def fake_publish_session_event(session_id: str, event: dict):
+        return None
+
+    async def fake_stream(
+        self,
+        *,
+        session_id: str,
+        messages: list[dict],
+        project_dir: str | None,
+        mode: str,
+        approval_callback=None,
+        model_override: str | None = None,
+        artifact_mode: bool = False,
+        disable_tools: bool = False,
+    ):
+        captured["disable_tools"] = bool(disable_tools)
+        yield {"type": "text", "content": "ok"}
+        yield {"type": "done", "usage": {"input_tokens": 1, "output_tokens": 1, "model": "test-model"}}
+
+    monkeypatch.setattr(chat_api.memory_manager, "mark_session_activity", fake_mark_session_activity)
+    monkeypatch.setattr(chat_api.memory_manager, "load_session_payload", fake_load_session_payload)
+    monkeypatch.setattr(chat_api.memory_manager, "update_session_metadata", fake_update_session_metadata)
+    monkeypatch.setattr(chat_api, "publish_session_event", fake_publish_session_event)
+    monkeypatch.setattr(chat_api.SessionRunner, "stream", fake_stream)
+
+    response = client.post(
+        "/api/chat/send",
+        json={
+            "session_id": "session-disable-tools-1",
+            "message": "build direct html",
+            "disable_tools": True,
+        },
+    )
+
+    assert response.status_code == 200
+    assert captured.get("disable_tools") is True
 
 
 def test_send_routes_structured_slash_command(monkeypatch):

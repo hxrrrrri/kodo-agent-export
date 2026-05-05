@@ -664,12 +664,16 @@ class AgentLoop:
         mode: str | None = None,
         model_override: str | None = None,
         artifact_mode: bool = False,
+        disable_tools: bool = False,
+        max_tokens: int | None = None,
     ):
         self.session_id = session_id
         self.project_dir = project_dir
         self.mode = normalize_mode(mode)
         self.model_override = _normalize_model_name(model_override) or None
         self.artifact_mode = bool(artifact_mode)
+        self.disable_tools = bool(disable_tools)
+        self.max_tokens = max(512, min(int(max_tokens or MAX_TOKENS), 65536))
 
         self.router_mode = os.getenv("ROUTER_MODE", "fixed").strip().lower()
         self.smart_router: SmartRouter | None = None
@@ -755,6 +759,13 @@ class AgentLoop:
             caveman_mode=caveman_mode,
             artifact_mode=self.artifact_mode,
         )
+
+    def _max_tokens_for_provider(self, provider: str | None = None) -> int:
+        resolved_provider = (provider or self.provider or "").strip().lower()
+        if resolved_provider == "anthropic":
+            cap = int(os.getenv("ANTHROPIC_MAX_TOKENS", "8192"))
+            return max(512, min(self.max_tokens, cap))
+        return self.max_tokens
 
     async def run(
         self,
@@ -958,15 +969,16 @@ class AgentLoop:
     async def _create_openai_stream(self, messages: list[dict[str, Any]]):
         assert self.client is not None
 
-        kwargs = {
+        kwargs: dict[str, Any] = {
             "model": self.model,
-            "max_tokens": MAX_TOKENS,
+            "max_tokens": self._max_tokens_for_provider(),
             "messages": messages,
-            "tools": OPENAI_TOOLS,
-            "tool_choice": "auto",
             "stream": True,
             "stream_options": {"include_usage": True},
         }
+        if not self.disable_tools:
+            kwargs["tools"] = OPENAI_TOOLS
+            kwargs["tool_choice"] = "auto"
 
         try:
             return await self.client.chat.completions.create(**kwargs)
@@ -982,7 +994,7 @@ class AgentLoop:
         user_message: str | list[dict[str, Any]],
         history: list[dict[str, Any]],
     ) -> AsyncGenerator[dict[str, Any], None]:
-        forced_tool = _infer_local_forced_tool_call(user_message, self.provider, self.project_dir)
+        forced_tool = None if self.disable_tools else _infer_local_forced_tool_call(user_message, self.provider, self.project_dir)
         if forced_tool is not None:
             async for event in self._run_forced_local_tool(forced_tool):
                 yield event
@@ -1233,13 +1245,15 @@ class AgentLoop:
 
         while True:
             request_messages = _apply_anthropic_cache_controls(messages)
-            response = await self.client.messages.create(
-                model=self.model,
-                max_tokens=MAX_TOKENS,
-                system=_anthropic_system_payload(system),
-                messages=request_messages,
-                tools=ANTHROPIC_TOOLS,
-            )
+            kwargs: dict[str, Any] = {
+                "model": self.model,
+                "max_tokens": self._max_tokens_for_provider("anthropic"),
+                "system": _anthropic_system_payload(system),
+                "messages": request_messages,
+            }
+            if not self.disable_tools:
+                kwargs["tools"] = ANTHROPIC_TOOLS
+            response = await self.client.messages.create(**kwargs)
 
             usage = getattr(response, "usage", None)
             if usage:
@@ -1386,9 +1400,9 @@ class AgentLoop:
             messages=messages,
             model=model,
             system=system,
-            max_tokens=MAX_TOKENS,
+            max_tokens=self._max_tokens_for_provider("gemini"),
             stream=True,
-            tools=OPENAI_TOOLS,
+            tools=None if self.disable_tools else OPENAI_TOOLS,
         )
 
         output_tokens = 0

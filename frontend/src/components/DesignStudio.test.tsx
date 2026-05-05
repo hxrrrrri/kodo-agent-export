@@ -8,6 +8,7 @@ import {
   buildKodoDesignModePrompt,
   buildPromptPlanItems,
   buildHandoffPrompt,
+  buildChatMessagePayload,
   buildDesignFileTree,
   decodeDesignSharePayload,
   encodeDesignSharePayload,
@@ -154,6 +155,106 @@ describe('DesignStudio helpers', () => {
     expect(plan.join('\n')).toMatch(/Pinterest clone homepage/i)
   })
 
+  it('extracts Kodo artifact fences as previewable design files', () => {
+    const content = [
+      '```artifact type=html id=ops-dashboard title="Ops Dashboard" version=1',
+      '<!doctype html><html><body><main>Dashboard</main></body></html>',
+      '```',
+    ].join('\n')
+
+    const files = extractFiles(content)
+    expect(files).toHaveLength(1)
+    expect(files[0].name).toBe('index.html')
+    expect(files[0].language).toBe('html')
+    expect(files[0].content).toContain('Dashboard')
+  })
+
+  it('promotes plain html fences without filenames to index.html', () => {
+    const content = [
+      '## Plan',
+      '1. Build the dashboard shell',
+      '',
+      '```html',
+      '<!doctype html><html><body><main>Previewable</main></body></html>',
+      '```',
+    ].join('\n')
+
+    const files = extractFiles(content)
+    expect(files).toHaveLength(1)
+    expect(files[0].name).toBe('index.html')
+    expect(files[0].language).toBe('html')
+    expect(files[0].content).toContain('Previewable')
+  })
+
+  it('promotes unlabeled fenced html to index.html instead of response text', () => {
+    const content = [
+      '## Plan',
+      '1. Build the dashboard shell',
+      '',
+      '```',
+      '<!doctype html><html><body><main>Unlabeled</main></body></html>',
+      '```',
+    ].join('\n')
+
+    const files = extractFiles(content)
+    expect(files).toHaveLength(1)
+    expect(files[0].name).toBe('index.html')
+    expect(files[0].language).toBe('html')
+    expect(files[0].content).toContain('Unlabeled')
+  })
+
+  it('recovers an unclosed html fence as index.html', () => {
+    const content = [
+      '```html',
+      '<!DOCTYPE html>',
+      '<html lang="en">',
+      '<head><style>body { background: #050510; color: white; }</style></head>',
+      '<body><main>Still previewable while incomplete</main>',
+    ].join('\n')
+
+    const files = extractFiles(content)
+    expect(files).toHaveLength(1)
+    expect(files[0].name).toBe('index.html')
+    expect(files[0].language).toBe('html')
+    expect(files[0].content).toContain('Still previewable')
+    expect(files[0].content).not.toContain('```html')
+  })
+
+  it('recovers an unclosed blank fence with a leading filename line', () => {
+    const content = [
+      '## Plan',
+      '- [ ] Build the page',
+      '',
+      '```',
+      'index.html',
+      '<!DOCTYPE html>',
+      '<html><body><main>Filename line removed</main>',
+    ].join('\n')
+
+    const files = extractFiles(content)
+    expect(files).toHaveLength(1)
+    expect(files[0].name).toBe('index.html')
+    expect(files[0].language).toBe('html')
+    expect(files[0].content).toContain('Filename line removed')
+    expect(files[0].content).not.toContain('index.html\n')
+  })
+
+  it('extracts raw html documents even when the response includes a plan first', () => {
+    const content = [
+      '## Plan',
+      '1. Build the dashboard shell',
+      '',
+      '<!doctype html><html><body><main>Raw document</main></body></html>',
+    ].join('\n')
+
+    const files = extractFiles(content)
+    expect(files).toHaveLength(1)
+    expect(files[0].name).toBe('index.html')
+    expect(files[0].language).toBe('html')
+    expect(files[0].content).toContain('Raw document')
+    expect(files[0].content).not.toContain('## Plan')
+  })
+
   it('builds mode-specific design intelligence prompts', () => {
     const appPrompt = buildKodoDesignModePrompt('app')
 
@@ -165,7 +266,7 @@ describe('DesignStudio helpers', () => {
   it('builds advanced design-system prompts with fidelity and preset context', () => {
     const prompt = buildDesignSystemPrompt({
       brandName: 'Acme',
-      presetId: 'claude-warm',
+      presetId: 'claude',
       fidelity: 'production',
       direction: 'editorial-monocle',
       surface: 'saas-landing',
@@ -184,9 +285,20 @@ describe('DesignStudio helpers', () => {
     })
 
     expect(prompt).toContain('Fidelity: production')
-    expect(prompt).toContain('Claude Warm Editorial')
+    expect(prompt).toContain('Claude')
     expect(prompt).toContain('Editorial Monocle')
     expect(prompt).toContain('developer founders')
+  })
+
+  it('keeps response-format instructions before selected-theme context', () => {
+    const payload = buildChatMessagePayload(
+      ['Kodo Creative Brief and Design System:\n- Design system preset: Coinbase'],
+      'RESPONSE FORMAT - follow this exactly:\n',
+      'Generate a landing page',
+    )
+
+    expect(payload.indexOf('RESPONSE FORMAT')).toBeLessThan(payload.indexOf('Kodo Creative Brief'))
+    expect(payload).toContain('Generate a landing page')
   })
 
   it('encodes and decodes share payloads', () => {
@@ -293,9 +405,6 @@ describe('DesignStudio smoke', () => {
 
     fireEvent.click(screen.getByRole('button', { name: /^Send$/i }))
 
-    await screen.findByText('BUILD PLAN')
-    await screen.findByText(/Understand goals and constraints/i)
-
     await screen.findByText('src')
     await screen.findByText('index.html')
     await screen.findByText('styles')
@@ -320,6 +429,185 @@ describe('DesignStudio smoke', () => {
 
     fireEvent.click(screen.getByTitle('Toggle fullscreen'))
     expect(requestFullscreenMock).toHaveBeenCalledTimes(1)
+  })
+
+  it('sends after creating a project with a selected design system', async () => {
+    fetchMock
+      .mockResolvedValueOnce(makeJsonResponse({ session_id: 'design-session-selected-system' }))
+      .mockResolvedValueOnce(
+        makeSseResponse([
+          {
+            type: 'text',
+            content: [
+              '## Plan',
+              '1. Build selected-system landing page',
+              '',
+              '```html index.html',
+              '<!doctype html><html><body><h1>Selected system</h1></body></html>',
+              '```',
+            ].join('\n'),
+          },
+        ]),
+      )
+
+    render(<DesignStudio onClose={() => {}} />)
+
+    fireEvent.change(screen.getByDisplayValue(/AI & LLM \/ Claude/i), {
+      target: { value: 'coinbase' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: /Create your first design/i }))
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledTimes(1)
+    })
+
+    fireEvent.change(screen.getByPlaceholderText(/Describe your design/i), {
+      target: { value: 'Generate a crypto landing page' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: /^Send$/i }))
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledTimes(2)
+    })
+
+    const sendCall = fetchMock.mock.calls.find(([url]) => String(url).endsWith('/api/chat/send'))
+    expect(sendCall).toBeTruthy()
+    const body = JSON.parse(String(sendCall?.[1]?.body || '{}'))
+    expect(body.message).toContain('Coinbase')
+    expect(body.message).toContain('Generate a crypto landing page')
+    expect(body.artifact_mode).toBe(false)
+    expect(body.disable_tools).toBe(true)
+  })
+
+  it('compacts oversized selected design-system prompts before sending', async () => {
+    storage['kodo.user.design.systems.v1'] = JSON.stringify([
+      {
+        id: 'user-long-theme',
+        label: 'Huge Imported Theme',
+        category: 'My Design Systems',
+        colors: ['#ffffff', '#f8fafc', '#111827', '#64748b', '#2563eb'],
+        displayFont: 'Inter, system-ui, sans-serif',
+        bodyFont: 'Inter, system-ui, sans-serif',
+        summary: 'Imported theme with a very large extracted ruleset.',
+        prompt: `Use this imported theme. ${'token rule '.repeat(3000)}`,
+        isUserDefined: true,
+        createdAt: Date.now(),
+      },
+    ])
+
+    fetchMock
+      .mockResolvedValueOnce(makeJsonResponse({ session_id: 'design-session-long-system' }))
+      .mockResolvedValueOnce(
+        makeSseResponse([
+          {
+            type: 'text',
+            content: [
+              '## Plan',
+              '1. Build imported-system page',
+              '',
+              '```html index.html',
+              '<!doctype html><html><body><h1>Imported system</h1></body></html>',
+              '```',
+            ].join('\n'),
+          },
+        ]),
+      )
+
+    render(<DesignStudio onClose={() => {}} />)
+
+    fireEvent.change(screen.getByDisplayValue(/AI & LLM \/ Claude/i), {
+      target: { value: 'user-long-theme' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: /Create your first design/i }))
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledTimes(1)
+    })
+
+    fireEvent.change(screen.getByPlaceholderText(/Describe your design/i), {
+      target: { value: 'Generate a website using the imported theme' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: /^Send$/i }))
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledTimes(2)
+    })
+
+    const sendCall = fetchMock.mock.calls.find(([url]) => String(url).endsWith('/api/chat/send'))
+    expect(sendCall).toBeTruthy()
+    const body = JSON.parse(String(sendCall?.[1]?.body || '{}'))
+    expect(body.message.length).toBeLessThanOrEqual(7600)
+    expect(body.message).toContain('Huge Imported Theme')
+    expect(body.message).toContain('Generate a website using the imported theme')
+  })
+
+  it('shows streamed model errors instead of leaving an empty assistant response', async () => {
+    fetchMock
+      .mockResolvedValueOnce(makeJsonResponse({ session_id: 'design-session-error' }))
+      .mockResolvedValueOnce(
+        makeSseResponse([
+          { type: 'meta', session_id: 'design-session-error' },
+          {
+            type: 'todo_plan',
+            todos: [
+              { id: 'step-1', title: 'Understand the requested outcome', status: 'in_progress' },
+            ],
+          },
+          { type: 'error', message: 'MODEL is not configured' },
+        ]),
+      )
+
+    render(<DesignStudio onClose={() => {}} />)
+    const createFirstDesignButton = screen.queryByRole('button', { name: /Create your first design/i })
+    if (createFirstDesignButton) {
+      fireEvent.click(createFirstDesignButton)
+    }
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledTimes(1)
+    })
+
+    fireEvent.change(screen.getByPlaceholderText(/Describe your design/i), {
+      target: { value: 'Build a landing page' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: /^Send$/i }))
+
+    await screen.findAllByText(/MODEL is not configured/i)
+  })
+
+  it('warns when the model returns a plan without generated code files', async () => {
+    fetchMock
+      .mockResolvedValueOnce(makeJsonResponse({ session_id: 'design-session-plan-only' }))
+      .mockResolvedValueOnce(
+        makeSseResponse([
+          {
+            type: 'text',
+            content: [
+              '## Plan',
+              '1. Define the layout',
+              '2. Build the dashboard cards',
+              '3. Add responsive states',
+            ].join('\n'),
+          },
+        ]),
+      )
+
+    render(<DesignStudio onClose={() => {}} />)
+    const createFirstDesignButton = screen.queryByRole('button', { name: /Create your first design/i })
+    if (createFirstDesignButton) {
+      fireEvent.click(createFirstDesignButton)
+    }
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledTimes(1)
+    })
+
+    fireEvent.change(screen.getByPlaceholderText(/Describe your design/i), {
+      target: { value: 'Build a dashboard' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: /^Send$/i }))
+
+    await screen.findByText(/returned text but no website\/app code files/i)
   })
 
   it('shows files from file_write tool events when assistant text has no fenced code', async () => {

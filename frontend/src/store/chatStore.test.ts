@@ -17,9 +17,9 @@ describe('chatStore', () => {
 		expect(useChatStore.getState().messageSearchQuery).toBe('hello')
 	})
 
-	it('setTheme toggles between dark and light', () => {
-		useChatStore.getState().setTheme('light')
-		expect(useChatStore.getState().theme).toBe('light')
+	it('setTheme switches among supported themes', () => {
+		useChatStore.getState().setTheme('claude')
+		expect(useChatStore.getState().theme).toBe('claude')
 		useChatStore.getState().setTheme('dark')
 		expect(useChatStore.getState().theme).toBe('dark')
 	})

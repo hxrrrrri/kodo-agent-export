@@ -28,7 +28,7 @@ import {
   Wand2,
 } from 'lucide-react'
 import { useChat } from '../hooks/useChat'
-import { Session, THEME_TONES, useChatStore } from '../store/chatStore'
+import { Session, useChatStore } from '../store/chatStore'
 import { buildApiHeaders, parseApiError } from '../lib/api'
 import { ProviderPanel } from './ProviderPanel'
 import { AgentGraph, AgentNode } from './AgentGraph'
@@ -48,9 +48,10 @@ type SidebarProps = {
   onToggleCollapse: () => void
   antivibeOpen?: boolean
   hermesOpen?: boolean
+  skillsLibraryOpen?: boolean
 }
 
-type SidebarView = 'sessions' | 'providers' | 'agents' | 'usage' | 'prompts' | 'compressor' | 'skills' | 'crg' | 'review' | 'antivibe' | 'hermes' | 'settings' | 'design' | 'gallery' | 'insights' | 'scheduler'
+type SidebarView = 'sessions' | 'providers' | 'agents' | 'usage' | 'prompts' | 'compressor' | 'skills' | 'skill-library' | 'crg' | 'review' | 'antivibe' | 'hermes' | 'settings' | 'design' | 'gallery' | 'insights' | 'scheduler'
 
 type RuntimeTask = {
   task_id: string
@@ -337,7 +338,7 @@ function GraphGlyphIcon({ size = 15 }: { size?: number }) {
   )
 }
 
-export function Sidebar({ collapsed, onToggleCollapse, antivibeOpen = false, hermesOpen = false }: SidebarProps) {
+export function Sidebar({ collapsed, onToggleCollapse, antivibeOpen = false, hermesOpen = false, skillsLibraryOpen = false }: SidebarProps) {
   const {
     sessions,
     sessionId,
@@ -1014,7 +1015,7 @@ export function Sidebar({ collapsed, onToggleCollapse, antivibeOpen = false, her
   }
 
   const toggleTheme = () => {
-    setTheme(THEME_TONES[theme] === 'dark' ? 'light' : 'claude')
+    setTheme(theme === 'dark' ? 'claude' : 'dark')
   }
 
   const insertCrgCommand = (command: string) => {
@@ -1045,7 +1046,7 @@ export function Sidebar({ collapsed, onToggleCollapse, antivibeOpen = false, her
     setSidebarResizing(true)
   }
 
-  const isLightTheme = THEME_TONES[theme] === 'light'
+  const isEmberTheme = theme === 'dark'
   const expandedSidebarWidth = `calc(var(--sidebar-rail-width) + ${sidebarPanelWidth}px)`
 
   return (
@@ -1170,12 +1171,20 @@ export function Sidebar({ collapsed, onToggleCollapse, antivibeOpen = false, her
         />
         <RailButton
           icon={<Hammer size={15} />}
-          label="Skills"
+          label="Skill Builder"
           onClick={() => {
             setActiveView('skills')
             if (collapsed) onToggleCollapse()
           }}
           active={activeView === 'skills'}
+        />
+        <RailButton
+          icon={<BookOpen size={15} />}
+          label="Skills Library"
+          onClick={() => {
+            window.dispatchEvent(new CustomEvent('kodo:toggle-skills-library'))
+          }}
+          active={skillsLibraryOpen}
         />
         <RailButton
           icon={<GraphGlyphIcon size={15} />}
@@ -1234,7 +1243,7 @@ export function Sidebar({ collapsed, onToggleCollapse, antivibeOpen = false, her
         <div style={{ flex: 1 }} />
 
         <RailButton
-          icon={isLightTheme ? <Moon size={15} /> : <Sun size={15} />}
+          icon={isEmberTheme ? <Sun size={15} /> : <Moon size={15} />}
           label="Toggle theme"
           onClick={toggleTheme}
         />
@@ -1409,9 +1418,15 @@ export function Sidebar({ collapsed, onToggleCollapse, antivibeOpen = false, her
           />
           <PanelNav
             icon={<Hammer size={15} />}
-            label="Skills"
+            label="Skill Builder"
             active={activeView === 'skills'}
             onClick={() => setActiveView('skills')}
+          />
+          <PanelNav
+            icon={<BookOpen size={15} />}
+            label="Skills Library"
+            active={skillsLibraryOpen}
+            onClick={() => window.dispatchEvent(new CustomEvent('kodo:toggle-skills-library'))}
           />
           <PanelNav
             icon={<GraphGlyphIcon size={15} />}
@@ -2656,7 +2671,7 @@ export function Sidebar({ collapsed, onToggleCollapse, antivibeOpen = false, her
           <button
             type="button"
             onClick={toggleTheme}
-            title={isLightTheme ? 'Switch to dark theme' : 'Switch to light theme'}
+            title={isEmberTheme ? 'Switch to Claude theme' : 'Switch to Ember Night theme'}
             aria-label="Toggle theme"
             style={{
               width: 28,
@@ -2671,7 +2686,7 @@ export function Sidebar({ collapsed, onToggleCollapse, antivibeOpen = false, her
               cursor: 'pointer',
             }}
           >
-            {isLightTheme ? <Moon size={14} /> : <Sun size={14} />}
+            {isEmberTheme ? <Sun size={14} /> : <Moon size={14} />}
           </button>
         </div>
       </div>
