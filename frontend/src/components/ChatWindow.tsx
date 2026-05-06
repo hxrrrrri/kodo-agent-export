@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, KeyboardEvent, MouseEvent as ReactMouseEvent } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, KeyboardEvent, MouseEvent as ReactMouseEvent, DragEvent as ReactDragEvent } from 'react'
 import { Send, Square, FolderOpen, Zap, ImagePlus, X, Search, Terminal as TerminalIcon, Paperclip, CircleAlert, BookOpen, Mic, Palette, Check, ChevronDown, ChevronUp, Download, GitCompare } from 'lucide-react'
 import { CommandPalette, exportConversationAsMarkdown } from './CommandPalette'
 import { extractVariables, PromptVariablesModal } from './PromptVariables'
@@ -28,7 +28,7 @@ type ChatWindowProps = {
 const CONTEXT_TOKEN_BUDGET = Number(import.meta.env.VITE_CONTEXT_TOKEN_BUDGET || 60000)
 const MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024
 const MAX_VISIBLE_ATTACHMENT_CHIPS = 8
-const ATTACHMENT_ACCEPT = 'image/png,image/jpeg,image/gif,image/webp,application/zip,.zip,text/*,.py,.ts,.tsx,.js,.jsx,.md,.json,.yaml,.yml,.toml,.rs,.go,.java,.cpp,.c,.h'
+const ATTACHMENT_ACCEPT = ''
 const VOICE_SILENCE_STOP_MS = 5000
 const VOICE_RESTART_DELAY_MS = 120
 
@@ -56,6 +56,14 @@ type SessionRecap = {
   away_label?: string
   summary: string
   highlights: string[]
+}
+
+type CapsuleSummary = {
+  id: string
+  tag: string
+  summary: string
+  updated_at: string
+  context_pct_at_capture?: number | null
 }
 
 type PromptTemplate = {
@@ -97,6 +105,8 @@ const EXAMPLE_PROMPTS = [
 
 const KNOWN_ROOT_COMMANDS: CommandDefinition[] = [
   { name: '/help', description: 'Show available commands' },
+  { name: '/capsule', description: 'Show Kodo Capsule commands' },
+  { name: '/cap', description: 'Manage Kodo Capsules' },
   { name: '/cost', description: 'Show token and estimated cost usage' },
   { name: '/krawlx', description: 'Crawl a website via KrawlX secure crawler' },
   { name: '/firecrawl', description: 'Crawl a website with Firecrawl provider' },
@@ -127,6 +137,11 @@ const KNOWN_ROOT_COMMANDS: CommandDefinition[] = [
 
 const FALLBACK_COMMANDS: CommandDefinition[] = [
   ...KNOWN_ROOT_COMMANDS,
+  { name: '/cap save [tag]', description: 'Capture the current session as a capsule' },
+  { name: '/cap inject <id>', description: 'Prepare capsule context for injection' },
+  { name: '/cap list', description: 'List saved capsules' },
+  { name: '/cap compress', description: 'Compress current session context' },
+  { name: '/cap usage', description: 'Show capsule token usage' },
   { name: '/krawlx <url>', description: 'Crawl a website via KrawlX secure crawler' },
   { name: '/firecrawl <url>', description: 'Crawl a website with Firecrawl provider' },
   { name: '/crawlx <url>', description: 'Alias for /krawlx' },
@@ -426,6 +441,13 @@ export function ChatWindow({ editorOpen, onToggleEditor }: ChatWindowProps) {
   const [pendingFiles, setPendingFiles] = useState<FileAttachment[]>([])
   const [attachmentError, setAttachmentError] = useState('')
   const [attachmentUploading, setAttachmentUploading] = useState(false)
+  const [capsulePanelOpen, setCapsulePanelOpen] = useState(false)
+  const [capsuleSearch, setCapsuleSearch] = useState('')
+  const [capsuleItems, setCapsuleItems] = useState<CapsuleSummary[]>([])
+  const [capsuleBusy, setCapsuleBusy] = useState(false)
+  const [capsuleNotice, setCapsuleNotice] = useState('')
+  const [capsuleAlertLevel, setCapsuleAlertLevel] = useState<'idle' | 'warning' | 'pulsating' | 'critical'>('idle')
+  const [capsuleAlertReason, setCapsuleAlertReason] = useState('Open Kodo Capsule')
   const [terminalLines, setTerminalLines] = useState<string[]>([])
   const [showTerminal, setShowTerminal] = useState(false)
   const [terminalRunning, setTerminalRunning] = useState(false)
@@ -442,6 +464,7 @@ export function ChatWindow({ editorOpen, onToggleEditor }: ChatWindowProps) {
   const paletteInputRef = useRef<HTMLInputElement>(null)
   const imageInputRef = useRef<HTMLInputElement>(null)
   const themeMenuRef = useRef<HTMLDivElement>(null)
+  const capsulePanelRef = useRef<HTMLDivElement>(null)
   const dragDepthRef = useRef(0)
   const shouldAutoScrollRef = useRef(true)
   const previousMessageSearchRef = useRef('')
@@ -535,6 +558,52 @@ export function ChatWindow({ editorOpen, onToggleEditor }: ChatWindowProps) {
       setInput(saved)
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sessionId])
+
+  const loadCapsules = useCallback(async (query = capsuleSearch) => {
+    try {
+      const response = await fetch(`/api/capsule/capsules?query=${encodeURIComponent(query.trim())}`, {
+        headers: buildApiHeaders(),
+      })
+      if (!response.ok) {
+        throw new Error(await parseApiError(response))
+      }
+      const payload = await response.json()
+      const rows = Array.isArray(payload.capsules) ? payload.capsules as CapsuleSummary[] : []
+      setCapsuleItems(rows)
+    } catch (error) {
+      setCapsuleNotice(String(error))
+    }
+  }, [capsuleSearch])
+
+  useEffect(() => {
+    if (!capsulePanelOpen) return
+    void loadCapsules(capsuleSearch)
+  }, [capsulePanelOpen, capsuleSearch, loadCapsules])
+
+  useEffect(() => {
+    if (!sessionId) {
+      setCapsuleAlertLevel('idle')
+      setCapsuleAlertReason('Open Kodo Capsule')
+      return
+    }
+
+    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
+    const ws = new WebSocket(`${protocol}//${window.location.host}/api/capsule/usage/ws?session_id=${encodeURIComponent(sessionId)}`)
+    ws.onmessage = (event) => {
+      try {
+        const payload = JSON.parse(event.data)
+        if (payload.type !== 'TOKEN_UPDATE') return
+        const level = String(payload.alert_level || 'idle') as typeof capsuleAlertLevel
+        if (['idle', 'warning', 'pulsating', 'critical'].includes(level)) {
+          setCapsuleAlertLevel(level)
+        }
+        setCapsuleAlertReason(String(payload.alert_reason || 'Open Kodo Capsule'))
+      } catch {
+        // Ignore malformed websocket frames.
+      }
+    }
+    return () => ws.close()
   }, [sessionId])
 
   useEffect(() => {
@@ -639,6 +708,30 @@ export function ChatWindow({ editorOpen, onToggleEditor }: ChatWindowProps) {
   useEffect(() => {
     setPaletteIndex(0)
   }, [paletteQuery, commandPaletteOpen])
+
+  useEffect(() => {
+    if (!capsulePanelOpen) return
+
+    const onKeyDown = (event: globalThis.KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setCapsulePanelOpen(false)
+      }
+    }
+    const onMouseDown = (event: globalThis.MouseEvent) => {
+      if (!capsulePanelRef.current) return
+      if (capsulePanelRef.current.contains(event.target as Node)) return
+      const target = event.target as HTMLElement
+      if (target.closest('#capsule-icon-btn')) return
+      setCapsulePanelOpen(false)
+    }
+
+    window.addEventListener('keydown', onKeyDown)
+    window.addEventListener('mousedown', onMouseDown)
+    return () => {
+      window.removeEventListener('keydown', onKeyDown)
+      window.removeEventListener('mousedown', onMouseDown)
+    }
+  }, [capsulePanelOpen])
 
   useEffect(() => {
     setInput('')
@@ -1138,6 +1231,117 @@ export function ChatWindow({ editorOpen, onToggleEditor }: ChatWindowProps) {
       }
     }
   }, [conferenceRunMode, conferenceSlots, loadSessions, loadUsage, sessionId, setSessionId])
+
+  const handleCapsuleCapture = useCallback(async () => {
+    if (!sessionId) {
+      setCapsuleNotice('Start a session before capturing a capsule.')
+      return
+    }
+    setCapsuleBusy(true)
+    setCapsuleNotice('')
+    try {
+      const response = await fetch('/api/capsule/capture', {
+        method: 'POST',
+        headers: buildApiHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify({
+          session_id: sessionId,
+          team_folder: 'default',
+          tags: [],
+        }),
+      })
+      if (!response.ok) throw new Error(await parseApiError(response))
+      const payload = await response.json()
+      const capsule = payload?.data?.capsule
+      setCapsuleNotice(capsule?.id ? `Saved ${capsule.id}` : 'Capsule saved')
+      await loadCapsules('')
+    } catch (error) {
+      setCapsuleNotice(String(error))
+    } finally {
+      setCapsuleBusy(false)
+    }
+  }, [loadCapsules, sessionId])
+
+  const handleCapsuleInject = useCallback(async (capsuleId: string) => {
+    const id = capsuleId.trim()
+    if (!id) return
+    setCapsuleBusy(true)
+    setCapsuleNotice('')
+    try {
+      const response = await fetch('/api/capsule/inject', {
+        method: 'POST',
+        headers: buildApiHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify({ capsule_id: id, message: '' }),
+      })
+      if (!response.ok) throw new Error(await parseApiError(response))
+      const payload = await response.json()
+      const injected = String(payload?.data?.injected_message || '').trim()
+      if (!injected) throw new Error('Capsule injection returned no text')
+      setInput((prev) => `${injected}\n\n${prev}`.trim())
+      setCapsulePanelOpen(false)
+      setTimeout(() => {
+        if (!textareaRef.current) return
+        textareaRef.current.style.height = 'auto'
+        textareaRef.current.style.height = Math.min(textareaRef.current.scrollHeight, 140) + 'px'
+        textareaRef.current.focus()
+      }, 0)
+    } catch (error) {
+      setCapsuleNotice(String(error))
+    } finally {
+      setCapsuleBusy(false)
+    }
+  }, [])
+
+  const handleCapsuleCompress = useCallback(async () => {
+    if (!sessionId) {
+      setCapsuleNotice('Start a session before compressing context.')
+      return
+    }
+    setCapsuleBusy(true)
+    setCapsuleNotice('')
+    try {
+      const response = await fetch('/api/capsule/compress', {
+        method: 'POST',
+        headers: buildApiHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify({ session_id: sessionId, keep_recent: 8, persist: false }),
+      })
+      if (!response.ok) throw new Error(await parseApiError(response))
+      const payload = await response.json()
+      setCapsuleNotice(`Preview reduction: ${payload?.data?.reduction_pct ?? 0}%`)
+    } catch (error) {
+      setCapsuleNotice(String(error))
+    } finally {
+      setCapsuleBusy(false)
+    }
+  }, [sessionId])
+
+  const handleCapsuleUsage = useCallback(async () => {
+    if (!sessionId) {
+      setCapsuleNotice('Start a session before viewing usage.')
+      return
+    }
+    setCapsuleBusy(true)
+    setCapsuleNotice('')
+    try {
+      const response = await fetch(`/api/capsule/usage/${encodeURIComponent(sessionId)}`, {
+        headers: buildApiHeaders(),
+      })
+      if (!response.ok) throw new Error(await parseApiError(response))
+      const payload = await response.json()
+      const data = payload.data || payload
+      setCapsuleNotice(`Context ${Number(data.context_pct || 0).toFixed(1)}% | ${data.alert_level || 'idle'}`)
+    } catch (error) {
+      setCapsuleNotice(String(error))
+    } finally {
+      setCapsuleBusy(false)
+    }
+  }, [sessionId])
+
+  const handleCapsuleDrop = useCallback((event: ReactDragEvent) => {
+    const capsuleId = event.dataTransfer.getData('application/x-kodo-capsule') || event.dataTransfer.getData('text/plain')
+    if (!capsuleId.trim()) return
+    event.preventDefault()
+    void handleCapsuleInject(capsuleId)
+  }, [handleCapsuleInject])
 
   const handleSend = useCallback(async () => {
     const msg = input.trim()
@@ -3490,6 +3694,54 @@ export function ChatWindow({ editorOpen, onToggleEditor }: ChatWindowProps) {
             </div>
           )}
 
+          {capsulePanelOpen && (
+            <div ref={capsulePanelRef} className="capsule-panel">
+              <input
+                type="search"
+                value={capsuleSearch}
+                onChange={(event) => setCapsuleSearch(event.target.value)}
+                placeholder="Search capsules"
+                aria-label="Search capsules"
+              />
+              <div className="capsule-tool-grid">
+                <button type="button" onClick={handleCapsuleCapture} disabled={capsuleBusy}>Capture</button>
+                <button type="button" onClick={handleCapsuleCompress} disabled={capsuleBusy}>Compress</button>
+                <button type="button" onClick={handleCapsuleUsage} disabled={capsuleBusy}>Usage</button>
+                <button type="button" onClick={() => setInput((prev) => `${prev}\n/cap template`.trim())}>Template</button>
+                <button type="button" onClick={() => setInput((prev) => `${prev}\n/cap persona code-reviewer`.trim())}>Persona</button>
+                <button type="button" onClick={() => setInput((prev) => `${prev}\n/cap export`.trim())}>Export</button>
+                <button type="button" onClick={() => setCapsuleNotice('Select capsules with /cap merge <id1> <id2>.')}>Merge</button>
+                <button type="button" onClick={() => setCapsuleNotice('Open versions with /cap rollback <id>.')}>Rollback</button>
+                <button type="button" onClick={() => setCapsuleNotice('Use /cap bridge <id> [provider].')}>Bridge</button>
+                <button type="button" onClick={() => void loadCapsules('')}>Refresh</button>
+              </div>
+              {capsuleNotice && (
+                <div className="capsule-notice">{capsuleNotice}</div>
+              )}
+              <div className="capsule-recent-list">
+                {capsuleItems.length === 0 ? (
+                  <div className="capsule-empty">No capsules found</div>
+                ) : capsuleItems.slice(0, 8).map((capsule) => (
+                  <button
+                    key={capsule.id}
+                    type="button"
+                    className="capsule-recent-item"
+                    draggable
+                    onDragStart={(event) => {
+                      event.dataTransfer.setData('application/x-kodo-capsule', capsule.id)
+                      event.dataTransfer.setData('text/plain', capsule.id)
+                    }}
+                    onClick={() => void handleCapsuleInject(capsule.id)}
+                    title="Click to inject, or drag onto the input"
+                  >
+                    <span>{capsule.tag}</span>
+                    <small>{capsule.id} · {capsule.updated_at?.slice(0, 10)}</small>
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+
           {(pendingImage || pendingFiles.length > 0) && (
             <div style={{
               display: 'flex',
@@ -3650,6 +3902,12 @@ export function ChatWindow({ editorOpen, onToggleEditor }: ChatWindowProps) {
             ;(e.currentTarget as HTMLElement).style.borderColor = conferenceMode ? 'var(--accent)' : 'var(--border)'
             ;(e.currentTarget as HTMLElement).style.boxShadow = '0 4px 20px rgba(0,0,0,0.18)'
           }}
+          onDragOver={(event) => {
+            if (event.dataTransfer.types.includes('application/x-kodo-capsule')) {
+              event.preventDefault()
+            }
+          }}
+          onDrop={handleCapsuleDrop}
           onClick={(e) => {
             if ((e.target as HTMLElement).tagName !== 'BUTTON' && (e.target as HTMLElement).tagName !== 'INPUT') {
               textareaRef.current?.focus()
@@ -3659,11 +3917,30 @@ export function ChatWindow({ editorOpen, onToggleEditor }: ChatWindowProps) {
           <input
             ref={imageInputRef}
             type="file"
-            accept={ATTACHMENT_ACCEPT}
+            accept={ATTACHMENT_ACCEPT || undefined}
             multiple
             onChange={handleFilePick}
             style={{ display: 'none' }}
           />
+
+          <button
+            id="capsule-icon-btn"
+            type="button"
+            className={`capsule-icon ${capsuleAlertLevel}`}
+            onClick={(event) => {
+              event.stopPropagation()
+              setCapsulePanelOpen((value) => !value)
+              setCapsuleNotice('')
+            }}
+            title={capsuleAlertReason || 'Open Kodo Capsule'}
+            aria-label="Capsule tools"
+          >
+            <svg width="22" height="14" viewBox="0 0 22 14" fill="none" aria-hidden="true">
+              <rect x="1" y="1" width="20" height="12" rx="6" stroke="currentColor" strokeWidth="1.5" />
+              <line x1="11" y1="1" x2="11" y2="13" stroke="currentColor" strokeWidth="1.5" />
+              <rect x="1" y="1" width="9" height="12" rx="6" fill="currentColor" opacity="0.15" />
+            </svg>
+          </button>
 
           <button
             type="button"

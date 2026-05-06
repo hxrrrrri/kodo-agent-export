@@ -29,12 +29,17 @@ const MAX_PERSISTED_MESSAGE_FILE_CHARS = 200000
 const MAX_CHAT_MESSAGE_CHARS = 7600
 const MAX_CHAT_CONTEXT_CHARS = 3200
 const MAX_CHAT_ASSET_CHARS = 900
+const MAX_CHAT_FILE_CHARS = 1200
 const DESIGN_GENERATION_MAX_TOKENS = 16384
 
 function truncateText(value: string, maxChars: number): string {
   if (value.length <= maxChars) return value
   if (maxChars <= 80) return value.slice(0, maxChars)
   return `${value.slice(0, maxChars - 48).trimEnd()}\n...[truncated for request size]`
+}
+
+function freshDesignSessionId(projectId: string): string {
+  return `design-${projectId}-${Date.now()}-${genId()}`
 }
 
 function formatApiErrorDetail(detail: unknown, fallback: string): string {
@@ -125,7 +130,7 @@ function textFromStreamEvent(event: Record<string, unknown>): string {
 
 // â”€â”€â”€ Types â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
-type DeviceMode = 'desktop' | 'tablet' | 'mobile'
+type DeviceMode = 'wide' | 'desktop' | 'tablet' | 'mobile' | 'compact-mobile'
 type ViewMode = 'preview' | 'code' | 'split' | 'editor'
 type ShareAccess = 'view' | 'comment' | 'edit'
 export type DesignMode = 'web' | 'app' | 'deck' | 'motion' | 'infographic' | 'critique'
@@ -154,12 +159,17 @@ type ProjectCreateDraft = {
   fidelity?: DesignFidelity
 }
 
+// Canvas overlay types
+type CanvasMode = 'idle' | 'draw' | 'select'
+type DrawPath = { id: string; points: { x: number; y: number }[]; color: string }
+type SelectionRect = { xPct: number; yPct: number; wPct: number; hPct: number }
+
 const DEVICE_WIDTHS: Record<DeviceMode, string> = {
-  desktop: '100%', tablet: '768px', mobile: '390px',
+  wide: '1920px', desktop: '1280px', tablet: '768px', mobile: '390px', 'compact-mobile': '375px',
 }
 
 const DEVICE_HEIGHTS: Record<DeviceMode, string | number> = {
-  desktop: '100%', tablet: 700, mobile: 760,
+  wide: 1080, desktop: '100%', tablet: 700, mobile: 760, 'compact-mobile': 760,
 }
 
 const DESIGN_MODES: Record<DesignMode, {
@@ -270,9 +280,13 @@ interface DesignSystemPreset {
   extractedAt?: string
   extraction?: {
     generator?: string
+    mode?: string
     cssVarCount?: number
     sourceCssFiles?: number
     sourceStyleBlocks?: number
+    colorCount?: number
+    typographyCount?: number
+    componentCount?: number
   }
 }
 
@@ -712,6 +726,8 @@ interface UploadedAsset {
   size: number
   type: string
   dataUrl: string
+  isImage?: boolean
+  isArchive?: boolean
   textContent?: string
 }
 
@@ -728,6 +744,46 @@ interface InlineComment {
   yPct: number
   createdAt: number
   resolved?: boolean
+}
+
+interface KodoQuestionCard {
+  id: string
+  question: string
+  options: string[]
+  type: 'single' | 'multi' | 'text'
+  allow_free_text?: boolean
+}
+
+type KodoQuestionAnswers = Record<string, string | string[]>
+
+interface KodoAuditIssue {
+  id: string
+  severity: 'info' | 'warning' | 'error'
+  category: string
+  message: string
+  selector?: string | null
+  fix_hint?: string | null
+}
+
+interface KodoAuditSummary {
+  score: number
+  issue_count: number
+  summary: string
+  issues: KodoAuditIssue[]
+}
+
+interface KodoBuildStep {
+  type: string
+  label: string
+  detail?: string
+  progress: number
+}
+
+interface DesignTweakState {
+  fontScale: number
+  radius: number
+  sectionSpacing: number
+  accent: string
 }
 
 interface DesignSharePayload {
@@ -950,7 +1006,7 @@ export function decodeDesignSharePayload(raw: string): DesignSharePayload | null
     const viewMode: ViewMode = parsed.viewMode === 'code' || parsed.viewMode === 'split' || parsed.viewMode === 'editor'
       ? parsed.viewMode
       : 'preview'
-    const device: DeviceMode = parsed.device === 'tablet' || parsed.device === 'mobile'
+    const device: DeviceMode = parsed.device === 'wide' || parsed.device === 'desktop' || parsed.device === 'tablet' || parsed.device === 'mobile' || parsed.device === 'compact-mobile'
       ? parsed.device
       : 'desktop'
     const inlineComments = Array.isArray(parsed.inlineComments)
@@ -1029,7 +1085,7 @@ function loadPersistedDesignStudioState(): PersistedDesignStudioState | null {
     const selectedExists = selectedFileId ? files.some((f) => f.id === selectedFileId) : false
     const normalizedSelected = selectedExists ? selectedFileId : (files[0]?.id ?? null)
 
-    const device: DeviceMode = parsed.device === 'tablet' || parsed.device === 'mobile' ? parsed.device : 'desktop'
+    const device: DeviceMode = parsed.device === 'wide' || parsed.device === 'desktop' || parsed.device === 'tablet' || parsed.device === 'mobile' || parsed.device === 'compact-mobile' ? parsed.device : 'desktop'
     const viewMode: ViewMode = parsed.viewMode === 'preview' || parsed.viewMode === 'code' || parsed.viewMode === 'split' || parsed.viewMode === 'editor'
       ? parsed.viewMode
       : 'preview'
@@ -1368,6 +1424,28 @@ function buildPreviewHtml(files: DesignFile[]): string {
   const css = cssFiles.map(f => f.content).join('\n')
   const js = jsFiles.map(f => f.content).join('\n')
   return `<!DOCTYPE html><html><head><style>${css}</style></head><body>${js ? `<script>${js}<\/script>` : ''}</body></html>`
+}
+
+const DEFAULT_TWEAK_STATE: DesignTweakState = {
+  fontScale: 1,
+  radius: 8,
+  sectionSpacing: 96,
+  accent: '#4f46e5',
+}
+
+function summarizeQuestionAnswers(cards: KodoQuestionCard[], answers: KodoQuestionAnswers): string {
+  return cards
+    .map((card) => {
+      const raw = answers[card.id]
+      const rendered = Array.isArray(raw) ? raw.join(', ') : String(raw || '').trim()
+      return rendered ? `- ${card.question}: ${rendered}` : ''
+    })
+    .filter(Boolean)
+    .join('\n')
+}
+
+function filesFromHtml(html: string): DesignFile[] {
+  return [{ id: genId(), name: 'index.html', language: 'html', content: sanitizeDesignFileContent('index.html', 'html', html) }]
 }
 
 function normalizePlanItemText(value: string): string {
@@ -1756,10 +1834,27 @@ export function buildDesignSystemPrompt(ds: DesignSystemConfig): string {
   if (preset.extraction) {
     const facts = [
       preset.extraction.generator,
+      preset.extraction.mode,
       typeof preset.extraction.cssVarCount === 'number' ? `${preset.extraction.cssVarCount} CSS variables` : '',
       typeof preset.extraction.sourceCssFiles === 'number' ? `${preset.extraction.sourceCssFiles} linked stylesheets` : '',
+      typeof preset.extraction.colorCount === 'number' ? `${preset.extraction.colorCount} colors` : '',
+      typeof preset.extraction.typographyCount === 'number' ? `${preset.extraction.typographyCount} type styles` : '',
+      typeof preset.extraction.componentCount === 'number' ? `${preset.extraction.componentCount} component roles` : '',
     ].filter(Boolean).join(', ')
     if (facts) lines.push(`- Extraction metadata: ${facts}`)
+  }
+  if (preset.tokenGroups?.length) {
+    const tokenSummary = preset.tokenGroups
+      .slice(0, 6)
+      .map((group) => {
+        const rows = group.tokens
+          .slice(0, 10)
+          .map((token) => `${token.name}: ${token.value} (${token.description})`)
+          .join('; ')
+        return `${group.label}: ${rows}`
+      })
+      .join('\n')
+    lines.push(`- Extracted tokens and usage map:\n${truncateText(tokenSummary, 3200)}`)
   }
   lines.push(`- Visual direction: ${direction.label} â€” ${direction.summary}`)
   lines.push(`- Direction rules: ${direction.prompt}`)
@@ -3181,6 +3276,23 @@ export function DesignStudio({ onClose }: Props) {
   const [expandedFolders, setExpandedFolders] = useState<Record<string, boolean>>({})
   const [inlineComments, setInlineComments] = useState<InlineComment[]>([])
   const [commentMode, setCommentMode] = useState(false)
+  // Canvas draw / region select
+  const [canvasMode, setCanvasMode] = useState<CanvasMode>('idle')
+  const [drawPaths, setDrawPaths] = useState<DrawPath[]>([])
+  const [currentPath, setCurrentPath] = useState<{ x: number; y: number }[] | null>(null)
+  const [selectionRect, setSelectionRect] = useState<SelectionRect | null>(null)
+  const [selectionStart, setSelectionStart] = useState<{ x: number; y: number } | null>(null)
+  const [canvasInput, setCanvasInput] = useState('')
+  const [pendingComment, setPendingComment] = useState<{ xPct: number; yPct: number } | null>(null)
+  const [pendingCommentText, setPendingCommentText] = useState('')
+  const [questionCards, setQuestionCards] = useState<KodoQuestionCard[]>([])
+  const [questionBrief, setQuestionBrief] = useState('')
+  const [questionAnswers, setQuestionAnswers] = useState<KodoQuestionAnswers>({})
+  const [designAudit, setDesignAudit] = useState<KodoAuditSummary | null>(null)
+  const [buildSteps, setBuildSteps] = useState<KodoBuildStep[]>([])
+  const [tweakPanelOpen, setTweakPanelOpen] = useState(false)
+  const [tweakState, setTweakState] = useState<DesignTweakState>(DEFAULT_TWEAK_STATE)
+  const [backendVersionId, setBackendVersionId] = useState<string | null>(null)
   const [projectContext, setProjectContext] = useState('')
   const [designMode, setDesignMode] = useState<DesignMode>('web')
   const [shareAccess, setShareAccess] = useState<ShareAccess>('edit')
@@ -3209,6 +3321,7 @@ export function DesignStudio({ onClose }: Props) {
 
   // â”€â”€ Project callbacks â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   const applyProject = useCallback((project: DesignProject) => {
+    abortRef.current?.abort()
     setActiveProjectId(project.id)
     setProjectName(project.name)
     setProjectCreatedAt(project.createdAt)
@@ -3227,7 +3340,16 @@ export function DesignStudio({ onClose }: Props) {
     setSplitCodeW(project.splitCodeW)
     setFileTreeOpen(project.fileTreeOpen)
     setExpandedFolders(project.expandedFolders)
+    setAssets([])
+    setSessionId(freshDesignSessionId(project.id))
     setPlanItems([])
+    setQuestionCards([])
+    setQuestionBrief('')
+    setQuestionAnswers({})
+    setDesignAudit(null)
+    setBuildSteps([])
+    setTweakPanelOpen(false)
+    setBackendVersionId(null)
     setError(null)
     if (project.files.length > 0) setPreviewHtml(buildPreviewHtml(project.files))
     else setPreviewHtml(null)
@@ -3269,7 +3391,10 @@ export function DesignStudio({ onClose }: Props) {
       setProjectCreatedAt(Date.now())
       setMessages([]); setFiles([]); setSelectedFileId(null)
       setHistory([]); setInlineComments([]); setProjectContext('')
+      setAssets([]); setSessionId(null)
       setDesignMode('web')
+      setQuestionCards([]); setQuestionBrief(''); setQuestionAnswers({})
+      setDesignAudit(null); setBuildSteps([]); setTweakPanelOpen(false); setBackendVersionId(null)
       setPreviewHtml(null); setPlanItems([]); setError(null)
     }
   }, [activeProjectId])
@@ -3283,6 +3408,7 @@ export function DesignStudio({ onClose }: Props) {
   const splitContainerRef = useRef<HTMLDivElement>(null)
   const previewContainerRef = useRef<HTMLDivElement>(null)
   const abortRef = useRef<AbortController | null>(null)
+  const drawCanvasRef = useRef<HTMLCanvasElement>(null)
 
   useEffect(() => {
     setDesignSystem(loadDesignSystem())
@@ -3378,16 +3504,260 @@ export function DesignStudio({ onClose }: Props) {
     }
   }, [])
 
+  // ── Canvas draw/select rendering ───────────────────────────────────────────
+  useEffect(() => {
+    const canvas = drawCanvasRef.current
+    if (!canvas) return
+    const ctx = canvas.getContext('2d')
+    if (!ctx) return
+
+    // Sync canvas dimensions to its CSS layout size
+    const rect = canvas.getBoundingClientRect()
+    if (rect.width > 0 && rect.height > 0) {
+      canvas.width = rect.width
+      canvas.height = rect.height
+    }
+
+    ctx.clearRect(0, 0, canvas.width, canvas.height)
+
+    const toX = (pct: number) => (pct / 100) * canvas.width
+    const toY = (pct: number) => (pct / 100) * canvas.height
+
+    // Completed draw paths
+    for (const path of drawPaths) {
+      if (path.points.length < 2) continue
+      ctx.beginPath()
+      ctx.strokeStyle = path.color
+      ctx.lineWidth = 3
+      ctx.lineCap = 'round'
+      ctx.lineJoin = 'round'
+      ctx.setLineDash([])
+      ctx.moveTo(toX(path.points[0].x), toY(path.points[0].y))
+      for (const pt of path.points.slice(1)) ctx.lineTo(toX(pt.x), toY(pt.y))
+      ctx.stroke()
+    }
+
+    // Current live path
+    if (currentPath && currentPath.length >= 2) {
+      ctx.beginPath()
+      ctx.strokeStyle = '#F59E0B'
+      ctx.lineWidth = 3
+      ctx.lineCap = 'round'
+      ctx.lineJoin = 'round'
+      ctx.setLineDash([])
+      ctx.moveTo(toX(currentPath[0].x), toY(currentPath[0].y))
+      for (const pt of currentPath.slice(1)) ctx.lineTo(toX(pt.x), toY(pt.y))
+      ctx.stroke()
+    }
+
+    // Selection rectangle
+    if (selectionRect) {
+      const x = toX(selectionRect.xPct)
+      const y = toY(selectionRect.yPct)
+      const w = toX(selectionRect.wPct)
+      const h = toY(selectionRect.hPct)
+      ctx.fillStyle = 'rgba(59,130,246,0.08)'
+      ctx.fillRect(x, y, w, h)
+      ctx.strokeStyle = '#3B82F6'
+      ctx.lineWidth = 2
+      ctx.setLineDash([6, 3])
+      ctx.strokeRect(x, y, w, h)
+      ctx.setLineDash([])
+      // Corner handles
+      ctx.fillStyle = '#3B82F6'
+      for (const [hx, hy] of [[x, y], [x + w, y], [x, y + h], [x + w, y + h]] as [number, number][]) {
+        ctx.fillRect(hx - 4, hy - 4, 8, 8)
+      }
+      // Dimension label
+      const labelW = 110
+      const labelH = 20
+      const lx = Math.min(x, canvas.width - labelW - 4)
+      const ly = Math.max(y - labelH - 2, 2)
+      ctx.fillStyle = '#3B82F6'
+      ctx.beginPath()
+      ctx.roundRect?.(lx, ly, labelW, labelH, 4)
+      ctx.fill()
+      ctx.fillStyle = '#fff'
+      ctx.font = '11px monospace'
+      ctx.fillText(
+        `${Math.round(selectionRect.wPct)}% × ${Math.round(selectionRect.hPct)}%`,
+        lx + 4, ly + 14,
+      )
+    }
+  }, [drawPaths, currentPath, selectionRect, canvasMode])
+
+  // ── Canvas coordinate helper ───────────────────────────────────────────────
+  const getCanvasCoords = (e: ReactMouseEvent<HTMLCanvasElement>): { x: number; y: number } => {
+    const canvas = e.currentTarget
+    const rect = canvas.getBoundingClientRect()
+    return {
+      x: ((e.clientX - rect.left) / rect.width) * 100,
+      y: ((e.clientY - rect.top) / rect.height) * 100,
+    }
+  }
+
+  // ── Canvas mouse handlers ──────────────────────────────────────────────────
+  const handleCanvasMouseDown = (e: ReactMouseEvent<HTMLCanvasElement>) => {
+    if (canvasMode === 'idle') return
+    e.preventDefault()
+    const pos = getCanvasCoords(e)
+    if (canvasMode === 'draw') {
+      setCurrentPath([pos])
+    } else if (canvasMode === 'select') {
+      setSelectionStart(pos)
+      setSelectionRect(null)
+    }
+  }
+
+  const handleCanvasMouseMove = (e: ReactMouseEvent<HTMLCanvasElement>) => {
+    if (canvasMode === 'idle') return
+    const pos = getCanvasCoords(e)
+    if (canvasMode === 'draw' && currentPath) {
+      setCurrentPath(prev => (prev ? [...prev, pos] : [pos]))
+    } else if (canvasMode === 'select' && selectionStart) {
+      setSelectionRect({
+        xPct: Math.min(selectionStart.x, pos.x),
+        yPct: Math.min(selectionStart.y, pos.y),
+        wPct: Math.abs(pos.x - selectionStart.x),
+        hPct: Math.abs(pos.y - selectionStart.y),
+      })
+    }
+  }
+
+  const handleCanvasMouseUp = () => {
+    if (canvasMode === 'draw' && currentPath && currentPath.length > 1) {
+      setDrawPaths(prev => [...prev, { id: genId(), points: currentPath, color: '#F59E0B' }])
+      setCurrentPath(null)
+    } else if (canvasMode === 'select') {
+      setSelectionStart(null)
+    }
+  }
+
+  // ── Canvas action helpers ──────────────────────────────────────────────────
+  const clearCanvas = () => {
+    setDrawPaths([])
+    setCurrentPath(null)
+    setSelectionRect(null)
+    setSelectionStart(null)
+    setCanvasInput('')
+  }
+
+  const getBoundsFromPath = (points: { x: number; y: number }[]) => {
+    const xs = points.map(p => p.x)
+    const ys = points.map(p => p.y)
+    const minX = Math.min(...xs), maxX = Math.max(...xs)
+    const minY = Math.min(...ys), maxY = Math.max(...ys)
+    return { cx: (minX + maxX) / 2, cy: (minY + maxY) / 2, w: maxX - minX, h: maxY - minY }
+  }
+
+  const sendDrawToKodo = () => {
+    if (!drawPaths.length && !canvasInput) return
+    const pathDesc = drawPaths.map((p, i) => {
+      const b = getBoundsFromPath(p.points)
+      return `Annotation ${i + 1}: centred around x≈${Math.round(b.cx)}%, y≈${Math.round(b.cy)}% (spans ~${Math.round(b.w)}% × ${Math.round(b.h)}%)`
+    }).join('\n')
+    const instruction = canvasInput.trim() || 'Apply the drawn annotations as targeted design improvements'
+    void sendMessage(instruction, {
+      extraContext: `User drew ${drawPaths.length} annotation(s) on the canvas (percentage coordinates):\n${pathDesc}\n\nFocus changes ONLY on the annotated areas.`,
+    })
+    clearCanvas()
+    setCanvasMode('idle')
+  }
+
+  const sendSelectionToKodo = () => {
+    if (!selectionRect || !canvasInput.trim()) return
+    void sendMessage(canvasInput.trim(), {
+      extraContext: `Apply this change ONLY to the selected region of the page:\nx=${Math.round(selectionRect.xPct)}%, y=${Math.round(selectionRect.yPct)}%, width=${Math.round(selectionRect.wPct)}%, height=${Math.round(selectionRect.hPct)}%.\nLeave ALL content outside this region UNCHANGED.`,
+    })
+    clearCanvas()
+    setCanvasMode('idle')
+  }
+
+  const submitPendingComment = () => {
+    if (!pendingComment || !pendingCommentText.trim()) {
+      setPendingComment(null)
+      setPendingCommentText('')
+      return
+    }
+    setInlineComments(prev => [...prev, {
+      id: genId(),
+      text: pendingCommentText.trim(),
+      xPct: pendingComment.xPct,
+      yPct: pendingComment.yPct,
+      createdAt: Date.now(),
+      resolved: false,
+    }])
+    setPendingComment(null)
+    setPendingCommentText('')
+  }
+
   // Send message
-  const sendMessage = useCallback(async (text: string) => {
+  const sendMessage = useCallback(async (text: string, options?: { skipQuestions?: boolean; extraContext?: string }) => {
     const trimmed = text.trim()
     if (!trimmed || isLoading) return
     if (shareAccess === 'view') {
       setError('This shared design is view-only. Switch access to edit to send changes.')
       return
     }
+
+    const currentHtmlForAnalysis = previewHtml || (filesRef.current.length > 0 ? buildPreviewHtml(filesRef.current) : '')
+    if (!options?.skipQuestions) {
+      try {
+        const analysisRes = await fetch('/api/design/intelligence/analyze', {
+          method: 'POST',
+          headers: buildApiHeaders({ 'Content-Type': 'application/json' }),
+          body: JSON.stringify({
+            prompt: trimmed,
+            has_current_html: Boolean(currentHtmlForAnalysis.trim()),
+            current_html: currentHtmlForAnalysis.slice(0, 50000),
+          }),
+        })
+        if (analysisRes.ok) {
+          const analysis = await analysisRes.json() as {
+            intent?: string
+            project_type?: string
+            strategy?: string
+            requires_questions?: boolean
+            questions?: KodoQuestionCard[]
+          }
+          const shouldAsk = Boolean(analysis.requires_questions && Array.isArray(analysis.questions) && analysis.questions.length > 0)
+            && (!currentHtmlForAnalysis.trim() || analysis.intent === 'full_redesign')
+          setBuildSteps([
+            { type: 'intent', label: String(analysis.intent || 'design'), detail: String(analysis.strategy || 'strategy selected'), progress: 12 },
+          ])
+          if (shouldAsk) {
+            const uid = genId()
+            const aid = genId()
+            setInput('')
+            setQuestionBrief(trimmed)
+            setQuestionCards(analysis.questions || [])
+            setQuestionAnswers({})
+            setMessages(prev => [
+              ...prev,
+              { id: uid, role: 'user', content: trimmed },
+              {
+                id: aid,
+                role: 'assistant',
+                content: `Kodo classified this as ${String(analysis.project_type || 'a design project').replace(/_/g, ' ')}. Answer any cards below, then press Generate.`,
+              },
+            ])
+            return
+          }
+        }
+      } catch {
+        // Local generation still works when the intelligence endpoint is unavailable.
+      }
+    }
+
     setError(null)
     setInput('')
+    if (options?.skipQuestions) {
+      setQuestionCards([])
+      setQuestionBrief('')
+      setQuestionAnswers({})
+    }
+    const assetsForRequest = assets
+    const sentAssetIds = new Set(assetsForRequest.map((asset) => asset.id))
 
     const isFirst = messagesRef.current.length === 0
     const DESIGN_OUTPUT_RULES = `OUTPUT CONTRACT — MANDATORY FOR EVERY RESPONSE:
@@ -3426,6 +3796,9 @@ ${DESIGN_OUTPUT_RULES}
     if (projectContext.trim()) {
       contextSections.push(`Project context:\n${truncateText(projectContext.trim(), 1200)}`)
     }
+    if (options?.extraContext?.trim()) {
+      contextSections.push(`Structured Kodo Design answers:\n${truncateText(options.extraContext.trim(), 1800)}`)
+    }
     const dsPrompt = buildDesignSystemPrompt(designSystem)
     if (dsPrompt) contextSections.push(dsPrompt)
 
@@ -3433,14 +3806,36 @@ ${DESIGN_OUTPUT_RULES}
               contextSections.push(`Design system reference documentation:\n${truncateText(designSystemDoc.trim(), 12000)}`)
     }
 
-    const textAssets = assets
+    const currentDesignFiles = filesRef.current
+      .filter((file) => file.content.trim())
+      .slice(0, 5)
+    if (currentDesignFiles.length > 0) {
+      const fileSummary = currentDesignFiles
+        .map((file) => `--- ${file.name} ---\n${truncateText(file.content, MAX_CHAT_FILE_CHARS)}`)
+        .join('\n\n')
+      contextSections.push(`Current design files to preserve and edit:\n${fileSummary}`)
+    }
+
+    const textAssets = assetsForRequest
       .filter((asset) => Boolean(asset.textContent && asset.textContent.trim()))
-      .slice(0, 4)
+      .slice(0, 8)
     if (textAssets.length > 0) {
       const assetSummary = textAssets
         .map((asset) => `--- ${asset.name} ---\n${truncateText(String(asset.textContent || ''), MAX_CHAT_ASSET_CHARS)}`)
         .join('\n\n')
-      contextSections.push(`Attached codebase and design context:\n${assetSummary}`)
+      contextSections.push(`Attached files for this design session only. Read and use these uploaded file contents when relevant:\n${assetSummary}`)
+    }
+
+    const imageAssets = assetsForRequest
+      .filter((asset) => asset.isImage)
+      .slice(0, 8)
+    if (imageAssets.length > 0) {
+      contextSections.push(
+        'Uploaded image references for this design session only. These images are attached as model-visible image blocks; inspect their layout, color, typography, spacing, component shapes, and visual style when the user asks to refer to them:\n'
+        + imageAssets
+          .map((asset, index) => `- Image ${index + 1}: ${asset.name} (${asset.type || 'image'}, ${asset.size} bytes).`)
+          .join('\n'),
+      )
     }
 
     const openComments = inlineComments
@@ -3487,18 +3882,32 @@ ${DESIGN_OUTPUT_RULES}
       }
       let sawToolFileMutation = false
 
+      const imageBlocks = assetsForRequest
+        .map(imageBlockFromAsset)
+        .filter((block): block is Record<string, unknown> => block !== null)
+        .slice(0, 8)
+      const requestPayload: Record<string, unknown> = {
+        session_id: sid,
+        project_dir: null,
+        mode: 'execute',
+        artifact_mode: false,
+        disable_tools: true,
+        max_tokens: DESIGN_GENERATION_MAX_TOKENS,
+      }
+      if (imageBlocks.length > 0) {
+        requestPayload.message = trimmed
+        requestPayload.content = [
+          { type: 'text', text: fullMsg },
+          ...imageBlocks,
+        ]
+      } else {
+        requestPayload.message = fullMsg
+      }
+
       const res = await fetch(`${API}/send`, {
         method: 'POST',
         headers: buildApiHeaders({ 'Content-Type': 'application/json' }),
-        body: JSON.stringify({
-          session_id: sid,
-          message: fullMsg,
-          project_dir: null,
-          mode: 'execute',
-          artifact_mode: false,
-          disable_tools: true,
-          max_tokens: DESIGN_GENERATION_MAX_TOKENS,
-        }),
+        body: JSON.stringify(requestPayload),
         signal: ctrl.signal,
       })
 
@@ -3546,8 +3955,24 @@ ${DESIGN_OUTPUT_RULES}
           const textDelta = textFromStreamEvent(ev)
           if (textDelta) {
             acc += textDelta
+            const sections = Array.from(textDelta.matchAll(/<!--\s*SECTION:\s*([a-zA-Z0-9 _/-]+)\s*-->/gi))
+            if (sections.length > 0) {
+              setBuildSteps(prev => {
+                const next = [...prev]
+                sections.forEach((section) => {
+                  const label = section[1].replace(/\s+/g, ' ').trim()
+                  if (label && !next.some(step => step.label.toLowerCase() === label.toLowerCase())) {
+                    next.push({ type: 'section', label, detail: 'Section marker received', progress: Math.min(92, 18 + next.length * 12) })
+                  }
+                })
+                return next
+              })
+            }
             // Count new code fence openings (``` + word) in this delta — each = one plan step starting
             openCodeBlocks += (textDelta.match(/^```[a-zA-Z]/gm) || []).length
+            if (openCodeBlocks > 0) {
+              setBuildSteps(prev => prev.length > 0 ? prev : [{ type: 'code', label: 'Building files', detail: 'Receiving HTML/CSS/JS stream', progress: 22 }])
+            }
             // Progressively tick plan checkboxes as code blocks appear
             const displayContent = openCodeBlocks > 0 ? tickCheckboxesInText(acc, openCodeBlocks) : acc
             setMessages(prev => prev.map(m => m.id === aid ? { ...m, content: displayContent } : m))
@@ -3592,6 +4017,49 @@ ${DESIGN_OUTPUT_RULES}
         const fullyTickedContent = tickCheckboxesInText(acc, Infinity)
         setMessages(prev => prev.map(m => m.id === aid ? { ...m, content: fullyTickedContent, files: resolvedFiles } : m))
         setPlanItems(prev => prev.map(item => ({ ...item, done: true })))
+        setBuildSteps(prev => [...prev.filter(step => step.type !== 'complete'), { type: 'complete', label: 'Preview ready', detail: 'Files parsed and iframe refreshed', progress: 100 }])
+        try {
+          const [auditRes, eventsRes, versionRes] = await Promise.all([
+            fetch('/api/design/audit', {
+              method: 'POST',
+              headers: buildApiHeaders({ 'Content-Type': 'application/json' }),
+              body: JSON.stringify({ html }),
+            }),
+            fetch('/api/design/build-stream/events', {
+              method: 'POST',
+              headers: buildApiHeaders({ 'Content-Type': 'application/json' }),
+              body: JSON.stringify({ html }),
+            }),
+            activeProjectId ? fetch('/api/design/history/version', {
+              method: 'POST',
+              headers: buildApiHeaders({ 'Content-Type': 'application/json' }),
+              body: JSON.stringify({
+                project_id: activeProjectId,
+                html,
+                prompt: trimmed,
+                label: `Generation ${history.length + 1}`,
+                parent_id: backendVersionId,
+                branch_name: 'main',
+              }),
+            }) : Promise.resolve(null),
+          ])
+          if (auditRes.ok) {
+            const auditPayload = await auditRes.json() as KodoAuditSummary
+            setDesignAudit(auditPayload)
+          }
+          if (eventsRes.ok) {
+            const eventsPayload = await eventsRes.json() as { events?: KodoBuildStep[] }
+            if (Array.isArray(eventsPayload.events) && eventsPayload.events.length > 0) {
+              setBuildSteps(eventsPayload.events)
+            }
+          }
+          if (versionRes && versionRes.ok) {
+            const versionPayload = await versionRes.json() as { version?: { id?: string } }
+            if (versionPayload.version?.id) setBackendVersionId(versionPayload.version.id)
+          }
+        } catch {
+          // Audit/history enrich the design flow but must not block a successful generation.
+        }
       } else if (acc.trim()) {
         // No code blocks found â€” show raw response as a fallback text file so
         // the user can see what the model actually returned
@@ -3609,10 +4077,13 @@ ${DESIGN_OUTPUT_RULES}
       setError(msg)
       setMessages(prev => prev.map(m => m.id === aid ? { ...m, content: `Error: ${msg}`, isStreaming: false } : m))
     } finally {
+      if (sentAssetIds.size > 0) {
+        setAssets(prev => prev.filter(asset => !sentAssetIds.has(asset.id)))
+      }
       setMessages(prev => prev.map(m => m.id === aid ? { ...m, isStreaming: false } : m))
       setIsLoading(false)
     }
-  }, [assets, designMode, designSystem, designSystemDoc, inlineComments, isLoading, projectContext, sessionId, shareAccess])
+  }, [activeProjectId, assets, backendVersionId, designMode, designSystem, designSystemDoc, history.length, inlineComments, isLoading, previewHtml, projectContext, sessionId, shareAccess])
 
   const handleVisualEditorSourceChange = useCallback((payload: VisualEditorSourcePayload) => {
     // Strip injected harness script so it isn't double-injected on reload
@@ -3629,6 +4100,66 @@ ${DESIGN_OUTPUT_RULES}
     setPreviewHtml(cleanHtml)
   }, [])
 
+  const extractAssetText = async (file: File): Promise<{ textContent?: string; isArchive: boolean }> => {
+    const ext = file.name.split('.').pop()?.toLowerCase() || ''
+    const textExt = new Set([
+      'txt', 'md', 'markdown', 'json', 'jsonl', 'js', 'jsx', 'mjs', 'cjs', 'ts', 'tsx',
+      'css', 'scss', 'sass', 'less', 'html', 'htm', 'xml', 'svg', 'py', 'sh', 'bash',
+      'ps1', 'bat', 'cmd', 'yaml', 'yml', 'toml', 'ini', 'env', 'csv', 'tsv', 'sql',
+      'rs', 'go', 'java', 'kt', 'swift', 'cpp', 'cc', 'cxx', 'c', 'h', 'hpp', 'cs',
+      'php', 'rb', 'vue', 'svelte', 'astro', 'tsx', 'jsx', 'lock', 'log',
+    ])
+    const isArchive = ext === 'zip' || file.type === 'application/zip' || file.type === 'application/x-zip-compressed'
+
+    if (isArchive) {
+      try {
+        const archive = await JSZip.loadAsync(file)
+        const entries = Object.values(archive.files)
+          .filter((entry) => !entry.dir)
+          .slice(0, 60)
+        const parts: string[] = [`[Zip archive: ${file.name}] ${entries.length} file(s) listed below.`]
+        for (const entry of entries) {
+          const entryExt = entry.name.split('.').pop()?.toLowerCase() || ''
+          const textLike = textExt.has(entryExt) || /(^|\/)(package\.json|vite\.config|tailwind\.config|README|index\.html)$/i.test(entry.name)
+          if (!textLike) {
+            parts.push(`--- ${entry.name} ---\n[binary or unsupported file inside zip]`)
+            continue
+          }
+          const content = await entry.async('text')
+          parts.push(`--- ${entry.name} ---\n${truncateText(content, 1800)}`)
+        }
+        return { textContent: truncateText(parts.join('\n\n'), 24000), isArchive: true }
+      } catch {
+        return { textContent: `[Zip archive: ${file.name}] Could not read archive contents in browser.`, isArchive: true }
+      }
+    }
+
+    const textLike = textExt.has(ext) || file.type.startsWith('text/') || file.type.includes('json') || file.type.includes('xml')
+    if (textLike || (!file.type && file.size <= 2_000_000)) {
+      try {
+        const content = await file.text()
+        if (!content.includes('\u0000')) return { textContent: content.slice(0, 120000), isArchive: false }
+      } catch { /* ignore */ }
+    }
+
+    return { textContent: `[Uploaded file: ${file.name}]\nType: ${file.type || 'application/octet-stream'}\nSize: ${file.size} bytes\nBinary content is available as an uploaded asset but was not text-decodable in the browser.`, isArchive: false }
+  }
+
+  const imageBlockFromAsset = (asset: UploadedAsset): Record<string, unknown> | null => {
+    if (!asset.isImage || !asset.dataUrl.startsWith('data:')) return null
+    const [header, data] = asset.dataUrl.split(',', 2)
+    if (!header || !data) return null
+    const mediaType = header.replace('data:', '').replace(';base64', '') || asset.type || 'image/png'
+    return {
+      type: 'image',
+      source: {
+        type: 'base64',
+        media_type: mediaType,
+        data,
+      },
+    }
+  }
+
   const restoreHistory = (entry: HistoryEntry) => {
     setFiles(entry.files)
     setSelectedFileId(entry.files[0]?.id ?? null)
@@ -3638,26 +4169,23 @@ ${DESIGN_OUTPUT_RULES}
 
   const handleAssetUpload = async (list: FileList | null) => {
     if (!list) return
-    const isTextLikeAsset = (file: File): boolean => {
-      const ext = file.name.split('.').pop()?.toLowerCase() || ''
-      const textExt = new Set(['txt', 'md', 'json', 'js', 'jsx', 'ts', 'tsx', 'css', 'html', 'py', 'sh', 'yaml', 'yml'])
-      return textExt.has(ext) || file.type.startsWith('text/') || file.type.includes('json')
-    }
-
     const next: UploadedAsset[] = []
     for (const f of Array.from(list)) {
       const dataUrl = await new Promise<string>(res => {
         const r = new FileReader(); r.onload = () => res(r.result as string); r.readAsDataURL(f)
       })
-      let textContent: string | undefined
-      if (isTextLikeAsset(f)) {
-        try {
-          textContent = (await f.text()).slice(0, 120000)
-        } catch {
-          textContent = undefined
-        }
-      }
-      next.push({ id: genId(), name: f.name, size: f.size, type: f.type, dataUrl, textContent })
+      const isImage = f.type.startsWith('image/')
+      const extracted = await extractAssetText(f)
+      next.push({
+        id: genId(),
+        name: f.name,
+        size: f.size,
+        type: f.type || 'application/octet-stream',
+        dataUrl,
+        isImage,
+        isArchive: extracted.isArchive,
+        textContent: extracted.textContent,
+      })
     }
     setAssets(prev => [...prev, ...next])
   }
@@ -3680,9 +4208,21 @@ ${DESIGN_OUTPUT_RULES}
     URL.revokeObjectURL(url)
   }
 
-  const downloadAll = () => {
+  const downloadAll = async () => {
     if (previewHtml) {
-      const blob = new Blob([previewHtml], { type: 'text/html' })
+      let html = previewHtml
+      try {
+        const res = await fetch('/api/design/export/clean', {
+          method: 'POST',
+          headers: buildApiHeaders({ 'Content-Type': 'application/json' }),
+          body: JSON.stringify({ html: previewHtml, format: 'html', filename: 'design.html' }),
+        })
+        if (res.ok) {
+          const payload = await res.json() as { html?: string }
+          html = payload.html || html
+        }
+      } catch { /* fallback to current preview */ }
+      const blob = new Blob([html], { type: 'text/html' })
       const url = URL.createObjectURL(blob)
       const a = document.createElement('a'); a.href = url; a.download = 'design.html'; a.click()
       URL.revokeObjectURL(url)
@@ -3690,12 +4230,24 @@ ${DESIGN_OUTPUT_RULES}
   }
 
   const downloadZip = async () => {
-    if (files.length === 0) return
-    const zip = new JSZip()
-    files.forEach((file) => {
-      zip.file(file.name, file.content)
-    })
-    const blob = await zip.generateAsync({ type: 'blob' })
+    if (files.length === 0 && !previewHtml) return
+    let blob: Blob
+    const html = previewHtml || buildPreviewHtml(files)
+    try {
+      const res = await fetch('/api/design/export/clean', {
+        method: 'POST',
+        headers: buildApiHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify({ html, format: 'zip', filename: 'index.html' }),
+      })
+      if (!res.ok) throw new Error(`${res.status} ${res.statusText}`)
+      blob = await res.blob()
+    } catch {
+      const zip = new JSZip()
+      files.forEach((file) => {
+        zip.file(file.name, file.content)
+      })
+      blob = await zip.generateAsync({ type: 'blob' })
+    }
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a')
     a.href = url
@@ -4016,29 +4568,16 @@ ${DESIGN_OUTPUT_RULES}
     return <>{parts}</>
   }
 
-  const addInlineCommentAtPoint = (xPct: number, yPct: number) => {
-    if (!canComment) return
-    const text = window.prompt('Inline comment for this canvas area:')?.trim()
-    if (!text) return
-    setInlineComments((prev) => [...prev, {
-      id: genId(),
-      text,
-      xPct: Math.max(0, Math.min(100, xPct)),
-      yPct: Math.max(0, Math.min(100, yPct)),
-      createdAt: Date.now(),
-      resolved: false,
-    }])
-  }
-
   const handlePreviewCommentClick = (event: ReactMouseEvent<HTMLDivElement>) => {
     if (!commentMode || !canComment) return
     event.preventDefault()
     event.stopPropagation()
     const rect = event.currentTarget.getBoundingClientRect()
     if (rect.width <= 0 || rect.height <= 0) return
-    const xPct = ((event.clientX - rect.left) / rect.width) * 100
-    const yPct = ((event.clientY - rect.top) / rect.height) * 100
-    addInlineCommentAtPoint(xPct, yPct)
+    const xPct = Math.max(0, Math.min(100, ((event.clientX - rect.left) / rect.width) * 100))
+    const yPct = Math.max(0, Math.min(100, ((event.clientY - rect.top) / rect.height) * 100))
+    setPendingComment({ xPct, yPct })
+    setPendingCommentText('')
   }
 
   const toggleInlineComment = (id: string) => {
@@ -4056,62 +4595,357 @@ ${DESIGN_OUTPUT_RULES}
     void sendMessage(prompt)
   }
 
+  const updateQuestionAnswer = (card: KodoQuestionCard, value: string) => {
+    setQuestionAnswers(prev => {
+      if (card.type === 'multi') {
+        const current = Array.isArray(prev[card.id]) ? prev[card.id] as string[] : []
+        const next = current.includes(value) ? current.filter(item => item !== value) : [...current, value]
+        return { ...prev, [card.id]: next }
+      }
+      return { ...prev, [card.id]: value }
+    })
+  }
+
+  const generateFromQuestionCards = () => {
+    const summary = summarizeQuestionAnswers(questionCards, questionAnswers)
+    const prompt = summary ? `${questionBrief}\n\nClarifying answers:\n${summary}` : questionBrief
+    void sendMessage(prompt, { skipQuestions: true, extraContext: summary })
+  }
+
+  const runCurrentAudit = async () => {
+    const html = previewHtml || (files.length > 0 ? buildPreviewHtml(files) : '')
+    if (!html.trim()) return
+    try {
+      const res = await fetch('/api/design/audit', {
+        method: 'POST',
+        headers: buildApiHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify({ html }),
+      })
+      if (!res.ok) throw new Error(`${res.status} ${res.statusText}`)
+      setDesignAudit(await res.json() as KodoAuditSummary)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err))
+    }
+  }
+
+  const applyTweakPatch = async (patch: Partial<DesignTweakState>) => {
+    const nextState = { ...tweakState, ...patch }
+    setTweakState(nextState)
+    const html = previewHtml || (files.length > 0 ? buildPreviewHtml(files) : '')
+    if (!html.trim()) return
+    try {
+      const res = await fetch('/api/design/tweaks/apply', {
+        method: 'POST',
+        headers: buildApiHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify({
+          html,
+          operations: [
+            { name: 'font-scale', value: String(nextState.fontScale) },
+            { name: 'border-radius', value: `${nextState.radius}px` },
+            { name: 'section-spacing', value: `${nextState.sectionSpacing}px` },
+            { name: 'accent', value: nextState.accent },
+          ],
+        }),
+      })
+      if (!res.ok) throw new Error(`${res.status} ${res.statusText}`)
+      const payload = await res.json() as { html?: string }
+      if (payload.html) {
+        const nextFiles = filesFromHtml(payload.html)
+        setFiles(nextFiles)
+        setSelectedFileId(nextFiles[0].id)
+        setPreviewHtml(payload.html)
+        setRefreshKey(k => k + 1)
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err))
+    }
+  }
+
   const requestVariations = () => {
     void sendMessage('Show 3 significantly different design directions for the current artifact. Vary layout, visual language, typography, interaction model, and information density. Keep content goals intact and include a recommendation.')
   }
 
   const requestAccessibilityReview = () => {
+    void runCurrentAudit()
     void sendMessage('Run a craft and accessibility pass on the current design: contrast, hierarchy, focus order, target size, semantics, responsiveness, content specificity, and AI-looking visual defaults. Apply fixes directly in the generated files.')
   }
 
-  const renderInlineCommentLayer = () => (
-    <>
-      <div
-        onClick={handlePreviewCommentClick}
-        style={{
-          position: 'absolute',
-          inset: 0,
-          zIndex: 2,
-          cursor: commentMode && canComment ? 'crosshair' : 'default',
-          pointerEvents: commentMode && canComment ? 'auto' : 'none',
-          background: commentMode && canComment ? 'rgba(0,0,0,0.02)' : 'transparent',
-        }}
-      />
-      <div style={{ position: 'absolute', inset: 0, zIndex: 3, pointerEvents: 'none' }}>
-        {inlineComments.map((comment, idx) => (
-          <button
-            key={comment.id}
-            type="button"
-            title={comment.text}
-            onClick={(event) => {
-              event.stopPropagation()
-              toggleInlineComment(comment.id)
+  const renderInteractiveLayer = () => {
+    const isDrawActive = canvasMode === 'draw'
+    const isSelectActive = canvasMode === 'select'
+    const hasPaths = drawPaths.length > 0 || currentPath !== null
+    const hasSelection = selectionRect !== null && selectionRect.wPct > 2 && selectionRect.hPct > 2
+    const QUICK_EDITS = [
+      'Redesign this section', 'Add dark overlay', 'Make it bolder',
+      'Add animation', 'Improve typography', 'Remove this element',
+    ]
+    return (
+      <>
+        {/* Comment mode capture layer */}
+        {commentMode && canComment && (
+          <div
+            onClick={handlePreviewCommentClick}
+            style={{
+              position: 'absolute', inset: 0, zIndex: 2,
+              cursor: 'crosshair', pointerEvents: 'auto',
+              background: 'rgba(249,115,22,0.04)',
             }}
+          />
+        )}
+
+        {/* HTML5 canvas for draw + select */}
+        <canvas
+          ref={drawCanvasRef}
+          onMouseDown={handleCanvasMouseDown}
+          onMouseMove={handleCanvasMouseMove}
+          onMouseUp={handleCanvasMouseUp}
+          onMouseLeave={handleCanvasMouseUp}
+          style={{
+            position: 'absolute', inset: 0,
+            width: '100%', height: '100%', zIndex: 4,
+            cursor: isDrawActive ? 'crosshair' : isSelectActive ? 'crosshair' : 'default',
+            pointerEvents: (isDrawActive || isSelectActive) ? 'auto' : 'none',
+            touchAction: 'none',
+          }}
+        />
+
+        {/* Comment pins */}
+        <div style={{ position: 'absolute', inset: 0, zIndex: 5, pointerEvents: 'none' }}>
+          {inlineComments.map((comment, idx) => (
+            <button
+              key={comment.id}
+              type="button"
+              title={comment.text}
+              onClick={e => { e.stopPropagation(); toggleInlineComment(comment.id) }}
+              style={{
+                position: 'absolute',
+                left: `${comment.xPct}%`, top: `${comment.yPct}%`,
+                transform: 'translate(-50%, -50%)',
+                width: 20, height: 20, borderRadius: 999,
+                border: '2px solid rgba(255,255,255,0.95)',
+                background: comment.resolved ? '#16a34a' : '#f97316',
+                color: '#fff', fontSize: 10, fontWeight: 700,
+                fontFamily: 'var(--font-mono)',
+                cursor: 'pointer', pointerEvents: 'auto',
+                boxShadow: '0 2px 10px rgba(0,0,0,0.35)',
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+              }}
+            >
+              {idx + 1}
+            </button>
+          ))}
+        </div>
+
+        {/* Pending comment input (inline textarea) */}
+        {pendingComment && (
+          <div
             style={{
               position: 'absolute',
-              left: `${comment.xPct}%`,
-              top: `${comment.yPct}%`,
-              transform: 'translate(-50%, -50%)',
-              width: 18,
-              height: 18,
-              borderRadius: 999,
-              border: '1px solid rgba(255,255,255,0.95)',
-              background: comment.resolved ? '#2f9a51' : '#ff9f1a',
-              color: '#fff',
-              fontSize: 10,
-              fontWeight: 700,
-              fontFamily: 'var(--font-mono)',
-              cursor: 'pointer',
-              pointerEvents: 'auto',
-              boxShadow: '0 2px 8px rgba(0,0,0,0.3)',
+              left: `${Math.min(pendingComment.xPct, 78)}%`,
+              top: `${Math.min(pendingComment.yPct, 80)}%`,
+              transform: 'translate(-40%, 8px)',
+              zIndex: 9,
+              background: 'var(--bg-1)',
+              border: '1.5px solid var(--accent)',
+              borderRadius: 10, padding: 10,
+              boxShadow: '0 8px 32px rgba(0,0,0,0.4)',
+              width: 220, pointerEvents: 'auto',
             }}
           >
-            {idx + 1}
-          </button>
+            <div style={{ fontSize: 9, color: 'var(--accent)', fontFamily: 'var(--font-mono)', marginBottom: 6, fontWeight: 700 }}>
+              COMMENT AT ({Math.round(pendingComment.xPct)}%, {Math.round(pendingComment.yPct)}%)
+            </div>
+            <textarea
+              autoFocus
+              rows={3}
+              value={pendingCommentText}
+              onChange={e => setPendingCommentText(e.target.value)}
+              placeholder="Describe the change or issue..."
+              style={{
+                width: '100%', boxSizing: 'border-box',
+                background: 'var(--bg-2)', border: '1px solid var(--border)',
+                borderRadius: 6, color: 'var(--text-0)', fontSize: 11,
+                padding: '6px 8px', outline: 'none', resize: 'none',
+                fontFamily: 'var(--font-mono)', lineHeight: 1.5,
+              }}
+              onKeyDown={e => {
+                if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); submitPendingComment() }
+                if (e.key === 'Escape') { setPendingComment(null); setPendingCommentText('') }
+              }}
+            />
+            <div style={{ display: 'flex', gap: 5, marginTop: 6 }}>
+              <button type="button" onClick={submitPendingComment}
+                style={{ ...btn(true, true), flex: 1, justifyContent: 'center', fontSize: 10, padding: '4px 0' }}>
+                Pin comment
+              </button>
+              <button type="button" onClick={() => { setPendingComment(null); setPendingCommentText('') }}
+                style={{ ...btn(false), flex: 1, justifyContent: 'center', fontSize: 10, padding: '4px 0' }}>
+                Cancel
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* Draw annotation action bar */}
+        {hasPaths && !hasSelection && canvasMode !== 'idle' && (
+          <div style={{
+            position: 'absolute', bottom: 16, left: '50%', transform: 'translateX(-50%)',
+            zIndex: 8, background: 'var(--bg-1)',
+            border: '1.5px solid #F59E0B',
+            borderRadius: 12, padding: '10px 12px',
+            boxShadow: '0 8px 40px rgba(245,158,11,0.25)',
+            display: 'flex', flexDirection: 'column', gap: 8,
+            pointerEvents: 'auto', width: 380, maxWidth: 'calc(100% - 32px)',
+          }}>
+            <div style={{ fontSize: 10, color: '#F59E0B', fontFamily: 'var(--font-mono)', fontWeight: 700, letterSpacing: '0.06em' }}>
+              ✏️ DRAW ANNOTATION · {drawPaths.length} stroke{drawPaths.length !== 1 ? 's' : ''}
+            </div>
+            <div style={{ display: 'flex', gap: 6 }}>
+              <input
+                value={canvasInput}
+                onChange={e => setCanvasInput(e.target.value)}
+                placeholder="What to change in the annotated area..."
+                style={{
+                  flex: 1, background: 'var(--bg-2)', border: '1px solid var(--border)',
+                  borderRadius: 6, color: 'var(--text-0)', fontSize: 11,
+                  padding: '6px 8px', outline: 'none', fontFamily: 'var(--font-mono)',
+                }}
+                onKeyDown={e => { if (e.key === 'Enter') sendDrawToKodo() }}
+              />
+              <button type="button" onClick={sendDrawToKodo} disabled={isLoading}
+                style={{ ...btn(true, true), padding: '5px 12px', fontSize: 11, flexShrink: 0 }}>
+                <Send size={12} /> Send
+              </button>
+            </div>
+            <div style={{ display: 'flex', gap: 5, flexWrap: 'wrap' }}>
+              {QUICK_EDITS.map(q => (
+                <button key={q} type="button" onClick={() => setCanvasInput(q)}
+                  style={{ ...btn(canvasInput === q), padding: '2px 7px', fontSize: 9 }}>
+                  {q}
+                </button>
+              ))}
+              <button type="button" onClick={clearCanvas}
+                style={{ ...btn(false), padding: '2px 7px', fontSize: 9, marginLeft: 'auto' }}>
+                Clear
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* Region select action bar */}
+        {hasSelection && (
+          <div style={{
+            position: 'absolute', bottom: 16, left: '50%', transform: 'translateX(-50%)',
+            zIndex: 8, background: 'var(--bg-1)',
+            border: '1.5px solid #3B82F6',
+            borderRadius: 12, padding: '10px 12px',
+            boxShadow: '0 8px 40px rgba(59,130,246,0.25)',
+            display: 'flex', flexDirection: 'column', gap: 8,
+            pointerEvents: 'auto', width: 400, maxWidth: 'calc(100% - 32px)',
+          }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+              <div style={{ fontSize: 10, color: '#3B82F6', fontFamily: 'var(--font-mono)', fontWeight: 700, letterSpacing: '0.06em' }}>
+                ⬚ REGION SELECTED · {Math.round(selectionRect!.wPct)}% × {Math.round(selectionRect!.hPct)}%
+              </div>
+              <button type="button" onClick={() => { setSelectionRect(null); setCanvasInput('') }}
+                style={{ ...btn(false), padding: '1px 6px', fontSize: 9 }}>×</button>
+            </div>
+            <div style={{ display: 'flex', gap: 6 }}>
+              <input
+                autoFocus
+                value={canvasInput}
+                onChange={e => setCanvasInput(e.target.value)}
+                placeholder="What to change in this region only..."
+                style={{
+                  flex: 1, background: 'var(--bg-2)', border: '1px solid var(--border)',
+                  borderRadius: 6, color: 'var(--text-0)', fontSize: 11,
+                  padding: '6px 8px', outline: 'none', fontFamily: 'var(--font-mono)',
+                }}
+                onKeyDown={e => { if (e.key === 'Enter') sendSelectionToKodo() }}
+              />
+              <button type="button" onClick={sendSelectionToKodo}
+                disabled={isLoading || !canvasInput.trim()}
+                style={{ ...btn(true, true), padding: '5px 12px', fontSize: 11, flexShrink: 0 }}>
+                <Send size={12} /> Apply
+              </button>
+            </div>
+            <div style={{ display: 'flex', gap: 5, flexWrap: 'wrap' }}>
+              {QUICK_EDITS.map(q => (
+                <button key={q} type="button" onClick={() => setCanvasInput(q)}
+                  style={{ ...btn(canvasInput === q), padding: '2px 7px', fontSize: 9 }}>
+                  {q}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+      </>
+    )
+  }
+
+  // Keep legacy name as alias so existing call sites work without change
+  const renderInlineCommentLayer = renderInteractiveLayer
+
+  const renderTweaksPanel = () => {
+    if (!tweakPanelOpen || !previewHtml) return null
+    return (
+      <div
+        data-kodo-tool="true"
+        style={{
+          position: 'absolute',
+          right: 14,
+          top: 14,
+          zIndex: 6,
+          width: 238,
+          padding: 10,
+          borderRadius: 8,
+          border: '1px solid var(--border)',
+          background: 'color-mix(in srgb, var(--bg-1) 94%, #000)',
+          boxShadow: '0 18px 56px rgba(0,0,0,0.34)',
+          color: 'var(--text-0)',
+          pointerEvents: 'auto',
+        }}
+      >
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginBottom: 8 }}>
+          <span style={{ fontSize: 10, color: 'var(--accent)', fontFamily: 'var(--font-mono)', fontWeight: 800, letterSpacing: '0.08em' }}>TWEAKS</span>
+          <button type="button" onClick={() => setTweakPanelOpen(false)} style={{ ...btn(false), padding: '1px 6px', fontSize: 10 }}>Close</button>
+        </div>
+        {([
+          ['fontScale', 'Type scale', 0.85, 1.3, 0.01, tweakState.fontScale],
+          ['radius', 'Radius', 0, 28, 1, tweakState.radius],
+          ['sectionSpacing', 'Section space', 48, 144, 4, tweakState.sectionSpacing],
+        ] as [keyof DesignTweakState, string, number, number, number, number][]).map(([key, label, min, max, step, value]) => (
+          <label key={key} style={{ display: 'grid', gap: 4, marginBottom: 8 }}>
+            <span style={{ display: 'flex', justifyContent: 'space-between', fontSize: 10, color: 'var(--text-2)' }}>
+              <span>{label}</span>
+              <span style={{ fontFamily: 'var(--font-mono)' }}>{key === 'fontScale' ? Number(value).toFixed(2) : Math.round(Number(value))}</span>
+            </span>
+            <input
+              type="range"
+              min={min}
+              max={max}
+              step={step}
+              value={Number(value)}
+              onChange={(event) => void applyTweakPatch({ [key]: Number(event.target.value) } as Partial<DesignTweakState>)}
+              style={{ width: '100%', accentColor: 'var(--accent)' }}
+            />
+          </label>
         ))}
+        <label style={{ display: 'grid', gap: 4 }}>
+          <span style={{ display: 'flex', justifyContent: 'space-between', fontSize: 10, color: 'var(--text-2)' }}>
+            <span>Accent</span>
+            <span style={{ fontFamily: 'var(--font-mono)' }}>{tweakState.accent}</span>
+          </span>
+          <input
+            type="color"
+            value={tweakState.accent}
+            onChange={(event) => void applyTweakPatch({ accent: event.target.value })}
+            style={{ width: '100%', height: 28, background: 'transparent', border: '1px solid var(--border)', borderRadius: 6 }}
+          />
+        </label>
       </div>
-    </>
-  )
+    )
+  }
 
   useEffect(() => {
     if (!selectedFile) return
@@ -4320,9 +5154,11 @@ ${DESIGN_OUTPUT_RULES}
         <div style={{ width: 1, height: 16, background: 'var(--border)' }} />
 
         {/* Device */}
-        <button type="button" style={btn(device === 'desktop')} onClick={() => setDevice('desktop')} title="Desktop"><Monitor size={12} /></button>
-        <button type="button" style={btn(device === 'tablet')} onClick={() => setDevice('tablet')} title="Tablet"><Tablet size={12} /></button>
-        <button type="button" style={btn(device === 'mobile')} onClick={() => setDevice('mobile')} title="Mobile"><Smartphone size={12} /></button>
+        <button type="button" style={btn(device === 'compact-mobile')} onClick={() => setDevice('compact-mobile')} title="Mobile 375"><Smartphone size={12} />375</button>
+        <button type="button" style={btn(device === 'mobile')} onClick={() => setDevice('mobile')} title="Mobile 390"><Smartphone size={12} />390</button>
+        <button type="button" style={btn(device === 'tablet')} onClick={() => setDevice('tablet')} title="Tablet 768"><Tablet size={12} />768</button>
+        <button type="button" style={btn(device === 'desktop')} onClick={() => setDevice('desktop')} title="Desktop 1280"><Monitor size={12} />1280</button>
+        <button type="button" style={btn(device === 'wide')} onClick={() => setDevice('wide')} title="Wide 1920"><Monitor size={12} />1920</button>
 
         <div style={{ width: 1, height: 16, background: 'var(--border)' }} />
         <select
@@ -4345,13 +5181,51 @@ ${DESIGN_OUTPUT_RULES}
         </select>
         <button
           type="button"
-          style={btn(commentMode, true)}
-          onClick={() => setCommentMode((prev) => !prev)}
-          title="Inline comment mode"
+          style={btn(commentMode, commentMode)}
+          onClick={() => { setCommentMode(prev => !prev); setCanvasMode('idle') }}
+          title="Comment mode — click canvas to pin inline note"
           disabled={!canComment}
         >
           <MessageSquare size={11} />
           Comment
+        </button>
+        <button
+          type="button"
+          style={btn(canvasMode === 'draw', canvasMode === 'draw')}
+          onClick={() => {
+            setCanvasMode(prev => prev === 'draw' ? 'idle' : 'draw')
+            setCommentMode(false)
+            if (canvasMode === 'draw') clearCanvas()
+          }}
+          title="Draw mode — annotate any area then send to Kodo"
+          disabled={!previewHtml || !canEdit}
+        >
+          <Pencil size={11} />
+          Draw
+        </button>
+        <button
+          type="button"
+          style={btn(canvasMode === 'select', canvasMode === 'select')}
+          onClick={() => {
+            setCanvasMode(prev => prev === 'select' ? 'idle' : 'select')
+            setCommentMode(false)
+            if (canvasMode === 'select') clearCanvas()
+          }}
+          title="Select region — drag to target a specific area for editing"
+          disabled={!previewHtml || !canEdit}
+        >
+          <Layers size={11} />
+          Select
+        </button>
+        <button
+          type="button"
+          style={btn(tweakPanelOpen, true)}
+          onClick={() => setTweakPanelOpen(prev => !prev)}
+          title="Floating tweaks panel"
+          disabled={!previewHtml || !canEdit}
+        >
+          <Wand2 size={11} />
+          Tweaks
         </button>
 
         {/* History */}
@@ -4420,7 +5294,7 @@ ${DESIGN_OUTPUT_RULES}
               <>
                 <button type="button" style={btn(false)} onClick={() => setRefreshKey(k => k + 1)} title="Refresh"><RefreshCw size={12} /></button>
                 <button type="button" style={btn(false)} onClick={openInTab} title="Open in new tab"><ExternalLink size={12} /></button>
-                <button type="button" style={btn(false)} onClick={downloadAll} title="Download HTML"><Download size={12} /></button>
+                <button type="button" style={btn(false)} onClick={() => void downloadAll()} title="Download clean HTML"><Download size={12} /></button>
                 <button type="button" style={btn(false)} onClick={() => void renderDesignExport('png')} title="Render PNG"><Eye size={12} /></button>
               </>
             )}
@@ -4853,7 +5727,9 @@ ${DESIGN_OUTPUT_RULES}
                       display: 'flex', alignItems: 'center', gap: 6,
                       padding: '5px 10px', fontSize: 11, color: 'var(--text-1)', fontFamily: 'var(--font-mono)',
                     }}>
-                      <span style={{ fontSize: 13 }}>{a.type.startsWith('image/') ? 'ðŸ–¼' : 'ðŸ“Ž'}</span>
+                      {a.type.startsWith('image/')
+                        ? <Images size={12} style={{ flexShrink: 0, color: 'var(--text-2)' }} />
+                        : <FileIcon size={12} style={{ flexShrink: 0, color: 'var(--text-2)' }} />}
                       <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{a.name}</span>
                       <button type="button" onClick={() => setAssets(prev => prev.filter(x => x.id !== a.id))}
                         style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-2)', padding: 0 }}>
@@ -5043,6 +5919,7 @@ ${DESIGN_OUTPUT_RULES}
                       title="Design Preview"
                     />
                     {renderInlineCommentLayer()}
+                    {renderTweaksPanel()}
                   </div>
                 </div>
               ) : viewMode === 'code' ? (
@@ -5111,6 +5988,7 @@ ${DESIGN_OUTPUT_RULES}
                     title="Design Preview"
                   />
                   {renderInlineCommentLayer()}
+                  {renderTweaksPanel()}
                 </div>
               )}
             </div>
@@ -5234,6 +6112,97 @@ ${DESIGN_OUTPUT_RULES}
             )}
 
             {/* Plan checkboxes render inline in the assistant message via ReactMarkdown */}
+
+            {questionCards.length > 0 && (
+              <div style={{ marginBottom: 10, border: '1px solid var(--border)', borderRadius: 8, overflow: 'hidden', background: 'var(--bg-2)' }}>
+                <div style={{ padding: '8px 10px', borderBottom: '1px solid var(--border)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+                  <div>
+                    <div style={{ fontSize: 10, color: 'var(--accent)', fontFamily: 'var(--font-mono)', fontWeight: 800, letterSpacing: '0.08em' }}>CLARIFYING CARDS</div>
+                    <div style={{ fontSize: 10, color: 'var(--text-2)', marginTop: 2 }}>Answer any useful cards. Partial context is fine.</div>
+                  </div>
+                  <button type="button" onClick={generateFromQuestionCards} disabled={isLoading} style={{ ...btn(false), padding: '4px 9px', fontSize: 10 }}>
+                    <Wand2 size={11} /> Generate
+                  </button>
+                </div>
+                <div style={{ padding: 10, display: 'grid', gap: 8 }}>
+                  {questionCards.map((card) => {
+                    const current = questionAnswers[card.id]
+                    const selected = Array.isArray(current) ? current : (current ? [String(current)] : [])
+                    return (
+                      <div key={card.id} style={{ border: '1px solid var(--border)', borderRadius: 8, padding: 8, background: 'var(--bg-1)' }}>
+                        <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-0)', marginBottom: 7 }}>{card.question}</div>
+                        <div style={{ display: 'flex', gap: 5, flexWrap: 'wrap' }}>
+                          {card.options.map((option) => {
+                            const active = selected.includes(option)
+                            return (
+                              <button
+                                key={option}
+                                type="button"
+                                onClick={() => updateQuestionAnswer(card, option)}
+                                style={{ ...btn(active), padding: '3px 7px', fontSize: 10, whiteSpace: 'normal', textAlign: 'left' }}
+                              >
+                                {option}
+                              </button>
+                            )
+                          })}
+                        </div>
+                        {card.allow_free_text !== false && (
+                          <input
+                            value={!Array.isArray(current) && current && !card.options.includes(String(current)) ? String(current) : ''}
+                            onChange={(event) => setQuestionAnswers(prev => ({ ...prev, [card.id]: event.target.value }))}
+                            placeholder="Custom answer"
+                            style={{ marginTop: 7, width: '100%', boxSizing: 'border-box', background: 'var(--bg-2)', border: '1px solid var(--border)', borderRadius: 6, color: 'var(--text-1)', fontSize: 10, padding: '5px 7px', outline: 'none' }}
+                          />
+                        )}
+                      </div>
+                    )
+                  })}
+                </div>
+              </div>
+            )}
+
+            {(buildSteps.length > 0 || designAudit) && (
+              <div style={{ marginBottom: 10, display: 'grid', gap: 7 }}>
+                {buildSteps.length > 0 && (
+                  <div style={{ border: '1px solid var(--border)', borderRadius: 8, padding: 8, background: 'var(--bg-2)' }}>
+                    <div style={{ fontSize: 9, color: 'var(--text-2)', fontFamily: 'var(--font-mono)', letterSpacing: '0.08em', marginBottom: 6 }}>LIVE BUILD</div>
+                    <div style={{ display: 'grid', gap: 5 }}>
+                      {buildSteps.slice(-6).map((step, index) => (
+                        <div key={`${step.type}-${step.label}-${index}`} style={{ display: 'grid', gap: 3 }}>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, fontSize: 10 }}>
+                            <span style={{ color: 'var(--text-0)' }}>{step.label}</span>
+                            <span style={{ color: 'var(--text-2)', fontFamily: 'var(--font-mono)' }}>{Math.round(step.progress)}%</span>
+                          </div>
+                          <div style={{ height: 3, background: 'var(--bg-3)', borderRadius: 999, overflow: 'hidden' }}>
+                            <div style={{ width: `${Math.max(4, Math.min(100, step.progress))}%`, height: '100%', background: 'var(--accent)' }} />
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+                {designAudit && (
+                  <div style={{ border: '1px solid var(--border)', borderRadius: 8, padding: 8, background: 'var(--bg-2)' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8 }}>
+                      <div>
+                        <div style={{ fontSize: 9, color: 'var(--text-2)', fontFamily: 'var(--font-mono)', letterSpacing: '0.08em' }}>ACCESSIBILITY</div>
+                        <div style={{ fontSize: 11, color: 'var(--text-0)', marginTop: 3 }}>{designAudit.summary}</div>
+                      </div>
+                      <div style={{ fontSize: 18, fontWeight: 800, color: designAudit.score >= 85 ? '#2f9a51' : designAudit.score >= 70 ? '#ffb020' : '#ff6b6b', fontFamily: 'var(--font-mono)' }}>{designAudit.score}</div>
+                    </div>
+                    {designAudit.issues.length > 0 && (
+                      <div style={{ marginTop: 7, display: 'grid', gap: 4 }}>
+                        {designAudit.issues.slice(0, 4).map((issue) => (
+                          <div key={issue.id} style={{ fontSize: 10, color: 'var(--text-2)', lineHeight: 1.4 }}>
+                            <span style={{ color: issue.severity === 'error' ? '#ff6b6b' : issue.severity === 'warning' ? '#ffb020' : 'var(--accent)', fontFamily: 'var(--font-mono)' }}>{issue.category}</span>: {issue.message}
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
 
             {messages.map(msg => (
               <div key={msg.id} style={{
@@ -5366,9 +6335,9 @@ ${DESIGN_OUTPUT_RULES}
                 style={{ ...btn(false), fontSize: 10 }}>
                 <Upload size={11} /> Asset
               </button>
-              <input ref={fileInputRef} type="file" multiple accept="image/*,.css,.js,.json,.html,.ts,.tsx,.jsx,.md,.txt,.py,.yaml,.yml"
+              <input ref={fileInputRef} type="file" multiple
                 style={{ display: 'none' }}
-                onChange={e => void handleAssetUpload(e.target.files)} />
+                onChange={e => { void handleAssetUpload(e.target.files); e.currentTarget.value = '' }} />
               <div style={{ flex: 1 }} />
               {isLoading ? (
                 <button

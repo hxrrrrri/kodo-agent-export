@@ -1,0 +1,24 @@
+.kodo-design-overlay {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 20;
+}
+
+.kodo-design-overlay[data-mode="comment"],
+.kodo-design-overlay[data-mode="draw"],
+.kodo-design-overlay[data-mode="region"] {
+  pointer-events: auto;
+}
+
+.kodo-design-pin,
+.kodo-design-selection,
+.kodo-design-drawing {
+  position: absolute;
+  pointer-events: auto;
+}
+
+.kodo-design-selection {
+  border: 1px solid #38bdf8;
+  box-shadow: 0 0 0 1px rgba(56, 189, 248, 0.18), 0 8px 30px rgba(8, 47, 73, 0.28);
+}

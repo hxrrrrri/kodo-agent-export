@@ -30,6 +30,7 @@ from api.security import (
 )
 from api.permission_hub import permission_hub
 from commands.router import execute_command, is_command_message
+from kodo.capsule import capsule_manager
 from mcp.registry import mcp_registry
 from mcp.stdio_client import MCPClientError
 from memory.manager import memory_manager
@@ -51,6 +52,33 @@ def _safe_error_message(error: Exception) -> str:
     message = str(error).strip() or "Unexpected server error."
     message = SECRET_PATTERN.sub("[REDACTED]", message)
     return message[:500]
+
+
+async def _track_capsule_usage(
+    *,
+    session_id: str,
+    provider: str | None,
+    usage_payload: dict[str, Any] | None,
+) -> dict[str, Any] | None:
+    if not isinstance(usage_payload, dict):
+        return None
+    try:
+        body = {
+            "model": str(usage_payload.get("model", "") or "unknown"),
+            "input_tokens": int(usage_payload.get("input_tokens", 0) or 0),
+            "output_tokens": int(usage_payload.get("output_tokens", 0) or 0),
+            "input_cache_read_tokens": int(usage_payload.get("input_cache_read_tokens", 0) or 0),
+            "input_cache_write_tokens": int(usage_payload.get("input_cache_write_tokens", 0) or 0),
+        }
+        state = await capsule_manager.token_tracker.record_response(
+            provider=str(provider or "unknown"),
+            response_body=body,
+            response_headers={},
+            session_id=session_id,
+        )
+        return state.to_payload()
+    except Exception:
+        return None
 
 
 def _resolve_mode(requested_mode: str | None, stored_mode: str | None) -> str:
@@ -958,6 +986,11 @@ async def send_message(req: ChatRequest, request: Request):
                         )
                     except Exception:
                         usage_event = None
+                    await _track_capsule_usage(
+                        session_id=session_id,
+                        provider=str(getattr(run_result, "provider", "unknown") or "unknown"),
+                        usage_payload=usage_payload,
+                    )
                 else:
                     usage_event = None
 
@@ -1082,6 +1115,11 @@ async def send_message(req: ChatRequest, request: Request):
                     )
                 except Exception:
                     usage_event = None
+                await _track_capsule_usage(
+                    session_id=session_id,
+                    provider=str(provider_name or "unknown"),
+                    usage_payload=usage_payload,
+                )
                 log_audit_event(
                     "chat_send_completed",
                     request_id=request_id,
@@ -1653,6 +1691,12 @@ async def list_commands_endpoint(request: Request):
     return {
         "commands": [
             {"name": "/help", "description": "Show available commands"},
+            {"name": "/capsule", "description": "Show Kodo Capsule commands"},
+            {"name": "/cap save [tag]", "description": "Capture the current session as a capsule"},
+            {"name": "/cap inject <id>", "description": "Prepare capsule context for injection"},
+            {"name": "/cap list", "description": "List saved capsules"},
+            {"name": "/cap compress", "description": "Compress current session context"},
+            {"name": "/cap usage", "description": "Show capsule token usage"},
             {"name": "/cost [days]", "description": "Show token and cost usage summary"},
             {"name": "/search <query>", "description": "Search the web and return top results"},
             {"name": "/krawlx <url>", "description": "Crawl a website via KrawlX secure crawler"},

@@ -48,6 +48,8 @@ from api.hermes_features import router as hermes_router
 from api.cdn_proxy import router as cdn_proxy_router
 from api.browser_admin import router as browser_router
 from api.design_extract import router as design_extract_router
+from kodo.capsule.web.capsule_router import router as capsule_router
+from kodo.design.web.design_router import router as kodo_design_router
 from observability.audit import log_audit_event
 from observability.request_context import clear_request_id, set_request_id
 from providers.smart_router import get_smart_router, smart_router_enabled
@@ -129,6 +131,8 @@ app.include_router(hermes_router)
 app.include_router(cdn_proxy_router)
 app.include_router(browser_router, prefix="/api")
 app.include_router(design_extract_router)
+app.include_router(capsule_router)
+app.include_router(kodo_design_router)
 
 
 @app.middleware("http")

@@ -1,530 +1,164 @@
-﻿<!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Luxury Premium — Design System</title>
+<title>Design System Inspiration of Luxury Premium</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@400;500;600;700&family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet">
 <style>
-*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
-:root{
-  --bg:#0b0a08;--surface:#17130f;--text:#f7efe4;--muted:#b7a58d;--accent:#c8a45d;
-  --font-d:Georgia, serif;--font-b:Inter, system-ui, sans-serif;
-  --border:rgba(255,255,255,0.1);--border-strong:rgba(255,255,255,0.18);
-  --shadow:0 2px 16px rgba(0,0,0,0.5);--accent-alpha:rgba(200,164,93,0.15);
-}
+:root{--canvas:#0b0a08;--surface:#17130f;--ink:#f7efe4;--body:#e8dcc9;--muted:#b7a58d;--hairline:#3a3128;--accent:#c8a45d;--accent-2:#c8a45d;--success:#22c55e;--danger:#ef4444;--warning:#f59e0b;--display:Georgia, "Times New Roman", serif;--text:Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;--mono:SFMono-Regular, Menlo, Consolas, monospace;--radius:2px;--button-radius:0px;--accent-on:#ffffff;--shadow:0 24px 70px rgba(200,164,93,0.22);}
+*{box-sizing:border-box;margin:0;padding:0}
 html{font-size:16px;-webkit-font-smoothing:antialiased;color-scheme:dark}
-body{background:var(--bg);color:var(--text);font-family:var(--font-b);min-height:100vh;overflow-x:hidden}
-a{color:inherit;text-decoration:none}
-
-/* NAV */
-nav{display:flex;align-items:center;gap:32px;padding:0 48px;height:64px;border-bottom:1px solid var(--border);position:sticky;top:0;background:var(--bg);z-index:50}
-.nav-brand{font-family:var(--font-d);font-weight:800;font-size:16px;letter-spacing:-0.02em}
-.nav-links{display:flex;gap:24px;list-style:none}
-.nav-links a{font-size:14px;font-weight:500;color:var(--muted)}
-.nav-links a:hover{color:var(--text)}
-.nav-right{margin-left:auto;display:flex;gap:10px;align-items:center}
-.btn-ghost{background:none;border:1px solid var(--border-strong);color:var(--text);font-size:13px;font-weight:500;padding:7px 16px;border-radius:8px;cursor:pointer;font-family:var(--font-b)}
-.btn-accent{background:#c8a45d;border:none;color:#000000;font-size:13px;font-weight:700;padding:8px 18px;border-radius:8px;cursor:pointer;font-family:var(--font-b)}
-
-/* HEADER BAND */
-.header-band{padding:12px 48px;border-bottom:1px solid var(--border);font-size:11px;font-weight:700;letter-spacing:0.1em;text-transform:uppercase;color:var(--muted)}
-
-/* SECTION WRAPPER */
-.section{padding:56px 48px;border-bottom:1px solid var(--border)}
-.section-label{font-size:11px;font-weight:700;letter-spacing:0.1em;text-transform:uppercase;color:var(--muted);margin-bottom:8px}
-.section-title{font-family:var(--font-d);font-size:28px;font-weight:800;letter-spacing:-0.02em;line-height:1.1;margin-bottom:8px}
-.section-desc{font-size:14px;color:var(--muted);line-height:1.6;max-width:600px;margin-bottom:32px}
-
-/* COLOR PALETTE */
-.color-grid{display:grid;grid-template-columns:repeat(5,1fr);gap:12px}
-.color-swatch-wrap{border:1px solid var(--border);border-radius:10px;overflow:hidden}
-.color-swatch{height:80px}
-.color-meta{padding:10px 12px;background:var(--surface)}
-.color-name{font-size:11px;font-weight:700;letter-spacing:0.04em;text-transform:uppercase;margin-bottom:3px}
-.color-hex{font-size:12px;font-family:monospace;color:var(--muted);margin-bottom:3px}
-.color-desc{font-size:11px;color:var(--muted)}
-
-/* M-STRIPE (accent stripe) */
-.accent-stripe{height:4px;background:#c8a45d;margin:0 0 0 0}
-
-/* TYPOGRAPHY */
-.type-table{width:100%;border:1px solid var(--border);border-radius:10px;overflow:hidden}
-.type-row{display:grid;grid-template-columns:140px 1fr;align-items:center;border-top:1px solid var(--border);padding:12px 16px;gap:24px}
-.type-row:first-child{border-top:none}
-.type-meta{font-size:11px;color:var(--muted);font-family:monospace}
-.type-meta strong{display:block;font-size:12px;color:var(--text);font-weight:600;margin-bottom:2px}
-
-/* BUTTONS */
-.btn-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:16px}
-.btn-card{background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:20px;box-shadow:var(--shadow)}
-.btn-card-label{font-size:11px;font-weight:700;letter-spacing:0.06em;text-transform:uppercase;color:#c8a45d;margin-bottom:12px}
-.btn-card-desc{font-size:11px;color:var(--muted);margin-top:8px}
-.demo-btn-primary{display:inline-flex;align-items:center;gap:8px;background:#c8a45d;color:#000000;border:none;padding:11px 22px;border-radius:8px;font-size:14px;font-weight:700;font-family:var(--font-b);cursor:pointer;letter-spacing:0.02em}
-.demo-btn-outline{display:inline-flex;align-items:center;gap:8px;background:transparent;color:var(--text);border:1px solid var(--border-strong);padding:10px 22px;border-radius:8px;font-size:14px;font-weight:600;font-family:var(--font-b);cursor:pointer}
-.demo-btn-ghost{display:inline-flex;align-items:center;gap:8px;background:transparent;color:var(--muted);border:none;padding:10px 16px;border-radius:8px;font-size:14px;font-weight:500;font-family:var(--font-b);cursor:pointer}
-.demo-btn-danger{display:inline-flex;align-items:center;gap:8px;background:#dc2626;color:#fff;border:none;padding:11px 22px;border-radius:8px;font-size:14px;font-weight:700;font-family:var(--font-b);cursor:pointer}
-
-/* CARDS */
-.card-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:16px}
-.design-card{background:var(--surface);border:1px solid var(--border);border-radius:12px;overflow:hidden;box-shadow:var(--shadow)}
-.card-img{height:120px;background:linear-gradient(135deg,#c8a45d33,#b7a58d22)}
-.card-body{padding:16px}
-.card-tag{font-size:10px;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;color:#c8a45d;margin-bottom:8px}
-.card-title{font-family:var(--font-d);font-size:16px;font-weight:700;margin-bottom:6px;letter-spacing:-0.01em}
-.card-desc{font-size:13px;color:var(--muted);line-height:1.5}
-
-/* FORM */
-.form-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:16px;margin-bottom:16px}
-.form-field label{display:block;font-size:12px;font-weight:600;margin-bottom:6px;color:var(--muted)}
-.form-input{width:100%;background:var(--surface);border:1px solid var(--border-strong);color:var(--text);font-size:14px;font-family:var(--font-b);padding:10px 12px;border-radius:8px;outline:none}
-.form-input:focus{border-color:#c8a45d}
-.form-input.focused{border-color:#c8a45d;box-shadow:0 0 0 3px rgba(200,164,93,0.15)}
-textarea.form-input{resize:vertical;min-height:80px}
-
-/* SPEC CELLS */
-.spec-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:1px;background:var(--border);border:1px solid var(--border);border-radius:10px;overflow:hidden}
-.spec-cell{background:var(--bg);padding:20px;text-align:center}
-.spec-value{font-family:var(--font-d);font-size:28px;font-weight:800;letter-spacing:-0.03em;margin-bottom:4px}
-.spec-label{font-size:11px;font-weight:600;letter-spacing:0.06em;text-transform:uppercase;color:var(--muted)}
-
-/* SPACING */
-.spacing-row{display:flex;align-items:flex-end;gap:8px;flex-wrap:wrap}
-.spacing-item{display:flex;flex-direction:column;align-items:center;gap:6px}
-.spacing-bar{width:24px;background:#c8a45d;border-radius:3px}
-.spacing-val{font-size:10px;font-family:monospace;color:var(--muted)}
-
-/* RADIUS */
-.radius-row{display:flex;align-items:center;gap:16px;flex-wrap:wrap}
-.radius-box{display:flex;flex-direction:column;align-items:center;gap:8px}
-.radius-demo{width:56px;height:56px;background:var(--accent-alpha);border:2px solid #c8a45d}
-.radius-label{font-size:11px;font-family:monospace;color:var(--muted)}
-
-/* ELEVATION */
-.elev-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:16px}
-.elev-card{background:var(--surface);border-radius:10px;padding:20px;border:1px solid var(--border)}
-.elev-label{font-size:11px;font-weight:700;letter-spacing:0.06em;text-transform:uppercase;color:#c8a45d;margin-bottom:4px}
-.elev-sub{font-size:11px;color:var(--muted);line-height:1.5}
-
-/* CTA BAND */
-.cta-band{padding:64px 48px;text-align:center;background:linear-gradient(135deg,#c8a45d22,#b7a58d11)}
-.cta-title{font-family:var(--font-d);font-size:36px;font-weight:800;letter-spacing:-0.02em;margin-bottom:16px}
-.cta-sub{font-size:16px;color:var(--muted);margin-bottom:32px}
-
-/* RESPONSIVE TABLE */
-.resp-table{width:100%;border:1px solid var(--border);border-radius:10px;overflow:hidden;border-collapse:collapse}
-.resp-table th{background:var(--surface);padding:12px 16px;text-align:left;font-size:11px;font-weight:700;letter-spacing:0.06em;text-transform:uppercase;color:var(--muted);border-bottom:1px solid var(--border)}
-.resp-table td{padding:12px 16px;font-size:13px;border-bottom:1px solid var(--border)}
-.resp-table tr:last-child td{border-bottom:none}
-.resp-table td:first-child{font-weight:600}
-
-/* FOOTER */
-footer{padding:32px 48px;border-top:1px solid var(--border)}
-.footer-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:32px;margin-bottom:24px}
-.footer-col h6{font-size:11px;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;color:var(--muted);margin-bottom:12px}
-.footer-col span{display:block;font-size:13px;color:var(--muted);margin-bottom:6px}
-.footer-credit{font-size:12px;color:var(--muted);border-top:1px solid var(--border);padding-top:20px}
-
-.badge{display:inline-block;padding:3px 8px;border-radius:999px;font-size:11px;font-weight:700;letter-spacing:0.04em}
-.badge-accent{background:rgba(200,164,93,0.15);color:#c8a45d}
-.badge-muted{background:rgba(247,239,228,0.08);color:var(--muted)}
+body{background:var(--canvas);color:var(--ink);font-family:var(--text);line-height:1.5;overflow-x:hidden}
+button,input{font:inherit}
+.nav{position:sticky;top:0;z-index:20;height:68px;padding:0 48px;display:grid;grid-template-columns:1fr auto 1fr;align-items:center;background:rgba(11,10,8,0.88);border-bottom:1px solid var(--hairline);backdrop-filter:blur(14px)}
+.brand{font-family:var(--display);font-weight:400;font-size:17px;letter-spacing:-.02em}
+.nav-links{list-style:none;display:flex;gap:28px;align-items:center;justify-self:center}
+.nav-links a{color:var(--muted);text-decoration:none;font-size:14px;font-weight:600}
+.nav-cta{justify-self:end;background:var(--ink);color:#111111;border:1px solid var(--hairline);border-radius:var(--button-radius);padding:10px 18px;font-size:14px;font-weight:600;cursor:pointer}
+.hero{max-width:1440px;margin:0 auto;padding:86px 48px 72px;display:grid;grid-template-columns:minmax(0,1fr) minmax(360px,.86fr);gap:56px;align-items:center;border-bottom:1px solid var(--hairline)}
+.eyebrow{font-size:12px;letter-spacing:.12em;text-transform:uppercase;color:var(--muted);font-weight:700;margin-bottom:18px}
+h1{font-family:var(--display);font-size:clamp(48px,7vw,74px);font-weight:400;line-height:.96;letter-spacing:-.045em;max-width:880px;margin-bottom:24px}
+.hero p{max-width:760px;color:var(--body);font-size:18px;line-height:1.65;margin-bottom:28px}
+.hero-actions{display:flex;gap:12px;flex-wrap:wrap;align-items:center}
+.btn-primary,.btn-secondary{min-height:44px;padding:11px 22px;border-radius:var(--button-radius);font-size:15px;font-weight:650;cursor:pointer}
+.btn-primary{background:var(--accent);color:var(--accent-on);border:1px solid transparent}
+.btn-secondary{background:transparent;color:var(--ink);border:1px solid var(--hairline)}
+.hero-panel{background:var(--surface);border:1px solid var(--hairline);border-radius:var(--radius);padding:20px;box-shadow:var(--shadow);}
+section{max-width:1440px;margin:0 auto;padding:64px 48px;border-bottom:1px solid var(--hairline)}
+.section-label{font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:var(--muted);font-weight:800;margin-bottom:12px}
+.section-heading{font-family:var(--display);font-size:32px;font-weight:400;line-height:1.12;letter-spacing:-.025em;margin-bottom:14px}
+.section-intro{font-size:16px;color:var(--body);max-width:760px;margin-bottom:34px;line-height:1.6}
+.palette-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(190px,1fr));gap:16px}
+.swatch{border:1px solid var(--hairline);background:var(--surface);border-radius:var(--radius);overflow:hidden;}
+.swatch-color{height:102px}
+.swatch-meta{padding:14px 15px}
+.swatch-name{font-size:13px;font-weight:750;color:var(--ink);margin-bottom:4px}.swatch-hex{font:12px var(--mono);color:var(--muted);margin-bottom:6px}.swatch-role{font-size:12px;color:var(--body);line-height:1.45}
+.type-table{border:1px solid var(--hairline);border-radius:var(--radius);overflow:hidden;background:var(--surface)}
+.type-row{display:grid;grid-template-columns:280px 1fr;gap:28px;align-items:baseline;padding:18px 20px;border-top:1px solid var(--hairline)}
+.type-row:first-child{border-top:none}.type-meta{font:12px var(--mono);color:var(--muted)}.type-meta strong{display:block;font-family:var(--text);font-size:13px;color:var(--ink);margin-bottom:4px}.type-sample{font-family:var(--display);color:var(--ink);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.button-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:18px}.button-cell{background:var(--surface);border:1px solid var(--hairline);border-radius:var(--radius);padding:22px;}.button-label{font-size:12px;color:var(--muted);font-weight:750;margin-bottom:14px}.button-meta{font-size:12px;color:var(--body);margin-top:12px}.demo-ghost,.demo-danger{min-height:42px;border-radius:var(--button-radius);padding:10px 18px;font-weight:650}.demo-ghost{background:transparent;color:var(--ink);border:1px solid var(--hairline)}.demo-danger{background:var(--danger);color:#fff;border:0}
+.component-stage{background:var(--surface);border:1px solid var(--hairline);border-radius:var(--radius);padding:24px;}
+.rules-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:16px}.rule-card{background:var(--surface);border:1px solid var(--hairline);border-radius:var(--radius);padding:18px;color:var(--body);font-size:14px}.rule-card b{display:block;color:var(--accent);font-size:12px;letter-spacing:.08em;text-transform:uppercase;margin-bottom:8px}
+.spec-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:1px;background:var(--hairline);border:1px solid var(--hairline);border-radius:var(--radius);overflow:hidden}.spec-cell{background:var(--surface);padding:22px}.spec-value{font-family:var(--display);font-size:28px;font-weight:800;color:var(--ink)}.spec-label{font-size:12px;color:var(--muted);font-weight:650;margin-top:2px}
+.footer{padding:44px 48px;background:var(--surface);border-top:1px solid var(--hairline)}.footer-inner{max-width:1440px;margin:0 auto;display:grid;grid-template-columns:1fr 1fr;gap:32px}.footer h6{font-size:12px;letter-spacing:.12em;text-transform:uppercase;color:var(--muted);margin-bottom:10px}.footer p,.footer span{color:var(--body);font-size:14px}
+.app-shell{display:grid;grid-template-columns:230px 1fr;min-height:360px;border:1px solid var(--hairline);border-radius:var(--radius);overflow:hidden;background:var(--canvas)}.app-shell aside{background:var(--surface);border-right:1px solid var(--hairline);padding:18px;display:flex;flex-direction:column;gap:12px;color:var(--muted);font-size:14px}.app-shell aside strong{color:var(--ink);margin-bottom:8px}.app-shell main{padding:18px;background:var(--canvas)}
+.repo-head,.incident-top,.chat-title{display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid var(--hairline);padding-bottom:14px;margin-bottom:12px}.repo-head button,.incident-top button,.buy-box button,.record-card button,.article-card button,.organic-scene button,.component-board button,.poster-hero button,.auto-specs button,.brutal-board button,.cyber-scene button,.research-grid button{background:var(--accent);color:var(--accent-on);border:0;border-radius:var(--button-radius);padding:9px 14px;font-weight:700}
+.issue-row,.message,.timeline{display:flex;gap:12px;align-items:flex-start;padding:12px;border:1px solid var(--hairline);border-radius:var(--button-radius);margin:10px 0;background:var(--surface)}.issue-row p,.message p,.timeline em{color:var(--muted);font-size:12px;font-style:normal}.status,.pulse{width:12px;height:12px;border-radius:999px;background:var(--success);margin-top:4px}.status.danger{background:var(--danger)}.diff,.code-panel pre{font-family:var(--mono);font-size:13px;background:#010409;color:var(--body);border:1px solid var(--hairline);border-radius:var(--button-radius);padding:14px;overflow:auto}.code-panel span{color:var(--accent)}
+.poster-stage{min-height:390px;background:linear-gradient(90deg,rgba(0,0,0,.78),rgba(0,0,0,.2)),var(--surface);border-radius:var(--radius);padding:28px;display:flex;flex-direction:column;justify-content:space-between}.poster-hero h3{font-size:48px;line-height:1;font-family:var(--display);margin:8px 0}.poster-hero p{max-width:330px;color:var(--body)}.poster-row{display:grid;grid-template-columns:repeat(5,1fr);gap:12px}.poster{height:112px;border-radius:4px;background:linear-gradient(135deg,var(--accent),var(--surface));display:flex;align-items:end;padding:10px;font-weight:900;font-size:24px;color:#fff}
+.commerce-grid,.crm-grid,.research-grid{display:grid;grid-template-columns:1fr 320px;gap:20px}.product-image,.quiet-card{min-height:260px;background:linear-gradient(135deg,var(--accent),var(--accent-2));border-radius:var(--radius);display:flex;align-items:center;justify-content:center;color:var(--accent-on);font-weight:900}.thumbs{display:flex;gap:8px;margin-top:12px}.thumbs i{width:56px;height:56px;background:var(--surface);border:1px solid var(--hairline);border-radius:var(--button-radius)}.buy-box,.record-card,.pipeline,.article-card{background:var(--surface);border:1px solid var(--hairline);border-radius:var(--radius);padding:20px}.price{font-size:30px;font-weight:800;color:var(--ink);margin:14px 0}.rating{color:var(--accent)}
+.ops-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:14px}.ops-card{background:var(--canvas);border:1px solid var(--hairline);border-radius:var(--radius);padding:18px}.ops-card.wide{grid-column:span 3}.ops-card b{font-size:32px}.ops-card span{display:block;color:var(--muted)}.chart{height:170px;display:flex;align-items:end;gap:9px}.chart i{flex:1;border-radius:6px 6px 0 0;opacity:.88}
+.kanban{display:grid;grid-template-columns:repeat(3,1fr);gap:14px}.lane{background:var(--canvas);border:1px solid var(--hairline);border-radius:var(--radius);padding:14px}.lane h4{margin-bottom:12px}.ticket{background:var(--surface);border:1px solid var(--hairline);border-radius:var(--button-radius);padding:12px;margin:10px 0}
+.auto-stage{min-height:350px;background:linear-gradient(135deg,var(--surface),var(--canvas));border-radius:var(--radius);padding:26px;display:grid;grid-template-columns:1fr 260px;align-items:end;gap:20px}.car-silhouette{height:150px;border-bottom:34px solid var(--ink);border-radius:55% 45% 16px 16px;box-shadow:0 16px 0 var(--accent)}.auto-specs{background:var(--canvas);border:1px solid var(--hairline);padding:18px;border-radius:var(--radius);display:flex;flex-direction:column;gap:10px}
+.browser-frame,.creative-board,.component-board,.video-card,.files-grid,.masonry,.paper-grid,.model-grid{border:1px solid var(--hairline);border-radius:var(--radius);background:var(--canvas);padding:16px}.browser-frame{display:grid;grid-template-columns:180px 1fr;gap:16px}.browser-sidebar{border-right:1px solid var(--hairline);display:flex;flex-direction:column;gap:10px;color:var(--muted)}.url-pill{border:1px solid var(--hairline);border-radius:999px;padding:9px 14px;color:var(--muted);margin-bottom:36px}
+.creative-board{display:grid;grid-template-columns:1fr 150px;gap:14px}.toolbar{grid-column:1/-1;color:var(--muted);border-bottom:1px solid var(--hairline);padding-bottom:12px}.canvas-art{height:250px;border-radius:var(--radius);background:linear-gradient(135deg,var(--accent),var(--accent-2));display:flex;align-items:center;justify-content:center;color:#fff;font-size:34px;font-weight:900}.asset-grid{display:grid;gap:10px}.asset-grid i,.file{background:var(--surface);border:1px solid var(--hairline);border-radius:var(--button-radius)}
+.video-card{height:310px;position:relative;background:linear-gradient(135deg,var(--accent),var(--surface));display:flex;align-items:center;justify-content:center}.play{width:82px;height:82px;border-radius:999px;background:var(--surface);display:flex;align-items:center;justify-content:center;color:var(--accent);font-size:28px}.video-timeline{position:absolute;left:20px;right:20px;bottom:24px;height:8px;background:rgba(255,255,255,.35);border-radius:999px}.video-timeline span{display:block;width:46%;height:100%;background:var(--accent);border-radius:999px}.bubble{position:absolute;top:22px;right:22px;background:var(--surface);border-radius:999px;padding:8px 12px}
+.files-grid,.model-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:12px}.file{padding:16px;min-height:130px}.file i{font-size:32px;color:var(--accent);font-style:normal}.file b,.file span{display:block}.file span{color:var(--muted);font-size:12px}
+.masonry{columns:5 150px;column-gap:14px}.note{break-inside:avoid;background:var(--surface);border:1px solid var(--hairline);border-radius:var(--radius);margin-bottom:14px;padding:14px;display:flex;flex-direction:column;justify-content:end;background:linear-gradient(135deg,var(--surface),rgba(200,164,93,0.16))}.note span{color:var(--accent);font-size:12px}
+.article-card{text-align:center;max-width:760px;margin:auto;padding:50px}.article-card h3{font:400 48px/1.05 var(--display);letter-spacing:-.03em;margin-bottom:16px}.kicker{color:var(--accent);text-transform:uppercase;letter-spacing:.12em;font-size:12px}
+.mag-layout,.minimal-layout,.brutal-board,.glass-scene,.clay-scene,.retro-scene,.cosmic-scene,.cyber-scene,.luxury-scene,.organic-scene{min-height:340px;border:1px solid var(--hairline);border-radius:var(--radius);background:var(--surface);padding:28px;position:relative;overflow:hidden}
+.mag-layout h3{font:900 66px/.86 var(--display);max-width:620px}.pullquote{position:absolute;right:28px;bottom:28px;font:italic 30px var(--display);color:var(--accent)}.minimal-layout{display:grid;place-items:center;text-align:center}.minimal-layout span{font-size:64px;color:var(--accent)}.minimal-layout h3{font:400 44px var(--display)}
+.brutal-board{border-width:4px;box-shadow:10px 10px 0 var(--ink);background:var(--accent)}.brutal-board h3{font:900 64px/.9 var(--display);color:var(--ink)}
+.glass-scene{background:radial-gradient(circle at 20% 20%,rgba(200,164,93,0.5),transparent 28%),radial-gradient(circle at 80% 40%,rgba(200,164,93,0.35),transparent 28%),var(--canvas);display:grid;place-items:center}.glass-card{max-width:420px;padding:28px;border:1px solid var(--hairline);background:var(--surface);border-radius:var(--radius);backdrop-filter:blur(22px)}
+.clay-scene{display:grid;grid-template-columns:1fr 1fr;align-items:center}.clay-blob{width:220px;height:220px;border-radius:42% 58% 48% 52%;background:var(--accent);box-shadow:18px 24px 40px rgba(200,164,93,0.25),inset 12px 16px 22px rgba(255,255,255,.35)}.clay-panel{background:var(--surface);padding:24px;border-radius:28px;}
+.retro-scene{background:linear-gradient(transparent 60%,rgba(200,164,93,0.3)),var(--canvas);display:grid;place-items:center;text-align:center;text-shadow:0 0 12px currentColor}.retro-scene h3{font:900 58px var(--mono)}
+.cosmic-scene{background:radial-gradient(circle at 40% 35%,rgba(200,164,93,0.55),transparent 18%),var(--canvas);display:grid;place-items:center;text-align:center}.planet{width:120px;height:120px;border-radius:999px;background:linear-gradient(135deg,var(--accent),var(--surface));box-shadow:0 0 80px rgba(200,164,93,0.55)}
+.cyber-scene{border-color:var(--accent);box-shadow:0 0 30px rgba(200,164,93,0.4);background:linear-gradient(135deg,var(--canvas),var(--surface));color:var(--accent);font-family:var(--mono)}.cyber-scene h3{font-size:54px}
+.luxury-scene{text-align:center;display:grid;place-items:center;background:var(--surface)}.luxury-scene h3{font:400 56px var(--display);color:var(--accent)}.organic-scene{background:radial-gradient(circle at 80% 20%,rgba(200,164,93,0.18),transparent 30%),var(--surface)}
+.code-panel{display:grid;grid-template-columns:1fr 180px;gap:16px}.bench{background:var(--canvas);border:1px solid var(--hairline);border-radius:var(--radius);padding:18px;display:grid;place-items:center;text-align:center}.bench b{font-size:44px;color:var(--accent)}
+.model-card{background:var(--surface);border:1px solid var(--hairline);border-radius:var(--radius);padding:16px}.model-card span{color:var(--accent);font-size:12px}
+@media (max-width:900px){.nav{padding:0 20px;grid-template-columns:1fr auto}.nav-links{display:none}.hero,section{padding-left:20px;padding-right:20px}.hero{grid-template-columns:1fr;padding-top:52px}.type-row{grid-template-columns:1fr;gap:8px}.commerce-grid,.crm-grid,.research-grid,.auto-stage,.code-panel{grid-template-columns:1fr}.ops-grid,.kanban,.poster-row,.files-grid,.model-grid{grid-template-columns:1fr}.ops-card.wide{grid-column:span 1}.app-shell,.browser-frame,.creative-board{grid-template-columns:1fr}.app-shell aside{border-right:0;border-bottom:1px solid var(--hairline)}.footer-inner{grid-template-columns:1fr}}
 </style>
 </head>
 <body>
-
-<div class="accent-stripe"></div>
-
-<nav>
-  <span class="nav-brand">LUXURY PREMIUM</span>
-  <ul class="nav-links">
-    <li><a href="#">Overview</a></li>
-    <li><a href="#">Tokens</a></li>
-    <li><a href="#">Components</a></li>
-    <li><a href="#">Guidelines</a></li>
-  </ul>
-  <div class="nav-right">
-    <button class="btn-ghost">Docs</button>
-    <button class="btn-accent">Get Started</button>
+<nav class="nav"><div class="brand">Luxury Premium</div><ul class="nav-links"><li><a href="#colors">Colors</a></li><li><a href="#type">Type</a></li><li><a href="#components">Components</a></li><li><a href="#rules">Rules</a></li></ul><button class="nav-cta">Preview</button></nav>
+<main>
+  <div class="hero">
+    <div>
+      <div class="eyebrow">Design System Inspiration</div>
+      <h1>Luxury Premium</h1>
+      <p>Luxury Premium is the design language of high-end fashion, jewelry, and prestige brands. Near-black (#0b0a08) canvas with warm gold (#c8a45d) as the only precious accent. Ultra-thin serif typography (Cormorant Garamond, Didot) at generous sizes. Extreme whitespace. Monochromatic restraint - the absence of color IS the luxury signal. Key Characteristics: - Ne...</p>
+      <div class="hero-actions"><button class="btn-primary">Primary action</button><button class="btn-secondary">Secondary</button></div>
+    </div>
+    <div class="hero-panel"><div class="luxury-scene"><p>Maison Interface</p><h3>Quiet Premium</h3><span>Gold restraint / Deep surfaces / Serif craft</span></div></div>
   </div>
-</nav>
-
-<div class="header-band">Design System Inspiration · Styles · Kodo</div>
-
-<!-- HERO -->
-<div class="section">
-  <div class="section-label">Design System Overview</div>
-  <div class="section-title">LUXURY PREMIUM</div>
-  <div class="section-desc">Dark premium surfaces, refined serif type, gold restraint, and high-end spacing.</div>
-  <div style="display:flex;gap:10px;flex-wrap:wrap">
-    <button class="demo-btn-primary">Get Started →</button>
-    <button class="demo-btn-outline">View Docs</button>
-    <span class="badge badge-accent">Styles</span>
-    <span class="badge badge-muted">Design System</span>
-  </div>
-</div>
-
-<!-- 01 COLOR PALETTE -->
-<div class="section">
-  <div class="section-label">01 — Color Palette</div>
-  <div class="section-title">Core Token Colors</div>
-  <div class="section-desc">Five foundational tokens drive the entire visual identity. Each token has a semantic role — never use colors outside these roles.</div>
-  <div class="color-grid">
-    
-    <div class="color-swatch-wrap">
-      <div class="color-swatch" style="background:#0b0a08"></div>
-      <div class="color-meta">
-        <div class="color-name">Canvas / Background</div>
-        <div class="color-hex">#0b0a08</div>
-        <div class="color-desc">Page base surface</div>
-      </div>
+  <section id="colors"><div class="section-label">01 - Color Palette</div><h2 class="section-heading">Documented brand tokens</h2><p class="section-intro">Extracted from the bundled Luxury Premium design-system source, with base preview tokens added where the docs describe roles without a swatch.</p><div class="palette-grid"><div class="swatch">
+    <div class="swatch-color" style="background:#0b0a08;"></div>
+    <div class="swatch-meta">
+      <div class="swatch-name">Nearblack</div>
+      <div class="swatch-hex">#0b0a08</div>
+      <div class="swatch-role">canvas with warm gold (#c8a45d) as the only precious accent</div>
     </div>
-    <div class="color-swatch-wrap">
-      <div class="color-swatch" style="background:#17130f"></div>
-      <div class="color-meta">
-        <div class="color-name">Surface / Card</div>
-        <div class="color-hex">#17130f</div>
-        <div class="color-desc">Elevated containers</div>
-      </div>
+  </div><div class="swatch">
+    <div class="swatch-color" style="background:#c8a45d;"></div>
+    <div class="swatch-meta">
+      <div class="swatch-name">Warm gold</div>
+      <div class="swatch-hex">#c8a45d</div>
+      <div class="swatch-role">as sole accent - used sparingly like real gold</div>
     </div>
-    <div class="color-swatch-wrap">
-      <div class="color-swatch" style="background:#f7efe4"></div>
-      <div class="color-meta">
-        <div class="color-name">Text / Ink</div>
-        <div class="color-hex">#f7efe4</div>
-        <div class="color-desc">Primary foreground</div>
-      </div>
+  </div><div class="swatch">
+    <div class="swatch-color" style="background:#f5f0e8;"></div>
+    <div class="swatch-meta">
+      <div class="swatch-name">Primary dark</div>
+      <div class="swatch-hex">#f5f0e8</div>
+      <div class="swatch-role">| Primary light: #1a1510 | Muted: #9a9080</div>
     </div>
-    <div class="color-swatch-wrap">
-      <div class="color-swatch" style="background:#b7a58d"></div>
-      <div class="color-meta">
-        <div class="color-name">Muted / Secondary</div>
-        <div class="color-hex">#b7a58d</div>
-        <div class="color-desc">Subdued text & icons</div>
-      </div>
+  </div><div class="swatch">
+    <div class="swatch-color" style="background:#17130f;"></div>
+    <div class="swatch-meta">
+      <div class="swatch-name">Surface</div>
+      <div class="swatch-hex">#17130f</div>
+      <div class="swatch-role">Preview base token</div>
     </div>
-    <div class="color-swatch-wrap">
-      <div class="color-swatch" style="background:#c8a45d"></div>
-      <div class="color-meta">
-        <div class="color-name">Accent / Brand</div>
-        <div class="color-hex">#c8a45d</div>
-        <div class="color-desc">Primary action color</div>
-      </div>
+  </div><div class="swatch">
+    <div class="swatch-color" style="background:#f7efe4;"></div>
+    <div class="swatch-meta">
+      <div class="swatch-name">Ink</div>
+      <div class="swatch-hex">#f7efe4</div>
+      <div class="swatch-role">Preview base token</div>
     </div>
-  </div>
-</div>
-
-<!-- 02 TYPOGRAPHY -->
-<div class="section">
-  <div class="section-label">02 — Typography Scale</div>
-  <div class="section-title">Type Hierarchy</div>
-  <div class="section-desc">Display: <strong>Georgia</strong> · Body: <strong>Inter</strong>. Weight contrast between display (800) and body (400) creates editorial signature.</div>
-  <div class="type-table">
-    
-    <div class="type-row" style="">
-      <div class="type-meta">
-        <strong>Display XL</strong>
-        64px / 800 / −0.02em
-      </div>
-      <div style="font-family:Georgia, serif;font-size:64px;font-weight:800;letter-spacing:-0.02em;line-height:1.1;color:var(--text);overflow:hidden;white-space:nowrap;text-overflow:ellipsis">THE ULTIMATE MACHINE</div>
+  </div><div class="swatch">
+    <div class="swatch-color" style="background:#e8dcc9;"></div>
+    <div class="swatch-meta">
+      <div class="swatch-name">Body</div>
+      <div class="swatch-hex">#e8dcc9</div>
+      <div class="swatch-role">Preview base token</div>
     </div>
-    <div class="type-row" style="">
-      <div class="type-meta">
-        <strong>Display LG</strong>
-        48px / 800 / −0.02em
-      </div>
-      <div style="font-family:Georgia, serif;font-size:48px;font-weight:800;letter-spacing:-0.02em;line-height:1.1;color:var(--text);overflow:hidden;white-space:nowrap;text-overflow:ellipsis">Design that moves</div>
+  </div><div class="swatch">
+    <div class="swatch-color" style="background:#b7a58d;"></div>
+    <div class="swatch-meta">
+      <div class="swatch-name">Muted</div>
+      <div class="swatch-hex">#b7a58d</div>
+      <div class="swatch-role">Preview base token</div>
     </div>
-    <div class="type-row" style="">
-      <div class="type-meta">
-        <strong>Display MD</strong>
-        36px / 700 / −0.02em
-      </div>
-      <div style="font-family:Georgia, serif;font-size:36px;font-weight:700;letter-spacing:-0.02em;line-height:1.1;color:var(--text);overflow:hidden;white-space:nowrap;text-overflow:ellipsis">Build something great</div>
+  </div><div class="swatch">
+    <div class="swatch-color" style="background:#3a3128;"></div>
+    <div class="swatch-meta">
+      <div class="swatch-name">Border</div>
+      <div class="swatch-hex">#3a3128</div>
+      <div class="swatch-role">Preview base token</div>
     </div>
-    <div class="type-row" style="">
-      <div class="type-meta">
-        <strong>Display SM</strong>
-        28px / 700 / −0.02em
-      </div>
-      <div style="font-family:Georgia, serif;font-size:28px;font-weight:700;letter-spacing:-0.02em;line-height:1.1;color:var(--text);overflow:hidden;white-space:nowrap;text-overflow:ellipsis">Precision by design</div>
-    </div>
-    <div class="type-row" style="">
-      <div class="type-meta">
-        <strong>Title LG</strong>
-        22px / 600 / −0.02em
-      </div>
-      <div style="font-family:Georgia, serif;font-size:22px;font-weight:600;letter-spacing:-0.02em;line-height:1.1;color:var(--text);overflow:hidden;white-space:nowrap;text-overflow:ellipsis">Title heading text</div>
-    </div>
-    <div class="type-row" style="">
-      <div class="type-meta">
-        <strong>Title MD</strong>
-        18px / 600 / −0.02em
-      </div>
-      <div style="font-family:Georgia, serif;font-size:18px;font-weight:600;letter-spacing:-0.02em;line-height:1.1;color:var(--text);overflow:hidden;white-space:nowrap;text-overflow:ellipsis">Subtitle line here</div>
-    </div>
-    <div class="type-row" style="">
-      <div class="type-meta">
-        <strong>Body MD</strong>
-        16px / 400 / −0.02em
-      </div>
-      <div style="font-family:Georgia, serif;font-size:16px;font-weight:400;letter-spacing:-0.02em;line-height:1.1;color:var(--text);overflow:hidden;white-space:nowrap;text-overflow:ellipsis">Body paragraph text reads at this size.</div>
-    </div>
-    <div class="type-row" style="">
-      <div class="type-meta">
-        <strong>Body SM</strong>
-        14px / 400 / −0.02em
-      </div>
-      <div style="font-family:Georgia, serif;font-size:14px;font-weight:400;letter-spacing:-0.02em;line-height:1.1;color:var(--text);overflow:hidden;white-space:nowrap;text-overflow:ellipsis">Small supporting text for metadata.</div>
-    </div>
-    <div class="type-row" style="">
-      <div class="type-meta">
-        <strong>Caption</strong>
-        12px / 400 / −0.02em
-      </div>
-      <div style="font-family:Georgia, serif;font-size:12px;font-weight:400;letter-spacing:-0.02em;line-height:1.1;color:var(--text);overflow:hidden;white-space:nowrap;text-overflow:ellipsis">Caption · Label · Tag</div>
-    </div>
-  </div>
-</div>
-
-<!-- 03 BUTTONS -->
-<div class="section">
-  <div class="section-label">03 — Button Variants</div>
-  <div class="section-title">Interactive Controls</div>
-  <div class="section-desc">All buttons share 8px radius and 700 weight for primary actions. Accent color drives primary CTAs — never dilute with decorative fills.</div>
-  <div class="btn-grid">
-    <div class="btn-card">
-      <div class="btn-card-label">Primary</div>
-      <button class="demo-btn-primary">Get Started →</button>
-      <div class="btn-card-desc">Accent fill · #000000 text · main CTA</div>
-    </div>
-    <div class="btn-card">
-      <div class="btn-card-label">Outline</div>
-      <button class="demo-btn-outline">Learn More</button>
-      <div class="btn-card-desc">Transparent bg · border-strong · secondary</div>
-    </div>
-    <div class="btn-card">
-      <div class="btn-card-label">Ghost</div>
-      <button class="demo-btn-ghost">View Docs</button>
-      <div class="btn-card-desc">No border · muted color · tertiary nav</div>
-    </div>
-    <div class="btn-card">
-      <div class="btn-card-label">Destructive</div>
-      <button class="demo-btn-danger">Delete</button>
-      <div class="btn-card-desc">Red fill · white text · irreversible actions</div>
-    </div>
-  </div>
-</div>
-
-<!-- 04 CARDS -->
-<div class="section">
-  <div class="section-label">04 — Cards & Containers</div>
-  <div class="section-title">Content Surfaces</div>
-  <div class="section-desc">Cards use surface token on canvas background. 12px radius, hairline border, and subtle shadow creates depth without ornamentation.</div>
-  <div class="card-grid">
-    <div class="design-card">
-      <div class="card-img"></div>
-      <div class="card-body">
-        <div class="card-tag">STYLES · FEATURE</div>
-        <div class="card-title">Design with Clarity</div>
-        <div class="card-desc">A system built on restraint. Every token earns its place through function, not decoration.</div>
-      </div>
-    </div>
-    <div class="design-card">
-      <div class="card-img" style="background:linear-gradient(135deg,#b7a58d22,#c8a45d11)"></div>
-      <div class="card-body">
-        <div class="card-tag">STYLES · GUIDE</div>
-        <div class="card-title">Token Architecture</div>
-        <div class="card-desc">Five core tokens map to semantic roles. Primitive → semantic → component. No raw hex values in components.</div>
-      </div>
-    </div>
-    <div class="design-card">
-      <div class="card-img" style="background:linear-gradient(135deg,#0b0a08,#c8a45d22)"></div>
-      <div class="card-body">
-        <div class="card-tag">STYLES · MOTION</div>
-        <div class="card-title">Interaction Patterns</div>
-        <div class="card-desc">150ms ease-out for micro-interactions. Hover states use accent-alpha overlay. Focus rings use 3px accent glow.</div>
-      </div>
-    </div>
-  </div>
-</div>
-
-<!-- 05 FORM ELEMENTS -->
-<div class="section">
-  <div class="section-label">05 — Form Elements</div>
-  <div class="section-title">Input Components</div>
-  <div class="section-desc">Inputs use 8px radius and surface background. Focus state thickens border to accent color with 3px glow ring.</div>
-  <div class="form-grid">
-    <div class="form-field">
-      <label>Email address</label>
-      <input class="form-input" type="email" placeholder="you@example.com">
-    </div>
-    <div class="form-field">
-      <label>Email (focused)</label>
-      <input class="form-input focused" type="email" value="design@studio.com">
-    </div>
-    <div class="form-field">
-      <label>Organization</label>
-      <input class="form-input" type="text" placeholder="Your company">
-    </div>
-  </div>
-  <div class="form-field" style="max-width:480px">
-    <label>Message</label>
-    <textarea class="form-input" placeholder="Tell us about your project..."></textarea>
-  </div>
-</div>
-
-<!-- 06 SPEC CELLS -->
-<div class="section">
-  <div class="section-label">06 — Design Specs</div>
-  <div class="section-title">Key Measurements</div>
-  <div class="section-desc">Core dimensions used across the system. Sharp corners on data cells — values sit in 4-up grid with hairline dividers.</div>
-  <div class="spec-grid">
-    <div class="spec-cell"><div class="spec-value">8px</div><div class="spec-label">Base Grid</div></div>
-    <div class="spec-cell"><div class="spec-value">8</div><div class="spec-label">Border Radius</div></div>
-    <div class="spec-cell"><div class="spec-value">60px</div><div class="spec-label">Nav Height</div></div>
-    <div class="spec-cell"><div class="spec-value">1440</div><div class="spec-label">Max Width</div></div>
-    <div class="spec-cell"><div class="spec-value">48px</div><div class="spec-label">Section Gap</div></div>
-    <div class="spec-cell"><div class="spec-value">150ms</div><div class="spec-label">Transition</div></div>
-    <div class="spec-cell"><div class="spec-value">4.5:1</div><div class="spec-label">Min Contrast</div></div>
-    <div class="spec-cell"><div class="spec-value">WCAG AA</div><div class="spec-label">Accessibility</div></div>
-  </div>
-</div>
-
-<!-- 07 SPACING -->
-<div class="section">
-  <div class="section-label">07 — Spacing Scale</div>
-  <div class="section-title">Layout Rhythm</div>
-  <div class="section-desc">8px base unit. Section rhythm at 48–96px. Spacing tokens scale by 1.5× increments.</div>
-  <div class="spacing-row">
-    
-    <div class="spacing-item">
-      <div class="spacing-bar" style="height:4px"></div>
-      <span class="spacing-val">4px</span>
-    </div>
-    <div class="spacing-item">
-      <div class="spacing-bar" style="height:8px"></div>
-      <span class="spacing-val">8px</span>
-    </div>
-    <div class="spacing-item">
-      <div class="spacing-bar" style="height:12px"></div>
-      <span class="spacing-val">12px</span>
-    </div>
-    <div class="spacing-item">
-      <div class="spacing-bar" style="height:16px"></div>
-      <span class="spacing-val">16px</span>
-    </div>
-    <div class="spacing-item">
-      <div class="spacing-bar" style="height:24px"></div>
-      <span class="spacing-val">24px</span>
-    </div>
-    <div class="spacing-item">
-      <div class="spacing-bar" style="height:32px"></div>
-      <span class="spacing-val">32px</span>
-    </div>
-    <div class="spacing-item">
-      <div class="spacing-bar" style="height:48px"></div>
-      <span class="spacing-val">48px</span>
-    </div>
-    <div class="spacing-item">
-      <div class="spacing-bar" style="height:64px"></div>
-      <span class="spacing-val">64px</span>
-    </div>
-    <div class="spacing-item">
-      <div class="spacing-bar" style="height:96px"></div>
-      <span class="spacing-val">96px</span>
-    </div>
-  </div>
-</div>
-
-<!-- 08 BORDER RADIUS -->
-<div class="section">
-  <div class="section-label">08 — Border Radius Scale</div>
-  <div class="section-title">Shape Language</div>
-  <div class="section-desc">Reserve full radius for pill buttons and avatars only. Components use sm–lg range. Sharp corners on data tables.</div>
-  <div class="radius-row">
-    
-    <div class="radius-box">
-      <div class="radius-demo" style="border-radius:0px"></div>
-      <span class="radius-label">0px</span>
-    </div>
-    <div class="radius-box">
-      <div class="radius-demo" style="border-radius:2px"></div>
-      <span class="radius-label">2px</span>
-    </div>
-    <div class="radius-box">
-      <div class="radius-demo" style="border-radius:4px"></div>
-      <span class="radius-label">4px</span>
-    </div>
-    <div class="radius-box">
-      <div class="radius-demo" style="border-radius:8px"></div>
-      <span class="radius-label">8px</span>
-    </div>
-    <div class="radius-box">
-      <div class="radius-demo" style="border-radius:12px"></div>
-      <span class="radius-label">12px</span>
-    </div>
-    <div class="radius-box">
-      <div class="radius-demo" style="border-radius:16px"></div>
-      <span class="radius-label">16px</span>
-    </div>
-    <div class="radius-box">
-      <div class="radius-demo" style="border-radius:9999px"></div>
-      <span class="radius-label">9999px</span>
-    </div>
-  </div>
-</div>
-
-<!-- 09 ELEVATION -->
-<div class="section">
-  <div class="section-label">09 — Elevation & Depth</div>
-  <div class="section-title">Surface Layers</div>
-  <div class="section-desc">No drop shadows. Depth from background contrast between layers.</div>
-  <div class="elev-grid">
-    <div class="elev-card" style="box-shadow:none">
-      <div class="elev-label">Flat</div>
-      <div class="elev-sub">No shadow. Body, top nav, footer, photo bands.</div>
-    </div>
-    <div class="elev-card" style="box-shadow:0 1px 3px rgba(0,0,0,0.1)">
-      <div class="elev-label">Soft</div>
-      <div class="elev-sub">1px shadow. Section dividers, card outlines.</div>
-    </div>
-    <div class="elev-card" style="box-shadow:0 4px 16px rgba(0,0,0,0.5)">
-      <div class="elev-label">Card Surface</div>
-      <div class="elev-sub">surface-card over canvas — visible elevation.</div>
-    </div>
-    <div class="elev-card" style="box-shadow:0 8px 32px rgba(0,0,0,0.6)">
-      <div class="elev-label">Modal / Float</div>
-      <div class="elev-sub">Dialogs, dropdowns, tooltips. Maximum elevation.</div>
-    </div>
-  </div>
-</div>
-
-<!-- CTA BAND -->
-<div class="cta-band">
-  <div class="cta-title">Use Luxury Premium in Your Project</div>
-  <div class="cta-sub">Apply this design system to any Kodo project and let AI build matching UI.</div>
-  <button class="demo-btn-primary" style="font-size:16px;padding:14px 32px">Apply Design System →</button>
-</div>
-
-<!-- 10 RESPONSIVE -->
-<div class="section">
-  <div class="section-label">10 — Responsive Behavior</div>
-  <div class="section-title">Breakpoint System</div>
-  <div class="section-desc">Mobile-first. Photography stays full-bleed at every breakpoint. Card grids reduce columns rather than scaling cards down.</div>
-  <table class="resp-table">
-    <thead><tr><th>Name</th><th>Width</th><th>Key Changes</th></tr></thead>
-    <tbody>
-      <tr><td>Mobile</td><td>&lt; 768px</td><td>Single column · hamburger nav · stacked cards</td></tr>
-      <tr><td>Tablet</td><td>768–1024px</td><td>2-col grids · compact nav · 2-up spec tables</td></tr>
-      <tr><td>Desktop</td><td>1024–1440px</td><td>Full nav · 3-col grids · 4-up spec grids</td></tr>
-      <tr><td>Wide</td><td>&gt; 1440px</td><td>Max 1440px container · same as desktop</td></tr>
-    </tbody>
-  </table>
-</div>
-
-<footer>
-  </div>
-  
-</footer>
-
+  </div></div></section>
+  <section id="type"><div class="section-label">02 - Typography Scale</div><h2 class="section-heading">Font, scale, weight, tracking</h2><p class="section-intro">The preview uses the documented font intent with practical web fallbacks. Large display rows preserve the stated weight and tracking where available.</p><div class="type-table"><div class="type-row">
+    <div class="type-meta"><strong>Hero Display</strong>120px / 300 / 0.1em (wide tracking) / 0</div>
+    <div class="type-sample" style="font-size:120px;font-weight:300;line-height:0.1em (wide tracking);letter-spacing:0;">Luxury Premium design system</div>
+  </div><div class="type-row">
+    <div class="type-meta"><strong>Sub-headline</strong>44px / 400 / 0.06em / 0</div>
+    <div class="type-sample" style="font-size:44px;font-weight:400;line-height:0.06em;letter-spacing:0;">Interface direction</div>
+  </div><div class="type-row">
+    <div class="type-meta"><strong>Body</strong>16px / 300 / 0.02em / 0</div>
+    <div class="type-sample" style="font-size:16px;font-weight:300;line-height:0.02em;letter-spacing:0;">Component hierarchy</div>
+  </div><div class="type-row">
+    <div class="type-meta"><strong>Label</strong>11px / 500 / 0.15em uppercase / ## 4. Component Stylings</div>
+    <div class="type-sample" style="font-size:11px;font-weight:500;line-height:0.15em uppercase;letter-spacing:## 4. Component Stylings;">Primary surface title</div>
+  </div></div></section>
+  <section id="components"><div class="section-label">03 - Button Variants</div><h2 class="section-heading">Action hierarchy</h2><p class="section-intro">Primary, secondary, muted, and danger controls use the documented accent color, radius, border, and density for this design system.</p><div class="button-grid"><div class="button-cell"><div class="button-label">Primary</div><button class="btn-primary">Continue</button><div class="button-meta">Accent fill / documented button radius</div></div><div class="button-cell"><div class="button-label">Secondary</div><button class="btn-secondary">Learn more</button><div class="button-meta">Transparent or surface with hairline border</div></div><div class="button-cell"><div class="button-label">Default / Ghost</div><button class="demo-ghost">View details</button><div class="button-meta">Low-emphasis utility action</div></div><div class="button-cell"><div class="button-label">Danger / Alert</div><button class="demo-danger">Escalate</button><div class="button-meta">Semantic destructive or incident color</div></div></div></section>
+  <section><div class="section-label">04 - Signature Component</div><h2 class="section-heading">A real interface pattern, not a placeholder card</h2><p class="section-intro">Each preview renders the component shape that users associate with the source brand: repo rows, incident timelines, media rails, commerce panels, CRM records, or style-specific surfaces.</p><div class="component-stage"><div class="luxury-scene"><p>Maison Interface</p><h3>Quiet Premium</h3><span>Gold restraint / Deep surfaces / Serif craft</span></div></div></section>
+  <section><div class="section-label">05 - Layout Specs</div><h2 class="section-heading">Spacing, radius, surface depth</h2><p class="section-intro">The key measurements are rendered as inspectable UI so the preview carries implementation cues, not only mood-board colors.</p><div class="spec-grid"><div class="spec-cell"><div class="spec-value">8px</div><div class="spec-label">Base grid</div></div><div class="spec-cell"><div class="spec-value">0px</div><div class="spec-label">Button radius</div></div><div class="spec-cell"><div class="spec-value">2px</div><div class="spec-label">Card radius</div></div><div class="spec-cell"><div class="spec-value">1px</div><div class="spec-label">Hairline border</div></div><div class="spec-cell"><div class="spec-value">64-96</div><div class="spec-label">Section rhythm</div></div><div class="spec-cell"><div class="spec-value">Dark</div><div class="spec-label">Color scheme</div></div></div></section>
+  <section id="rules"><div class="section-label">06 - Usage Rules</div><h2 class="section-heading">Do this, avoid drift</h2><p class="section-intro">The following rules are pulled from the design-system document and are kept visible in the preview for implementation review.</p><div class="rules-grid"><div class="rule-card"><b>Rule 1</b>Near-black (#0b0a08) or warm off-white (#faf7f2) canvas - pick one per design</div><div class="rule-card"><b>Rule 2</b>Warm gold (#c8a45d) as sole accent - used sparingly like real gold</div><div class="rule-card"><b>Rule 3</b>Ultra-thin serif display (Cormorant Garamond weight 300-400 at 80-120px)</div><div class="rule-card"><b>Rule 4</b>Extreme whitespace - more space than content</div></div></section>
+</main>
+<footer class="footer"><div class="footer-inner"><div><h6>Luxury Premium</h6><p>Live preview generated from <code>backend/skills/bundled/design-systems/luxury-premium.md</code>.</p></div><div><h6>Source path</h6><span>frontend/public/design-previews/luxury-premium.html</span></div></div></footer>
 </body>
 </html>

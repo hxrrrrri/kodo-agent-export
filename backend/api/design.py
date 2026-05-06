@@ -1,3 +1,4 @@
+import asyncio
 import tempfile
 import re
 from pathlib import Path
@@ -236,9 +237,9 @@ class ExportManifestRequest(BaseModel):
     height: int = Field(default=1080, ge=320, le=2160)
 
 
-async def _render_with_playwright(body: RenderRequest) -> tuple[bytes, str]:
+def _render_with_playwright_sync(body: RenderRequest) -> tuple[bytes, str]:
     try:
-        from playwright.async_api import async_playwright  # type: ignore
+        from playwright.sync_api import sync_playwright  # type: ignore
     except Exception as exc:
         raise HTTPException(
             status_code=503,
@@ -252,16 +253,25 @@ async def _render_with_playwright(body: RenderRequest) -> tuple[bytes, str]:
         html_path = Path(tmp) / "artifact.html"
         html_path.write_text(body.html, encoding="utf-8")
 
-        async with async_playwright() as p:
-            browser = await p.chromium.launch()
+        with sync_playwright() as p:
             try:
-                page = await browser.new_page(viewport={"width": body.width, "height": body.height})
-                await page.goto(html_path.as_uri(), wait_until="networkidle")
+                browser = p.chromium.launch()
+            except Exception as exc:
+                raise HTTPException(
+                    status_code=503,
+                    detail=(
+                        "Chromium is required for design rendering. Run "
+                        "`python -m playwright install chromium` in the backend environment."
+                    ),
+                ) from exc
+            try:
+                page = browser.new_page(viewport={"width": body.width, "height": body.height})
+                page.goto(html_path.as_uri(), wait_until="networkidle")
                 if body.wait_ms:
-                    await page.wait_for_timeout(body.wait_ms)
+                    page.wait_for_timeout(body.wait_ms)
 
                 if body.format == "pdf":
-                    data = await page.pdf(
+                    data = page.pdf(
                         width=f"{body.width}px",
                         height=f"{body.height}px",
                         print_background=True,
@@ -269,10 +279,14 @@ async def _render_with_playwright(body: RenderRequest) -> tuple[bytes, str]:
                     )
                     return data, "application/pdf"
 
-                data = await page.screenshot(type="png", full_page=body.full_page)
+                data = page.screenshot(type="png", full_page=body.full_page)
                 return data, "image/png"
             finally:
-                await browser.close()
+                browser.close()
+
+
+async def _render_with_playwright(body: RenderRequest) -> tuple[bytes, str]:
+    return await asyncio.to_thread(_render_with_playwright_sync, body)
 
 
 @router.post("/render")

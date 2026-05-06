@@ -745,7 +745,9 @@ class AgentLoop:
 
     async def _build_system_prompt(self) -> str:
         caveman_mode: str | None = None
-        if feature_enabled("CAVEMAN", default="0"):
+        # Skip caveman injection for tool-free sessions (e.g. Design Studio) so
+        # the model never responds in caveman style instead of generating HTML.
+        if not self.disable_tools and feature_enabled("CAVEMAN", default="0"):
             metadata = await memory_manager.get_session_metadata(self.session_id)
             if isinstance(metadata, dict):
                 caveman_mode = normalize_caveman_mode(str(metadata.get("caveman_mode", "")).strip())

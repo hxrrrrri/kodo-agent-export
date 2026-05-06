@@ -17,6 +17,7 @@ from caveman import (
 )
 from code_review_graph_integration import manager as crg_manager
 from doctor import run_report, run_runtime_checks
+from kodo.capsule.cli import capsule_cli
 from mcp.registry import mcp_registry
 from memory.manager import memory_manager
 from observability.usage import summarize_usage
@@ -31,6 +32,8 @@ from tools import TOOL_MAP
 
 KNOWN_ROOT_COMMANDS = [
     "/help",
+    "/capsule",
+    "/cap",
     "/stop",
     "/cost",
     "/search",
@@ -67,6 +70,8 @@ KNOWN_ROOT_COMMANDS = [
 
 COMMAND_REGISTRY: dict[str, str] = {
     "/help": "Show available commands",
+    "/capsule": "Show Kodo Capsule commands",
+    "/cap": "Capture, inject, compress, bridge, and manage capsules",
     "/stop": "Stop current response generation",
     "/cost": "Show token and estimated cost usage",
     "/search": "Search the web via configured providers",
@@ -175,6 +180,8 @@ def _help_text() -> str:
     return "\n".join([
         "Available commands:",
         "/help - Show this command list",
+        "/capsule - Show Kodo Capsule commands",
+        "/cap save|inject|list|compress|usage|bridge|template|persona|merge|export|rollback - Manage Kodo Capsules",
         "/stop - Stop current response generation",
         "/cost [days] - Show token and estimated cost usage",
         "/search <query> - Search the web and return top results",
@@ -670,6 +677,10 @@ async def execute_command(
 
     if command in {"/help", "/?"}:
         return CommandExecutionResult(name="help", text=_help_text())
+
+    if command in {"/capsule", "/cap"}:
+        text = await capsule_cli.handle(raw, session_id=session_id, project_dir=project_dir)
+        return CommandExecutionResult(name="capsule", text=text)
 
     if command == "/stop":
         return CommandExecutionResult(
