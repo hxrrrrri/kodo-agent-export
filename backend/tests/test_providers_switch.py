@@ -107,6 +107,108 @@ def test_switch_ollama_uses_discovered_model_when_unspecified(monkeypatch, tmp_p
     assert os.getenv("SMALL_MODEL") == "gemma4:e2b"
 
 
+def test_switch_codex_api_falls_back_to_local_codex_cli(monkeypatch, tmp_path):
+    monkeypatch.delenv("API_AUTH_TOKEN", raising=False)
+    monkeypatch.delenv("CODEX_API_KEY", raising=False)
+    _prepare_dotenv_path(monkeypatch, tmp_path)
+    captured = _mock_profile_and_memory(monkeypatch)
+
+    def fake_provider_configured(provider: str, request):
+        return provider == "codex-cli"
+
+    monkeypatch.setattr(providers_api, "_provider_configured", fake_provider_configured)
+
+    response = client.post(
+        "/api/providers/switch",
+        json={
+            "provider": "codex",
+            "model": "gpt-4o",
+            "session_id": "session-codex-cli",
+            "persist": False,
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["provider"] == "codex-cli"
+    assert payload["model"] == "default"
+
+    assert os.getenv("PRIMARY_PROVIDER") == "codex-cli"
+    assert os.getenv("MODEL") == "default"
+    assert captured.get("active_profile") == "quick-codex-cli"
+
+
+def test_switch_codex_cli_resets_stale_api_model(monkeypatch, tmp_path):
+    monkeypatch.delenv("API_AUTH_TOKEN", raising=False)
+    _prepare_dotenv_path(monkeypatch, tmp_path)
+    _mock_profile_and_memory(monkeypatch)
+
+    def fake_provider_configured(provider: str, request):
+        return provider == "codex-cli"
+
+    monkeypatch.setattr(providers_api, "_provider_configured", fake_provider_configured)
+
+    response = client.post(
+        "/api/providers/switch",
+        json={
+            "provider": "codex-cli",
+            "model": "gpt-4o",
+            "persist": False,
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["provider"] == "codex-cli"
+    assert payload["model"] == "default"
+
+
+def test_switch_claude_cli_preserves_valid_selected_model(monkeypatch, tmp_path):
+    monkeypatch.delenv("API_AUTH_TOKEN", raising=False)
+    _prepare_dotenv_path(monkeypatch, tmp_path)
+    _mock_profile_and_memory(monkeypatch)
+
+    def fake_provider_configured(provider: str, request):
+        return provider == "claude-cli"
+
+    monkeypatch.setattr(providers_api, "_provider_configured", fake_provider_configured)
+    monkeypatch.setattr(
+        providers_api,
+        "list_cli_models",
+        lambda provider: ["default", "claude-sonnet-4-6", "claude-opus-4-1"] if provider == "claude-cli" else ["default"],
+    )
+
+    response = client.post(
+        "/api/providers/switch",
+        json={
+            "provider": "claude-cli",
+            "model": "claude-opus-4-1",
+            "persist": False,
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["provider"] == "claude-cli"
+    assert payload["model"] == "claude-opus-4-1"
+
+
+def test_cli_models_endpoint_returns_cli_catalog(monkeypatch):
+    monkeypatch.delenv("API_AUTH_TOKEN", raising=False)
+    monkeypatch.setattr(
+        providers_api,
+        "list_cli_models",
+        lambda provider: ["default", f"{provider}-model"],
+    )
+
+    response = client.get("/api/providers/cli-models")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["models"]["gemini-cli"] == ["default", "gemini-cli-model"]
+    assert payload["models"]["copilot-cli"] == ["default", "copilot-cli-model"]
+
+
 def test_discover_reads_firecrawl_key_from_override_header(monkeypatch):
     monkeypatch.delenv("API_AUTH_TOKEN", raising=False)
     monkeypatch.delenv("FIRECRAWL_API_KEY", raising=False)

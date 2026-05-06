@@ -301,6 +301,7 @@ class SessionRunner:
         max_tokens: int | None = None,
     ) -> AsyncGenerator[dict[str, Any], None]:
         assistant_parts: list[str] = []
+        thinking_parts: list[str] = []
         usage_payload: dict[str, Any] | None = None
         tool_calls: list[dict[str, Any]] = []
         error_message: str | None = None
@@ -328,7 +329,8 @@ class SessionRunner:
                 agent_kwargs["max_tokens"] = max_tokens
             agent = AgentLoop(**agent_kwargs)
         except Exception as exc:
-            yield {"type": "error", "message": str(exc)}
+            message = str(exc).strip() or "Failed to initialize session runtime."
+            yield {"type": "error", "message": message}
             return
 
         try:
@@ -353,6 +355,8 @@ class SessionRunner:
                 event_type = str(event.get("type", ""))
                 if event_type == "text":
                     assistant_parts.append(str(event.get("content", "")))
+                elif event_type in {"thinking_delta", "thinking"}:
+                    thinking_parts.append(str(event.get("delta") or event.get("thinking") or event.get("content") or ""))
                 elif event_type == "done" and isinstance(event.get("usage"), dict):
                     usage_payload = event.get("usage")
                 elif event_type == "tool_start":
@@ -408,7 +412,7 @@ class SessionRunner:
                         row["metadata"] = metadata
                     tool_calls[idx] = row
                 elif event_type == "error":
-                    error_message = str(event.get("message", "Session runner failed"))
+                    error_message = str(event.get("message", "")).strip() or "Session runner failed."
 
                 yield event
 
@@ -416,10 +420,13 @@ class SessionRunner:
             error_message = "Session cancelled"
             yield {"type": "error", "message": error_message}
         except Exception as exc:
-            error_message = str(exc)
+            error_message = str(exc).strip() or "Unknown session runner error."
             yield {"type": "error", "message": error_message}
 
         assistant_text = "".join(assistant_parts)
+        thinking_text = "".join(thinking_parts).strip()
+        if thinking_text:
+            assistant_text = f"<thinking>{thinking_text}</thinking>\n\n{assistant_text}"
         if not assistant_text.strip() and not tool_calls and error_message is None:
             provider = str(getattr(agent, "provider", "") or "unknown")
             model = str(getattr(agent, "model", "") or "unknown")

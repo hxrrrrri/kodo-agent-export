@@ -11,9 +11,11 @@ from typing import Any, AsyncGenerator
 from anthropic import AsyncAnthropic
 from openai import AsyncOpenAI
 
-from agent.modes import normalize_mode
+from agent.cli_runner import CLI_PROVIDER_IDS, normalize_cli_model, run_cli_provider
+from agent.modes import get_mode, normalize_mode
 from agent.permissions import get_permission_checker
 from agent.prompt_builder import build_system_prompt
+from artifacts.protocol_prompt import build_artifact_system_block
 from caveman import get_default_mode as get_default_caveman_mode
 from caveman import normalize_mode as normalize_caveman_mode
 from memory.manager import memory_manager
@@ -114,6 +116,10 @@ def _resolve_provider_config(model_override: str | None = None) -> RuntimeConfig
         "codex": "gpt-4o",
         "ollama": "llama3",
         "atomic-chat": "default",
+        "claude-cli": "default",
+        "codex-cli": "default",
+        "gemini-cli": "default",
+        "copilot-cli": "default",
     }
 
     key_env_map = {
@@ -140,9 +146,17 @@ def _resolve_provider_config(model_override: str | None = None) -> RuntimeConfig
         "codex": os.getenv("CODEX_BASE_URL", "https://api.openai.com/v1").strip() or "https://api.openai.com/v1",
         "ollama": os.getenv("OLLAMA_BASE_URL", "http://localhost:11434").rstrip("/") + "/v1",
         "atomic-chat": os.getenv("ATOMIC_CHAT_BASE_URL", "http://127.0.0.1:1337").rstrip("/") + "/v1",
+        "claude-cli": None,
+        "codex-cli": None,
+        "gemini-cli": None,
+        "copilot-cli": None,
     }
 
     provider_order = [
+        "claude-cli",
+        "codex-cli",
+        "gemini-cli",
+        "copilot-cli",
         "anthropic",
         "openai",
         "gemini",
@@ -165,6 +179,20 @@ def _resolve_provider_config(model_override: str | None = None) -> RuntimeConfig
             candidates.append(provider_name)
 
     for provider_name in candidates:
+        if provider_name in CLI_PROVIDER_IDS:
+            if requested_provider != provider_name:
+                continue
+            from agent.cli_runner import cli_available
+
+            if not cli_available(provider_name):
+                continue
+            return RuntimeConfig(
+                provider=provider_name,
+                model=normalize_cli_model(provider_name, configured_model or default_model_map.get(provider_name, "default")),
+                api_key="local-cli",
+                base_url=None,
+            )
+
         if provider_name in {"ollama", "atomic-chat"}:
             if requested_provider != provider_name:
                 continue
@@ -232,6 +260,10 @@ def _profile_default_base_url(provider: str) -> str | None:
         "ollama": os.getenv("OLLAMA_BASE_URL", "http://localhost:11434").rstrip("/") + "/v1",
         "atomic-chat": os.getenv("ATOMIC_CHAT_BASE_URL", "http://127.0.0.1:1337").rstrip("/") + "/v1",
         "gemini": "https://generativelanguage.googleapis.com/v1beta",
+        "claude-cli": "",
+        "codex-cli": "",
+        "gemini-cli": "",
+        "copilot-cli": "",
     }
     value = defaults.get(provider, "")
     return value.strip() or None
@@ -263,6 +295,14 @@ def _runtime_from_profile(profile: ProviderProfile, model_override: str | None =
     env_key = _profile_env_key(provider)
     if not api_key and env_key:
         api_key = os.getenv(env_key, "").strip()
+
+    if provider in CLI_PROVIDER_IDS:
+        return RuntimeConfig(
+            provider=provider,
+            model=normalize_cli_model(provider, model),
+            api_key="local-cli",
+            base_url=None,
+        )
 
     if provider not in {"ollama", "atomic-chat"} and not api_key and provider != "gemini":
         raise ValueError(f"Active profile '{profile.name}' requires API key for provider {provider}")
@@ -713,6 +753,10 @@ class AgentLoop:
             self.client = None
             return
 
+        if provider in CLI_PROVIDER_IDS:
+            self.client = None
+            return
+
         # OpenAI-compatible providers (OpenAI, local v1, DeepSeek, Groq, OpenRouter...).
         api_key = config.api_key or "local"
         kwargs = {"api_key": api_key}
@@ -727,6 +771,9 @@ class AgentLoop:
             return
 
         if self.client is not None:
+            return
+
+        if self.provider in CLI_PROVIDER_IDS:
             return
 
         if feature_enabled("PROFILES") and not _has_env_overrides():
@@ -787,6 +834,12 @@ class AgentLoop:
                         yield event
                     return
 
+                # Local CLI providers (claude, codex, gemini, GitHub Copilot).
+                if self.provider in CLI_PROVIDER_IDS:
+                    async for event in self._run_cli(user_message, history):
+                        yield event
+                    return
+
                 if self.provider == "anthropic":
                     try:
                         async for event in self._run_anthropic(user_message, history):
@@ -813,6 +866,127 @@ class AgentLoop:
 
             except Exception as exc:
                 yield {"type": "error", "message": self._format_runtime_error(exc)}
+
+    async def _run_cli(
+        self,
+        user_message: str | list[dict[str, Any]],
+        history: list[dict[str, Any]],
+    ) -> AsyncGenerator[dict[str, Any], None]:
+        """Run a local CLI agent (claude, codex, gemini, gh copilot).
+
+        Serializes the full conversation history into one prompt so CLIs that
+        accept stdin text receive the full context.
+        """
+        user_text = self._message_text(user_message)
+        system = self._build_cli_system_prompt(user_text)
+
+        # Flatten history + user message into a single text prompt
+        parts: list[str] = []
+        if system.strip():
+            parts.append(f"<kodo_instructions>\n{system}\n</kodo_instructions>")
+
+        for msg in history:
+            role = str(msg.get("role", "")).lower()
+            content = msg.get("content", "")
+            text = self._message_text(content)
+            if text:
+                label = "User" if role == "user" else "Assistant"
+                parts.append(f"{label}: {text}")
+
+        # Current user message
+        if user_text:
+            parts.append(f"Latest user request:\n{user_text}")
+
+        combined_prompt = "\n\n".join(parts)
+        usage_payload: dict[str, Any] | None = None
+        output_tokens = 0
+        saw_error = False
+
+        async for event in run_cli_provider(
+            self.provider,
+            combined_prompt,
+            model=self.model or None,
+            cwd=self.project_dir,
+        ):
+            if event.get("type") == "usage" and isinstance(event.get("usage"), dict):
+                usage_payload = dict(event["usage"])
+                continue
+            if event.get("type") == "text":
+                output_tokens += max(1, len(str(event.get("content", ""))) // 4)
+            if event.get("type") == "error":
+                saw_error = True
+            yield event
+
+        if saw_error:
+            return
+
+        if usage_payload is None:
+            usage_payload = {
+                "input_tokens": max(1, len(combined_prompt) // 4),
+                "output_tokens": output_tokens,
+            }
+        usage_payload.setdefault("input_tokens", max(1, len(combined_prompt) // 4))
+        usage_payload.setdefault("output_tokens", output_tokens)
+        usage_payload["model"] = self.model or "default"
+        yield {"type": "done", "usage": usage_payload}
+
+    def _build_cli_system_prompt(self, user_text: str) -> str:
+        is_artifact_request = self.artifact_mode or self._looks_like_artifact_request(user_text)
+        sections = [
+            "You are running inside Kodo chat as a local CLI provider.",
+            "Answer the latest user request directly. Do not ignore it and do not return a generic greeting unless the latest request is only a greeting.",
+            "Use prior conversation only as context; the latest user request is authoritative.",
+            get_mode(self.mode).prompt,
+        ]
+        if is_artifact_request and feature_enabled("ARTIFACTS_V2", default="1"):
+            sections.extend([
+                build_artifact_system_block(True),
+                (
+                    "For this request, emit the finished Kodo artifact fence directly in your response. "
+                    "Do not inspect files first, do not write the artifact to disk, do not describe a plan, "
+                    "and do not answer with a greeting. The chat UI renders artifact fences live."
+                ),
+            ])
+            if str(getattr(self, "provider", "") or "").strip().lower() in CLI_PROVIDER_IDS:
+                sections.append(
+                    "Local CLI artifact output rules: for visual or animation builds prefer "
+                    "`type=html` artifacts with a full `<!DOCTYPE html>` document, inline `<style>`, "
+                    "and plain JavaScript inside `<script>`. Do not emit React/JSX unless the user "
+                    "explicitly asks for React/JSX. Do not add Markdown narration around the fence. "
+                    "Always close the fence with a bare ``` on its own line."
+                )
+        return "\n\n".join(section for section in sections if section.strip())
+
+    @staticmethod
+    def _looks_like_artifact_request(text: str) -> bool:
+        lowered = str(text or "").lower()
+        if "artifact" in lowered:
+            return True
+        build_terms = ("build", "create", "make", "design", "generate")
+        visual_terms = (
+            "website",
+            "web app",
+            "app",
+            "game",
+            "animation",
+            "animated",
+            "visual",
+            "dashboard",
+            "chart",
+            "diagram",
+            "infographic",
+            "simulator",
+        )
+        return any(term in lowered for term in build_terms) and any(term in lowered for term in visual_terms)
+
+    @staticmethod
+    def _message_text(content: str | list[dict[str, Any]] | Any) -> str:
+        if isinstance(content, list):
+            return " ".join(
+                str(block.get("text", "")) for block in content
+                if isinstance(block, dict) and block.get("type") == "text"
+            ).strip()
+        return str(content or "").strip()
 
     async def _run_smart(
         self,
@@ -966,7 +1140,12 @@ class AgentLoop:
                 "or set OPENAI_API_KEY and MODEL=gpt-4o in backend/.env to use OpenAI."
             )
 
-        return str(error)
+        message = str(error).strip()
+        if message:
+            return message
+        provider = (self.provider or "unknown").strip()
+        model = (self.model or "unknown").strip()
+        return f"Unknown runtime error (provider={provider}, model={model})."
 
     async def _create_openai_stream(self, messages: list[dict[str, Any]]):
         assert self.client is not None

@@ -75,7 +75,34 @@ const ALL_PROVIDER_OPTIONS = [
   'ollama',
   'atomic-chat',
   'nvidia',
+  // Local CLI providers
+  'claude-cli',
+  'codex-cli',
+  'gemini-cli',
+  'copilot-cli',
 ]
+
+const CLI_PROVIDER_LABELS: Record<string, string> = {
+  'claude-cli': 'Claude CLI / VS Code',
+  'codex-cli': 'Codex CLI / VS Code',
+  'gemini-cli': 'Gemini CLI / VS Code',
+  'copilot-cli': 'GitHub Copilot CLI / VS Code',
+}
+
+const PROVIDER_LABELS: Record<string, string> = {
+  ...CLI_PROVIDER_LABELS,
+  codex: 'Codex API',
+  gemini: 'Gemini API',
+  'github-models': 'GitHub Models',
+  'atomic-chat': 'Atomic Chat',
+}
+
+const API_TO_CLI_FALLBACKS: Record<string, string> = {
+  codex: 'codex-cli',
+  gemini: 'gemini-cli',
+}
+
+const CLI_PROVIDERS = new Set(['claude-cli', 'codex-cli', 'gemini-cli', 'copilot-cli'])
 
 const DEFAULT_MODEL_BY_PROVIDER: Record<string, string> = {
   anthropic: 'claude-sonnet-4-6',
@@ -89,6 +116,28 @@ const DEFAULT_MODEL_BY_PROVIDER: Record<string, string> = {
   ollama: '',
   'atomic-chat': '',
   nvidia: 'meta/llama-3.1-8b-instruct',
+  'claude-cli': 'default',
+  'codex-cli': 'default',
+  'gemini-cli': 'default',
+  'copilot-cli': 'default',
+}
+
+type CliProviderStatus = {
+  available: boolean
+  exe?: string
+  candidates?: string[]
+  env_path?: string
+  path: string | null
+  message?: string
+  extension?: {
+    installed: boolean
+    ids: string[]
+    paths: string[]
+    runnable: boolean
+    runnable_paths: string[]
+    bundled_path?: string | null
+    note?: string | null
+  }
 }
 
 type ProvidersDiscoveryResponse = {
@@ -97,12 +146,22 @@ type ProvidersDiscoveryResponse = {
   key_status: Record<string, boolean>
 }
 
+type CliModelsResponse = {
+  models: Record<string, string[]>
+}
+
 type ProviderSwitchResponse = {
   provider: string
   model: string
   router_mode: string
   profile: string
   persisted: boolean
+}
+
+type ProviderSwitchPayload = {
+  provider: string
+  model: string
+  profile: string
 }
 
 type OllamaSetupStatusResponse = {
@@ -139,6 +198,14 @@ type NvidiaSetupResponse = NvidiaSetupStatusResponse & {
 function normalizeProviderName(value: string): string {
   const normalized = String(value || '').trim().toLowerCase().replace('_', '-')
   return normalized === 'atomicchat' ? 'atomic-chat' : normalized
+}
+
+function providerLabel(provider: string): string {
+  return PROVIDER_LABELS[provider] || provider
+}
+
+function uniqueStrings(values: string[]): string[] {
+  return Array.from(new Set(values.map((item) => String(item || '').trim()).filter(Boolean)))
 }
 
 function mergeModelCatalog(
@@ -196,6 +263,7 @@ export function ProviderPanel() {
   const [providerAvailability, setProviderAvailability] = useState<Record<string, boolean>>({})
   const [switchDraft, setSwitchDraft] = useState({ provider: '', model: '' })
   const [switching, setSwitching] = useState(false)
+  const [cliStatus, setCliStatus] = useState<Record<string, CliProviderStatus>>({})
   const [ollamaSetup, setOllamaSetup] = useState<OllamaSetupStatusResponse | null>(null)
   const [ollamaBaseUrl, setOllamaBaseUrl] = useState('http://127.0.0.1:11434')
   const [ollamaApiKey, setOllamaApiKey] = useState('')
@@ -266,29 +334,95 @@ export function ProviderPanel() {
   }, [effectiveSwitchProvider, mergedModelCatalog])
 
   const switchModelOptions = useMemo(() => {
-    const current = String(switchDraft.model || '').trim()
-    if (!current || modelOptions.includes(current)) return modelOptions
-    return [current, ...modelOptions]
-  }, [modelOptions, switchDraft.model])
+    return uniqueStrings(modelOptions)
+  }, [modelOptions])
 
   const ollamaModelOptions = useMemo(() => {
     const models = Array.isArray(ollamaSetup?.models) ? ollamaSetup.models : []
     const current = String(ollamaModel || '').trim()
-    if (!current || models.includes(current)) return models
-    return [current, ...models]
+    return uniqueStrings(current ? [current, ...models] : models)
   }, [ollamaModel, ollamaSetup])
 
   const nvidiaModelOptions = useMemo(() => {
     const models = Array.isArray(nvidiaSetup?.models) ? nvidiaSetup.models : []
     const current = String(nvidiaModel || '').trim()
-    if (!current || models.includes(current)) return models
-    return [current, ...models]
+    return uniqueStrings(current ? [current, ...models] : models)
   }, [nvidiaModel, nvidiaSetup])
 
   const webhookUrl = useMemo(() => {
     if (typeof window === 'undefined') return '/api/webhooks/trigger'
     return `${window.location.origin}/api/webhooks/trigger`
   }, [])
+
+  const resolveSwitchProvider = (provider: string): string => {
+    const normalized = normalizeProviderName(provider)
+    const fallback = API_TO_CLI_FALLBACKS[normalized]
+    if (fallback && !providerAvailability[normalized] && providerAvailability[fallback]) {
+      return fallback
+    }
+    return normalized
+  }
+
+  const applySwitchPayload = (payload: ProviderSwitchPayload) => {
+    setSwitchDraft({ provider: payload.provider, model: payload.model })
+    setActiveProfile({
+      provider: payload.provider,
+      model: payload.model,
+      base_url: null,
+      api_key: null,
+      goal: 'balanced',
+      created_at: new Date().toISOString(),
+      name: payload.profile,
+    })
+    setStatus((prev) => prev ? {
+      ...prev,
+      providers: [{
+        provider: payload.provider,
+        healthy: true,
+        configured: true,
+        latency_ms: null,
+        errors: 0,
+        requests: 0,
+        error_rate: 0,
+        cost_per_1k: null,
+        big_model: payload.model,
+        small_model: payload.model,
+      }],
+    } : prev)
+  }
+
+  const loadCliStatus = async () => {
+    try {
+      const res = await fetch('/api/providers/cli-status', { headers: buildApiHeaders() })
+      if (!res.ok) return
+      const payload = await res.json() as { cli_providers?: Record<string, CliProviderStatus> }
+      const rows = payload.cli_providers || {}
+      setCliStatus(rows)
+
+      const nextAvailability: Record<string, boolean> = {}
+      for (const provider of CLI_PROVIDERS) {
+        nextAvailability[provider] = Boolean(rows[provider]?.available)
+      }
+      setProviderAvailability((prev) => ({ ...prev, ...nextAvailability }))
+    } catch {
+      /* CLI status is advisory; provider switching still returns a backend error if unavailable. */
+    }
+  }
+
+  const loadCliModels = async () => {
+    try {
+      const res = await fetch('/api/providers/cli-models', { headers: buildApiHeaders() })
+      if (!res.ok) return
+      const payload = (await res.json()) as CliModelsResponse
+      const next: Record<string, string[]> = {}
+      for (const [provider, models] of Object.entries(payload.models || {})) {
+        next[normalizeProviderName(provider)] = uniqueStrings((models || []).map((model) => String(model || '').trim()))
+      }
+      setModelCatalog((prev) => ({ ...prev, ...next }))
+    } catch {
+      /* CLI model discovery is best-effort. */
+    }
+  }
 
   const loadGatewayStatus = async () => {
     try {
@@ -343,7 +477,7 @@ export function ProviderPanel() {
       for (const [provider, models] of Object.entries(payload.models || {})) {
         discoveredModels[normalizeProviderName(provider)] = (models || []).map((item) => String(item || '').trim()).filter(Boolean)
       }
-      setModelCatalog(discoveredModels)
+      setModelCatalog((prev) => ({ ...prev, ...discoveredModels }))
 
       const nextAvailability: Record<string, boolean> = {}
       const local = payload.providers || {}
@@ -420,12 +554,13 @@ export function ProviderPanel() {
       if (!response.ok) throw new Error(await parseApiError(response))
 
       const payload = (await response.json()) as OllamaSetupResponse
-      setSwitchDraft({ provider: payload.provider, model: payload.model })
+      applySwitchPayload(payload)
 
       await Promise.all([
         loadStatus(),
         loadProfiles(),
         loadDiscovery(),
+        loadCliStatus(),
         loadOllamaSetupStatus(),
       ])
     } catch (e) {
@@ -475,13 +610,14 @@ export function ProviderPanel() {
       if (!response.ok) throw new Error(await parseApiError(response))
 
       const payload = (await response.json()) as NvidiaSetupResponse
-      setSwitchDraft({ provider: payload.provider, model: payload.model })
+      applySwitchPayload(payload)
       setNvidiaApiKey('')
 
       await Promise.all([
         loadStatus(),
         loadProfiles(),
         loadDiscovery(),
+        loadCliStatus(),
         loadNvidiaSetupStatus(),
       ])
     } catch (e) {
@@ -601,19 +737,25 @@ export function ProviderPanel() {
       if (!res.ok) throw new Error(await parseApiError(res))
 
       const payload = (await res.json()) as ProviderSwitchResponse
-      setSwitchDraft({ provider: payload.provider, model: payload.model })
-      await Promise.all([loadStatus(), loadProfiles(), loadDiscovery()])
+      applySwitchPayload(payload)
+      await Promise.all([loadStatus(), loadProfiles(), loadDiscovery(), loadCliStatus()])
     } catch (e) {
       setError(String(e))
     }
   }
 
   const applyQuickSwitch = async () => {
-    const provider = normalizeProviderName(effectiveSwitchProvider)
+    const selectedProvider = normalizeProviderName(effectiveSwitchProvider)
+    const provider = resolveSwitchProvider(selectedProvider)
     if (!provider) {
       setError('Choose a provider to switch.')
       return
     }
+
+    const fallbackProviderModels = mergedModelCatalog[provider] || []
+    const model = provider !== selectedProvider
+      ? fallbackProviderModels[0] || DEFAULT_MODEL_BY_PROVIDER[provider] || null
+      : switchDraft.model.trim() || modelOptions[0] || null
 
     setSwitching(true)
     setError(null)
@@ -623,7 +765,7 @@ export function ProviderPanel() {
         headers: buildApiHeaders({ 'Content-Type': 'application/json' }),
         body: JSON.stringify({
           provider,
-          model: switchDraft.model.trim() || modelOptions[0] || null,
+          model,
           session_id: sessionId || null,
           persist: true,
         }),
@@ -631,8 +773,8 @@ export function ProviderPanel() {
       if (!response.ok) throw new Error(await parseApiError(response))
 
       const payload = (await response.json()) as ProviderSwitchResponse
-      setSwitchDraft({ provider: payload.provider, model: payload.model })
-      await Promise.all([loadStatus(), loadProfiles(), loadDiscovery()])
+      applySwitchPayload(payload)
+      await Promise.all([loadStatus(), loadProfiles(), loadDiscovery(), loadCliStatus()])
     } catch (e) {
       setError(String(e))
     } finally {
@@ -656,7 +798,7 @@ export function ProviderPanel() {
       if (profile?.provider && profile?.model) {
         setSwitchDraft({ provider: profile.provider, model: profile.model })
       }
-      await Promise.all([loadProfiles(), loadStatus(), loadDiscovery()])
+      await Promise.all([loadProfiles(), loadStatus(), loadDiscovery(), loadCliStatus()])
     } catch (e) {
       setError(String(e))
     }
@@ -706,6 +848,8 @@ export function ProviderPanel() {
     void loadGatewayStatus()
     void loadStatus()
     void loadDiscovery()
+    void loadCliStatus()
+    void loadCliModels()
     void loadProfiles()
     void loadOllamaSetupStatus()
     void loadNvidiaSetupStatus()
@@ -714,10 +858,32 @@ export function ProviderPanel() {
   }, [])
 
   useEffect(() => {
+    const fallbackModel = switchModelOptions[0] || DEFAULT_MODEL_BY_PROVIDER[effectiveSwitchProvider] || ''
+    setSwitchDraft((prev) => {
+      const currentProvider = normalizeProviderName(prev.provider || effectiveSwitchProvider)
+      const providerChanged = currentProvider !== effectiveSwitchProvider
+      const currentModel = String(prev.model || '').trim()
+      const modelValid = Boolean(currentModel) && switchModelOptions.includes(currentModel)
+      const nextModel = modelValid ? currentModel : fallbackModel
+      const nextProvider = effectiveSwitchProvider
+
+      if (!providerChanged && prev.provider === nextProvider && currentModel === nextModel) {
+        return prev
+      }
+
+      return {
+        provider: nextProvider,
+        model: nextModel,
+      }
+    })
+  }, [effectiveSwitchProvider, switchModelOptions])
+
+  useEffect(() => {
     const timer = window.setInterval(() => {
       void loadGatewayStatus()
       void loadStatus()
       void loadDiscovery()
+      void loadCliStatus()
       void loadProfiles()
       void loadOllamaSetupStatus()
       void loadNvidiaSetupStatus()
@@ -915,9 +1081,12 @@ export function ProviderPanel() {
           >
             {providerOptions.map((provider) => {
               const available = providerAvailability[provider]
+              const fallback = API_TO_CLI_FALLBACKS[provider]
+              const usesLocalFallback = Boolean(fallback && !available && providerAvailability[fallback])
+              const label = providerLabel(provider)
               return (
                 <option key={provider} value={provider}>
-                  {available ? provider : `${provider} (not configured)`}
+                  {available ? label : usesLocalFallback ? `${label} -> ${providerLabel(fallback)}` : `${label} (not configured)`}
                 </option>
               )
             })}
@@ -949,7 +1118,11 @@ export function ProviderPanel() {
           </select>
 
           <button
-            onClick={() => void loadDiscovery()}
+            onClick={() => {
+              void loadDiscovery()
+              void loadCliStatus()
+              void loadCliModels()
+            }}
             style={{
               border: '1px solid var(--border)',
               color: 'var(--text-1)',
@@ -982,6 +1155,45 @@ export function ProviderPanel() {
 
           <div style={{ fontSize: 10, color: 'var(--text-2)' }}>
             Applies instantly and persists to backend settings. Existing session model is updated when available.
+          </div>
+
+          <div style={{ display: 'grid', gap: 4, borderTop: '1px solid var(--border)', paddingTop: 7 }}>
+            {Array.from(CLI_PROVIDERS).map((provider) => {
+              const row = cliStatus[provider]
+              const available = Boolean(row?.available)
+              const extensionInstalled = Boolean(row?.extension?.installed)
+              const statusLabel = available ? 'READY' : extensionInstalled ? 'EXTENSION' : 'MISSING'
+              const statusColor = available ? 'var(--green)' : extensionInstalled ? 'var(--yellow)' : 'var(--text-2)'
+              const detail = row?.path || row?.message || 'Not detected yet.'
+              return (
+                <div key={provider} style={{
+                  display: 'grid',
+                  gridTemplateColumns: 'minmax(0, 1fr) auto',
+                  gap: 8,
+                  alignItems: 'start',
+                  fontSize: 10,
+                }}>
+                  <span style={{ minWidth: 0 }}>
+                    <span style={{ color: 'var(--text-1)', display: 'block' }}>
+                      {CLI_PROVIDER_LABELS[provider]}
+                    </span>
+                    <span style={{
+                      color: 'var(--text-2)',
+                      display: 'block',
+                      marginTop: 2,
+                      overflow: 'hidden',
+                      textOverflow: 'ellipsis',
+                      whiteSpace: 'nowrap',
+                    }}>
+                      {detail}
+                    </span>
+                  </span>
+                  <span style={{ color: statusColor, fontFamily: 'var(--font-mono)' }}>
+                    {statusLabel}
+                  </span>
+                </div>
+              )
+            })}
           </div>
         </div>
       </section>

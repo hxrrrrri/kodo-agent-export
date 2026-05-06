@@ -469,6 +469,19 @@ function mergeArtifactRefs(existing: ArtifactRef[] | undefined, next: ArtifactRe
   return merged.length > 0 ? merged : undefined
 }
 
+function mergeThinkingBlock(content: string, delta: string): string {
+  const chunk = String(delta || '')
+  if (!chunk) return content
+
+  const match = content.match(/<thinking>([\s\S]*?)<\/thinking>/i)
+  if (match) {
+    const nextThinking = `${match[1]}${chunk}`
+    return content.replace(/<thinking>[\s\S]*?<\/thinking>/i, `<thinking>${nextThinking}</thinking>`)
+  }
+
+  return `<thinking>${chunk}</thinking>${content ? `\n\n${content}` : ''}`
+}
+
 function extractArtifacts(content: string, artifactModeEnabled: boolean): ArtifactItem[] | undefined {
   const text = String(content || '')
   if (!text.trim()) return undefined
@@ -1259,15 +1272,16 @@ export function useChat() {
       }
     } catch (e: unknown) {
       if (e instanceof Error && e.name === 'AbortError') return
-      store.setError(String(e))
+      const errorMessage = String(e || 'Unknown error').trim() || 'Unknown error'
+      store.setError(errorMessage)
       if (assistantId) {
         store.updateMessageById(assistantId, (msg) => ({
           ...msg,
           isStreaming: false,
-          content: msg.content || 'An error occurred.',
+          content: msg.content || `Error: ${errorMessage}`,
         }))
       }
-      eventHandlers?.onError?.(String(e), { type: 'error', message: String(e) })
+      eventHandlers?.onError?.(errorMessage, { type: 'error', message: errorMessage })
     } finally {
       if (permissionPollTimer !== null) {
         window.clearInterval(permissionPollTimer)
@@ -1320,6 +1334,19 @@ export function useChat() {
         }
         eventHandlers?.onText?.(String(event.content || ''), event)
         break
+
+      case 'thinking_delta':
+      case 'thinking': {
+        const delta = String(event.delta || event.thinking || event.content || '')
+        if (!delta) break
+        if (!silent && assistantId) {
+          store.updateMessageById(assistantId, (msg) => ({
+            ...msg,
+            content: mergeThinkingBlock(msg.content, delta),
+          }))
+        }
+        break
+      }
 
       case 'tool_start': {
         const tc: ToolCall = {
@@ -1446,19 +1473,34 @@ export function useChat() {
         break
 
       case 'error':
-        store.setError(event.message as string)
-        if (!silent && assistantId) {
-          store.updateMessageById(assistantId, (msg) => ({
-            ...msg,
-            isStreaming: false,
-            content: msg.content || `Error: ${event.message}`,
-          }))
+        {
+          const errorMessage = String(event.message || 'Unknown error').trim() || 'Unknown error'
+          store.setError(errorMessage)
+          if (!silent && assistantId) {
+            store.updateMessageById(assistantId, (msg) => {
+              const current = String(msg.content || '').trim()
+              const genericCurrent = (
+                !current
+                || /^error[:\s]*$/i.test(current)
+                || /^an error occurred\.?$/i.test(current)
+              )
+              const includesError = current.toLowerCase().includes(errorMessage.toLowerCase())
+              const nextContent = genericCurrent
+                ? `Error: ${errorMessage}`
+                : (includesError ? current : `${current}\n\nError: ${errorMessage}`)
+              return {
+                ...msg,
+                isStreaming: false,
+                content: nextContent,
+              }
+            })
+          }
+          eventHandlers?.onError?.(errorMessage, event)
+          if (!silent) {
+            pushUiNotification('Agent error', errorMessage, 'error')
+          }
+          break
         }
-        eventHandlers?.onError?.(String(event.message || ''), event)
-        if (!silent) {
-          pushUiNotification('Agent error', String(event.message || 'Unknown error'), 'error')
-        }
-        break
 
       case 'meta':
         // Metadata event currently includes request/session identifiers.

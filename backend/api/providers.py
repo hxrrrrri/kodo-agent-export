@@ -9,6 +9,7 @@ from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 
 from api.security import MEMORY_RATE_LIMITER, enforce_rate_limit, require_api_auth
+from agent.cli_runner import list_cli_models, normalize_cli_model
 from memory.manager import memory_manager
 from profiles.manager import ProviderProfile, profile_manager
 from providers.discovery import discover_local_providers, list_available_models, recommend_model
@@ -29,6 +30,17 @@ SUPPORTED_PROVIDERS = {
     "ollama",
     "atomic-chat",
     "nvidia",
+    # Local CLI providers. No API key is needed; Kodo uses installed CLI tools.
+    "claude-cli",
+    "codex-cli",
+    "gemini-cli",
+    "copilot-cli",
+}
+
+CLI_PROVIDERS = {"claude-cli", "codex-cli", "gemini-cli", "copilot-cli"}
+API_TO_CLI_FALLBACKS = {
+    "codex": "codex-cli",
+    "gemini": "gemini-cli",
 }
 
 _DEFAULT_DOTENV_PATH = Path(__file__).resolve().parents[1] / ".env"
@@ -71,6 +83,10 @@ def _provider_configured(provider: str, request: Request) -> bool:
         return bool(os.getenv("ATOMIC_CHAT_BASE_URL", "").strip())
     if name == "nvidia":
         return bool(_env_or_override(request, "NVIDIA_API_KEY"))
+    # CLI providers: "configured" means the CLI is installed on PATH
+    if name in CLI_PROVIDERS:
+        from agent.cli_runner import cli_available
+        return cli_available(name)
     return False
 
 
@@ -104,6 +120,9 @@ def _set_runtime_setting(env_key: str, value: str, *, persist: bool) -> None:
 
 async def _resolve_model_for_switch(provider: str, requested_model: str | None) -> str:
     explicit = str(requested_model or "").strip()
+    if provider in CLI_PROVIDERS:
+        discovered_models = list_cli_models(provider)
+        return normalize_cli_model(provider, explicit, available_models=discovered_models)
     if explicit:
         return explicit
 
@@ -143,6 +162,8 @@ def _default_model_for_provider(provider: str) -> str:
     if name == "nvidia":
         # Fixed default model ID to a valid NIM model
         return "meta/llama-3.1-8b-instruct"
+    if name in CLI_PROVIDERS:
+        return "default"
     return ""
 
 
@@ -229,6 +250,10 @@ async def providers_status_endpoint(request: Request):
         primary_provider = os.getenv("PRIMARY_PROVIDER", "anthropic").strip().lower() or "anthropic"
         candidates = [
             primary_provider,
+            "claude-cli",
+            "codex-cli",
+            "gemini-cli",
+            "copilot-cli",
             "nvidia",
             "anthropic",
             "openai",
@@ -298,6 +323,33 @@ async def update_router_strategy(body: RouterStrategyRequest, request: Request):
     return router_instance.get_status()
 
 
+@router.get("/cli-status")
+async def cli_providers_status(request: Request):
+    """Return which local CLI agents are installed and available on PATH."""
+    require_api_auth(request)
+    await enforce_rate_limit(request, MEMORY_RATE_LIMITER, "providers_cli_status")
+
+    from agent.cli_runner import CLI_PROVIDER_CANDIDATES, cli_status
+    result = {}
+    for provider_id in CLI_PROVIDER_CANDIDATES:
+        result[provider_id] = cli_status(provider_id)
+    return {"cli_providers": result}
+
+
+@router.get("/cli-models")
+async def cli_provider_models(request: Request):
+    """Return available model IDs for each local CLI provider."""
+    require_api_auth(request)
+    await enforce_rate_limit(request, MEMORY_RATE_LIMITER, "providers_cli_models")
+
+    from agent.cli_runner import CLI_PROVIDER_CANDIDATES
+
+    rows: dict[str, list[str]] = {}
+    for provider_id in CLI_PROVIDER_CANDIDATES:
+        rows[provider_id] = list_cli_models(provider_id)
+    return {"models": rows}
+
+
 @router.post("/{provider_name}/ping")
 async def ping_provider(provider_name: str, request: Request):
     require_api_auth(request)
@@ -346,6 +398,14 @@ async def switch_provider_endpoint(body: ProviderSwitchRequest, request: Request
             detail=f"Unsupported provider '{body.provider}'.",
         )
 
+    requested_model = body.model
+    if not _provider_configured(provider, request):
+        cli_fallback = API_TO_CLI_FALLBACKS.get(provider)
+        if cli_fallback and _provider_configured(cli_fallback, request):
+            if str(requested_model or "").strip() == _default_model_for_provider(provider):
+                requested_model = None
+            provider = cli_fallback
+
     if not _provider_configured(provider, request):
         raise HTTPException(
             status_code=400,
@@ -354,7 +414,7 @@ async def switch_provider_endpoint(body: ProviderSwitchRequest, request: Request
             ),
         )
 
-    resolved_model = (await _resolve_model_for_switch(provider, body.model)).strip()
+    resolved_model = (await _resolve_model_for_switch(provider, requested_model)).strip()
     if not resolved_model:
         raise HTTPException(
             status_code=400,

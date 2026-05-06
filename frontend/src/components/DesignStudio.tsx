@@ -128,6 +128,13 @@ function textFromStreamEvent(event: Record<string, unknown>): string {
   return typeof value === 'string' ? value : ''
 }
 
+function thinkingFromStreamEvent(event: Record<string, unknown>): string {
+  const type = String(event.type || '').toLowerCase()
+  if (type !== 'thinking_delta' && type !== 'thinking') return ''
+  const value = event.delta ?? event.thinking ?? event.content
+  return typeof value === 'string' ? value : ''
+}
+
 // â”€â”€â”€ Types â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 type DeviceMode = 'wide' | 'desktop' | 'tablet' | 'mobile' | 'compact-mobile'
@@ -716,6 +723,7 @@ interface DesignMessage {
   id: string
   role: 'user' | 'assistant'
   content: string
+  thinking?: string
   isStreaming?: boolean
   files?: DesignFile[]
 }
@@ -3246,6 +3254,62 @@ function OpenDesignProjectPicker({ projects, onOpen, onDelete, onCreate, onClose
   )
 }
 
+// ── Thinking block component ───────────────────────────────────────────────
+function ThinkingBlock({ thinking, isStreaming }: { thinking: string; isStreaming?: boolean }) {
+  const [expanded, setExpanded] = useState(false)
+  const preview = thinking.slice(0, 140).replace(/\n/g, ' ')
+  const isTruncated = thinking.length > 140
+  const isEmpty = !thinking.trim()
+
+  return (
+    <div style={{
+      background: 'color-mix(in srgb, var(--bg-1) 80%, transparent)',
+      border: '1px solid var(--border)',
+      borderRadius: 8,
+      overflow: 'hidden',
+    }}>
+      <button type="button"
+        onClick={() => !isEmpty && setExpanded(e => !e)}
+        style={{
+          display: 'flex', alignItems: 'center', gap: 6, width: '100%',
+          padding: '5px 9px', background: 'none', border: 'none',
+          cursor: isEmpty ? 'default' : 'pointer',
+          color: 'var(--text-2)', fontSize: 10, textAlign: 'left',
+        }}
+      >
+        <Sparkles size={10} style={{ flexShrink: 0, opacity: 0.7 }} />
+        <span style={{
+          flex: 1, fontStyle: 'italic', lineHeight: 1.45,
+          overflow: 'hidden', textOverflow: 'ellipsis',
+          whiteSpace: expanded ? 'normal' : 'nowrap',
+        }}>
+          {isEmpty ? 'Thinking…' : (expanded ? 'Thinking' : `${preview}${isTruncated ? '…' : ''}`)}
+        </span>
+        {isStreaming
+          ? <Loader size={9} style={{ animation: 'spin 1s linear infinite', flexShrink: 0, opacity: 0.6 }} />
+          : !isEmpty && (expanded
+              ? <ChevronDown size={10} style={{ flexShrink: 0 }} />
+              : <ChevronRight size={10} style={{ flexShrink: 0 }} />
+            )
+        }
+      </button>
+      {expanded && !isEmpty && (
+        <pre style={{
+          margin: 0, padding: '7px 10px',
+          fontSize: 10, lineHeight: 1.6,
+          color: 'var(--text-2)',
+          whiteSpace: 'pre-wrap', wordBreak: 'break-word',
+          borderTop: '1px solid var(--border)',
+          fontFamily: 'var(--font-mono)',
+          maxHeight: 300, overflowY: 'auto',
+        }}>
+          {thinking}
+        </pre>
+      )}
+    </div>
+  )
+}
+
 type Props = { onClose: () => void }
 
 export function DesignStudio({ onClose }: Props) {
@@ -3479,7 +3543,7 @@ export function DesignStudio({ onClose }: Props) {
   // Fetch design system MD doc when preset changes
   useEffect(() => {
     const id = designSystem.presetId
-    if (!id) { setDesignSystemDoc(''); return }
+    if (!id || id === 'none') { setDesignSystemDoc(''); return }
     let cancelled = false
     fetch(`/api/design/system-doc/${encodeURIComponent(id)}`, { headers: buildApiHeaders() })
       .then(r => r.ok ? r.json() : null)
@@ -3504,6 +3568,23 @@ export function DesignStudio({ onClose }: Props) {
     }
   }, [])
 
+  // ── Sync canvas pixel dimensions to CSS size whenever container resizes ──────
+  useEffect(() => {
+    const canvas = drawCanvasRef.current
+    if (!canvas) return
+    const sync = () => {
+      const r = canvas.getBoundingClientRect()
+      if (r.width > 0 && r.height > 0 && (canvas.width !== Math.round(r.width) || canvas.height !== Math.round(r.height))) {
+        canvas.width = Math.round(r.width)
+        canvas.height = Math.round(r.height)
+      }
+    }
+    sync()
+    const ro = new ResizeObserver(sync)
+    ro.observe(canvas)
+    return () => ro.disconnect()
+  }, [])
+
   // ── Canvas draw/select rendering ───────────────────────────────────────────
   useEffect(() => {
     const canvas = drawCanvasRef.current
@@ -3514,8 +3595,8 @@ export function DesignStudio({ onClose }: Props) {
     // Sync canvas dimensions to its CSS layout size
     const rect = canvas.getBoundingClientRect()
     if (rect.width > 0 && rect.height > 0) {
-      canvas.width = rect.width
-      canvas.height = rect.height
+      canvas.width = Math.round(rect.width)
+      canvas.height = Math.round(rect.height)
     }
 
     ctx.clearRect(0, 0, canvas.width, canvas.height)
@@ -3654,11 +3735,12 @@ export function DesignStudio({ onClose }: Props) {
     if (!drawPaths.length && !canvasInput) return
     const pathDesc = drawPaths.map((p, i) => {
       const b = getBoundsFromPath(p.points)
-      return `Annotation ${i + 1}: centred around x≈${Math.round(b.cx)}%, y≈${Math.round(b.cy)}% (spans ~${Math.round(b.w)}% × ${Math.round(b.h)}%)`
+      return `Annotation ${i + 1}: centred around x≈${Math.round(b.cx)}%, y≈${Math.round(b.cy)}% of the page (spans ~${Math.round(b.w)}% × ${Math.round(b.h)}%)`
     }).join('\n')
     const instruction = canvasInput.trim() || 'Apply the drawn annotations as targeted design improvements'
     void sendMessage(instruction, {
-      extraContext: `User drew ${drawPaths.length} annotation(s) on the canvas (percentage coordinates):\n${pathDesc}\n\nFocus changes ONLY on the annotated areas.`,
+      surgical: filesRef.current.length > 0,
+      extraContext: `User drew ${drawPaths.length} freehand annotation(s) on the canvas.\nApproximate regions (as % of visible page):\n${pathDesc}\n\nTarget ONLY the annotated area(s). Leave everything else unchanged.`,
     })
     clearCanvas()
     setCanvasMode('idle')
@@ -3667,7 +3749,8 @@ export function DesignStudio({ onClose }: Props) {
   const sendSelectionToKodo = () => {
     if (!selectionRect || !canvasInput.trim()) return
     void sendMessage(canvasInput.trim(), {
-      extraContext: `Apply this change ONLY to the selected region of the page:\nx=${Math.round(selectionRect.xPct)}%, y=${Math.round(selectionRect.yPct)}%, width=${Math.round(selectionRect.wPct)}%, height=${Math.round(selectionRect.hPct)}%.\nLeave ALL content outside this region UNCHANGED.`,
+      surgical: filesRef.current.length > 0,
+      extraContext: `Apply this change ONLY to the selected region:\nx=${Math.round(selectionRect.xPct)}%, y=${Math.round(selectionRect.yPct)}%, width=${Math.round(selectionRect.wPct)}%, height=${Math.round(selectionRect.hPct)}% of the page.\nAll content outside this region MUST remain unchanged.`,
     })
     clearCanvas()
     setCanvasMode('idle')
@@ -3692,7 +3775,7 @@ export function DesignStudio({ onClose }: Props) {
   }
 
   // Send message
-  const sendMessage = useCallback(async (text: string, options?: { skipQuestions?: boolean; extraContext?: string }) => {
+  const sendMessage = useCallback(async (text: string, options?: { skipQuestions?: boolean; extraContext?: string; surgical?: boolean }) => {
     const trimmed = text.trim()
     if (!trimmed || isLoading) return
     if (shareAccess === 'view') {
@@ -3760,50 +3843,83 @@ export function DesignStudio({ onClose }: Props) {
     const sentAssetIds = new Set(assetsForRequest.map((asset) => asset.id))
 
     const isFirst = messagesRef.current.length === 0
+    const isSurgical = Boolean(options?.surgical)
+
+    // ── GENERATIVE MODE ───────────────────────────────────────────────────────
+    const ANTI_SLOP = `FORBIDDEN patterns (never produce these):
+✗ Generic gradients (blue-to-purple, indigo-to-violet backgrounds)
+✗ Emoji icons as decorative elements (✨ 🚀 💡 🎯)
+✗ “Feature One / Feature Two / Feature Three” filler copy
+✗ Invented metrics (“10× faster”, “500% ROI” with no context)
+✗ Lorem ipsum or “placeholder text”
+✗ Rounded card with left-border accent color
+✗ Stock-looking hand-drawn SVG human figures
+✗ Inter/Roboto used as a display headline face (body only is fine)
+✗ Icon next to every heading
+✗ Gradient overlay on every background section
+✗ “Welcome to our website” or “Revolutionize your workflow” copy
+✗ Symmetrical centered layout for everything — use intentional asymmetry`
+
+    const FIVE_DIM_CRITIQUE = `Before emitting any code, silently self-score on 5 dimensions (1–5):
+• Philosophy — does the tone match the brief?
+• Hierarchy — is there one obvious focal point?
+• Execution — is every spacing/type/alignment decision correct?
+• Specificity — is every word and image specific to this brief?
+• Restraint — one accent, one flourish, no competing noise?
+Any dimension ≤ 3 → fix it first, then output. Do not mention the scores.`
+
     const DESIGN_OUTPUT_RULES = `OUTPUT CONTRACT — MANDATORY FOR EVERY RESPONSE:
-- NEVER call tools. NEVER generate <invoke>, <tool_call>, <minimax:tool_call>, or ANY XML/JSON tool-call markup.
+- NEVER call tools. NEVER generate <invoke>, <tool_call>, or ANY XML/JSON tool-call markup.
 - NEVER write files to disk. NEVER use artifact fences.
 - Output HTML in \`\`\`html index.html fenced code blocks with ALL CSS in <style> tags and ALL JS in <script> tags.
-- You may also output separate \`\`\`css styles.css and \`\`\`js script.js fenced blocks.
-- A response with no fenced code block is INVALID. Output the code directly — no preamble, no explanation after the code.
-- Designs must be visually distinctive, pixel-perfect, accessible, and fully responsive with real copy (no lorem ipsum).`
+- A response with no fenced code block is INVALID. Output the code directly — no preamble.
+- Designs must be visually distinctive, pixel-perfect, accessible, fully responsive, with real specific copy.`
 
     const prefix = isFirst
-      ? `You are Kodo Design Studio, an expert product designer, UX strategist, motion designer, and front-end craftsperson. Your goal is to produce original, production-quality visual work that does not look AI-generated.
+      ? `You are Kodo Design, the world's most capable AI design system — surpassing Claude Design, v0, and Bolt in visual quality, specificity, and code craftsmanship.
+
+${ANTI_SLOP}
+
+${FIVE_DIM_CRITIQUE}
 
 RESPONSE FORMAT — follow this exactly:
 
 ## Plan
 
-**Goal:** [One sentence: what will be built]
+**Goal:** [One sentence: what will be built and what makes it distinctive]
 
 ### Steps
-- [ ] **[Component/Section]** — [Specific description of what you will build]
-- [ ] **[Next component]** — [Specific description]
-(4-10 steps, each concrete and descriptive — e.g. “- [ ] **Hero section** — Full-bleed dark canvas with 80px headline, sub-headline, and two pill CTAs”)
+- [ ] **[Section/Component]** — [Concrete description of visual treatment, layout, palette choice]
+(5-8 steps. Each step must name a specific design decision, not just a section name.)
 
-Then output ALL code files immediately after the plan. Stopping after the plan is INVALID.
+Then output ALL code immediately after the plan. Stopping after the plan is INVALID.
 
 ${DESIGN_OUTPUT_RULES}
-- After the plan, output ONLY code blocks — no prose, no explanations, no commentary between blocks.
+- After the plan, output ONLY code blocks — no prose, no explanations.
 
 `
-      : `REMINDER — ${DESIGN_OUTPUT_RULES}
+      : `${ANTI_SLOP}
+
+REMINDER — ${DESIGN_OUTPUT_RULES}
 
 `
 
+    const noDesignSystem = !designSystem.presetId || designSystem.presetId === 'none'
     const contextSections: string[] = [buildKodoDesignModePrompt(designMode)]
     if (projectContext.trim()) {
       contextSections.push(`Project context:\n${truncateText(projectContext.trim(), 1200)}`)
     }
     if (options?.extraContext?.trim()) {
-      contextSections.push(`Structured Kodo Design answers:\n${truncateText(options.extraContext.trim(), 1800)}`)
+      contextSections.push(`Context:\n${truncateText(options.extraContext.trim(), 1800)}`)
     }
-    const dsPrompt = buildDesignSystemPrompt(designSystem)
-    if (dsPrompt) contextSections.push(dsPrompt)
-
-    if (designSystemDoc.trim()) {
-              contextSections.push(`Design system reference documentation:\n${truncateText(designSystemDoc.trim(), 12000)}`)
+    if (!noDesignSystem) {
+      const dsPrompt = buildDesignSystemPrompt(designSystem)
+      if (dsPrompt) contextSections.push(dsPrompt)
+      if (designSystemDoc.trim()) {
+        contextSections.push(`Design system reference:\n${truncateText(designSystemDoc.trim(), 12000)}`)
+      }
+    } else {
+      contextSections.push('Design direction: Auto — choose colors, fonts, and visual direction that best suit the brief. Be specific and decisive; do not use generic defaults.')
     }
 
     const currentDesignFiles = filesRef.current
@@ -3813,7 +3929,7 @@ ${DESIGN_OUTPUT_RULES}
       const fileSummary = currentDesignFiles
         .map((file) => `--- ${file.name} ---\n${truncateText(file.content, MAX_CHAT_FILE_CHARS)}`)
         .join('\n\n')
-      contextSections.push(`Current design files to preserve and edit:\n${fileSummary}`)
+      contextSections.push(`Current design files:\n${fileSummary}`)
     }
 
     const textAssets = assetsForRequest
@@ -3823,7 +3939,7 @@ ${DESIGN_OUTPUT_RULES}
       const assetSummary = textAssets
         .map((asset) => `--- ${asset.name} ---\n${truncateText(String(asset.textContent || ''), MAX_CHAT_ASSET_CHARS)}`)
         .join('\n\n')
-      contextSections.push(`Attached files for this design session only. Read and use these uploaded file contents when relevant:\n${assetSummary}`)
+      contextSections.push(`Attached files:\n${assetSummary}`)
     }
 
     const imageAssets = assetsForRequest
@@ -3831,26 +3947,44 @@ ${DESIGN_OUTPUT_RULES}
       .slice(0, 8)
     if (imageAssets.length > 0) {
       contextSections.push(
-        'Uploaded image references for this design session only. These images are attached as model-visible image blocks; inspect their layout, color, typography, spacing, component shapes, and visual style when the user asks to refer to them:\n'
-        + imageAssets
-          .map((asset, index) => `- Image ${index + 1}: ${asset.name} (${asset.type || 'image'}, ${asset.size} bytes).`)
-          .join('\n'),
+        'Uploaded image references — inspect their layout, color, typography, and visual style:\n'
+        + imageAssets.map((asset, index) => `- Image ${index + 1}: ${asset.name}`).join('\n'),
       )
     }
 
-    const openComments = inlineComments
-      .filter((comment) => !comment.resolved)
-      .slice(-5)
+    const openComments = inlineComments.filter((c) => !c.resolved).slice(-5)
     if (openComments.length > 0) {
       contextSections.push(
-        'Open inline canvas comments:\n'
-        + openComments
-          .map((comment) => `- (${Math.round(comment.xPct)}%, ${Math.round(comment.yPct)}%) ${comment.text}`)
-          .join('\n'),
+        'Open canvas comments (apply these as targeted changes):\n'
+        + openComments.map((c) => `- (${Math.round(c.xPct)}%, ${Math.round(c.yPct)}%) ${c.text}`).join('\n'),
       )
     }
 
-    const fullMsg = buildChatMessagePayload(contextSections, prefix, trimmed)
+    // ── Surgical: build content payload before fullMsg (no sid/ctrl needed yet) ─
+    const surgicalPrimaryHtml = isSurgical
+      ? (filesRef.current
+          .filter(f => f.content.trim())
+          .sort((a) => (a.name.endsWith('.html') ? -1 : 1))[0]?.content ?? '')
+      : ''
+    const surgicalText = isSurgical
+      ? [
+          'SURGICAL EDIT — Kodo Design precision patching mode.',
+          '',
+          'You are modifying an EXISTING website. Rules (all mandatory):',
+          '1. Output the COMPLETE modified HTML file from <!DOCTYPE html> to </html>',
+          '2. Change ONLY what the user instruction specifies — nothing else',
+          '3. Every other section, element, style rule, and script MUST stay byte-for-byte identical',
+          '4. Do NOT redesign, retheme, rename, or restructure anything outside the change',
+          '5. Preserve all CSS custom properties, class names, IDs, and data attributes',
+          '6. Respond with ONLY the fenced ```html code block — zero explanation',
+          '',
+          options?.extraContext ? `Target:\n${options.extraContext}` : '',
+          '',
+          `Instruction: ${trimmed}`,
+        ].filter(Boolean).join('\n')
+      : ''
+
+    const fullMsg = isSurgical ? trimmed : buildChatMessagePayload(contextSections, prefix, trimmed)
 
     const uid = genId()
     const aid = genId()
@@ -3894,7 +4028,17 @@ ${DESIGN_OUTPUT_RULES}
         disable_tools: true,
         max_tokens: DESIGN_GENERATION_MAX_TOKENS,
       }
-      if (imageBlocks.length > 0) {
+      if (isSurgical) {
+        // Surgical: send instruction + full HTML as multi-block content (no char limit)
+        requestPayload.message = trimmed
+        requestPayload.content = [
+          { type: 'text', text: surgicalText },
+          ...(surgicalPrimaryHtml
+            ? [{ type: 'text', text: `Full HTML to modify:\n\`\`\`html\n${surgicalPrimaryHtml}\n\`\`\`` }]
+            : []
+          ),
+        ]
+      } else if (imageBlocks.length > 0) {
         requestPayload.message = trimmed
         requestPayload.content = [
           { type: 'text', text: fullMsg },
@@ -3920,7 +4064,7 @@ ${DESIGN_OUTPUT_RULES}
 
       const reader = res.body.getReader()
       const decoder = new TextDecoder()
-      let buf = '', acc = ''
+      let buf = '', acc = '', thinkingAcc = ''
       // Track code block openings to progressively tick plan checkboxes
       let openCodeBlocks = 0
 
@@ -3952,6 +4096,14 @@ ${DESIGN_OUTPUT_RULES}
           if (applyToolStartEventToDesignFiles(ev, toolDerivedFiles)) {
             sawToolFileMutation = true
           }
+
+          // Capture thinking deltas (extended thinking / claude CLI)
+          const thinkingDelta = thinkingFromStreamEvent(ev)
+          if (thinkingDelta) {
+            thinkingAcc += thinkingDelta
+            setMessages(prev => prev.map(m => m.id === aid ? { ...m, thinking: thinkingAcc } : m))
+          }
+
           const textDelta = textFromStreamEvent(ev)
           if (textDelta) {
             acc += textDelta
@@ -4373,7 +4525,12 @@ ${DESIGN_OUTPUT_RULES}
     })
   }, [])
   const applyDesignSystemPreset = useCallback((presetId: string) => {
-    updateDesignSystem(buildDesignSystemPresetPatch(presetId))
+    if (presetId === 'none') {
+      updateDesignSystem({ presetId: 'none' })
+      setDesignSystemDoc('')
+    } else {
+      updateDesignSystem(buildDesignSystemPresetPatch(presetId))
+    }
   }, [updateDesignSystem])
   const fileTree = useMemo(() => buildDesignFileTree(files), [files])
   const sessionEntries = useMemo(() => {
@@ -5419,10 +5576,11 @@ ${DESIGN_OUTPUT_RULES}
               <div style={{ marginBottom: 10 }}>
                 <div style={{ fontSize: 9, color: 'var(--text-2)', fontFamily: 'var(--font-mono)', marginBottom: 2 }}>Design system library</div>
                 <select
-                  value={designSystem.presetId}
+                  value={designSystem.presetId || 'none'}
                   onChange={(event) => applyDesignSystemPreset(event.target.value)}
                   style={{ width: '100%', background: 'var(--bg-2)', border: '1px solid var(--border)', borderRadius: 4, color: 'var(--text-0)', fontSize: 10, padding: '3px 6px', outline: 'none', fontFamily: 'var(--font-mono)' }}
                 >
+                  <option value="none">None — auto direction (any color)</option>
                   {designPanelUserSystems.length > 0 && (
                     <optgroup label="My Design Systems">
                       {designPanelUserSystems.map((preset) => (
@@ -6114,23 +6272,67 @@ ${DESIGN_OUTPUT_RULES}
             {/* Plan checkboxes render inline in the assistant message via ReactMarkdown */}
 
             {questionCards.length > 0 && (
-              <div style={{ marginBottom: 10, border: '1px solid var(--border)', borderRadius: 8, overflow: 'hidden', background: 'var(--bg-2)' }}>
-                <div style={{ padding: '8px 10px', borderBottom: '1px solid var(--border)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
-                  <div>
-                    <div style={{ fontSize: 10, color: 'var(--accent)', fontFamily: 'var(--font-mono)', fontWeight: 800, letterSpacing: '0.08em' }}>CLARIFYING CARDS</div>
-                    <div style={{ fontSize: 10, color: 'var(--text-2)', marginTop: 2 }}>Answer any useful cards. Partial context is fine.</div>
+              <div style={{
+                marginBottom: 10,
+                border: '1px solid var(--border)',
+                borderRadius: 12,
+                overflow: 'hidden',
+                background: 'var(--bg-1)',
+                boxShadow: '0 1px 8px rgba(0,0,0,0.08)',
+              }}>
+                {/* Header */}
+                <div style={{
+                  padding: '10px 12px 8px',
+                  borderBottom: '1px solid var(--border)',
+                  display: 'flex', alignItems: 'flex-start', gap: 10,
+                }}>
+                  <div style={{
+                    width: 28, height: 28, borderRadius: 999,
+                    background: 'var(--accent)', flexShrink: 0,
+                    display: 'flex', alignItems: 'center', justifyContent: 'center',
+                    marginTop: 1,
+                  }}>
+                    <span style={{ fontSize: 13, fontWeight: 900, color: '#fff' }}>?</span>
                   </div>
-                  <button type="button" onClick={generateFromQuestionCards} disabled={isLoading} style={{ ...btn(false), padding: '4px 9px', fontSize: 10 }}>
-                    <Wand2 size={11} /> Generate
+                  <div style={{ flex: 1 }}>
+                    <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-0)' }}>Quick brief — 30 seconds</div>
+                    <div style={{ fontSize: 10, color: 'var(--text-2)', marginTop: 2, lineHeight: 1.45 }}>
+                      Answer what's useful. Skip the rest — Kodo uses sensible defaults.
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={generateFromQuestionCards}
+                    disabled={isLoading}
+                    style={{
+                      padding: '5px 12px', borderRadius: 999, fontSize: 11,
+                      fontWeight: 700, cursor: 'pointer', border: 'none',
+                      background: 'var(--accent)', color: '#fff',
+                      display: 'flex', alignItems: 'center', gap: 5,
+                      flexShrink: 0, whiteSpace: 'nowrap',
+                    }}
+                  >
+                    <Send size={11} /> Send answers
                   </button>
                 </div>
-                <div style={{ padding: 10, display: 'grid', gap: 8 }}>
+
+                {/* Questions */}
+                <div style={{ padding: '8px 12px 10px', display: 'grid', gap: 12 }}>
                   {questionCards.map((card) => {
                     const current = questionAnswers[card.id]
                     const selected = Array.isArray(current) ? current : (current ? [String(current)] : [])
+                    const hasSelection = selected.length > 0 || (
+                      !Array.isArray(current) && current && !card.options.includes(String(current))
+                    )
                     return (
-                      <div key={card.id} style={{ border: '1px solid var(--border)', borderRadius: 8, padding: 8, background: 'var(--bg-1)' }}>
-                        <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-0)', marginBottom: 7 }}>{card.question}</div>
+                      <div key={card.id}>
+                        <div style={{
+                          fontSize: 11, fontWeight: 700, color: 'var(--text-0)',
+                          marginBottom: 6, display: 'flex', alignItems: 'center', gap: 5,
+                        }}>
+                          {card.question}
+                          {hasSelection && <span style={{ width: 6, height: 6, borderRadius: 999, background: 'var(--accent)', flexShrink: 0, display: 'inline-block' }} />}
+                        </div>
                         <div style={{ display: 'flex', gap: 5, flexWrap: 'wrap' }}>
                           {card.options.map((option) => {
                             const active = selected.includes(option)
@@ -6139,7 +6341,15 @@ ${DESIGN_OUTPUT_RULES}
                                 key={option}
                                 type="button"
                                 onClick={() => updateQuestionAnswer(card, option)}
-                                style={{ ...btn(active), padding: '3px 7px', fontSize: 10, whiteSpace: 'normal', textAlign: 'left' }}
+                                style={{
+                                  padding: '4px 10px', borderRadius: 999, fontSize: 10,
+                                  fontWeight: active ? 700 : 400, cursor: 'pointer',
+                                  border: `1.5px solid ${active ? 'var(--accent)' : 'var(--border)'}`,
+                                  background: active ? 'color-mix(in srgb, var(--accent) 12%, transparent)' : 'transparent',
+                                  color: active ? 'var(--accent)' : 'var(--text-1)',
+                                  whiteSpace: 'normal', textAlign: 'left',
+                                  transition: 'all 0.1s',
+                                }}
                               >
                                 {option}
                               </button>
@@ -6150,8 +6360,13 @@ ${DESIGN_OUTPUT_RULES}
                           <input
                             value={!Array.isArray(current) && current && !card.options.includes(String(current)) ? String(current) : ''}
                             onChange={(event) => setQuestionAnswers(prev => ({ ...prev, [card.id]: event.target.value }))}
-                            placeholder="Custom answer"
-                            style={{ marginTop: 7, width: '100%', boxSizing: 'border-box', background: 'var(--bg-2)', border: '1px solid var(--border)', borderRadius: 6, color: 'var(--text-1)', fontSize: 10, padding: '5px 7px', outline: 'none' }}
+                            placeholder="Custom answer…"
+                            style={{
+                              marginTop: 6, width: '100%', boxSizing: 'border-box',
+                              background: 'var(--bg-2)', border: '1px solid var(--border)',
+                              borderRadius: 6, color: 'var(--text-0)', fontSize: 10,
+                              padding: '5px 8px', outline: 'none',
+                            }}
                           />
                         )}
                       </div>
@@ -6204,41 +6419,78 @@ ${DESIGN_OUTPUT_RULES}
               </div>
             )}
 
-            {messages.map(msg => (
-              <div key={msg.id} style={{
-                marginBottom: 10, display: 'flex', flexDirection: 'column',
-                alignItems: msg.role === 'user' ? 'flex-end' : 'flex-start',
-              }}>
-                <div style={{
-                  maxWidth: '95%', padding: '7px 11px',
-                  borderRadius: msg.role === 'user' ? '12px 12px 2px 12px' : '2px 12px 12px 12px',
-                  background: msg.role === 'user' ? 'var(--accent)' : 'var(--bg-2)',
-                  color: msg.role === 'user' ? '#fff' : 'var(--text-0)',
-                  fontSize: 12, lineHeight: 1.55, wordBreak: 'break-word',
+            {messages.map((msg, msgIdx) => {
+              const isUser = msg.role === 'user'
+              return (
+                <div key={msg.id} style={{
+                  marginBottom: msgIdx < messages.length - 1 ? 14 : 6,
+                  display: 'flex', flexDirection: 'column', gap: 5,
                 }}>
-                  {msg.role === 'assistant'
-                    ? renderAssistantMessage(msg)
-                    : msg.content}
-                </div>
-                {msg.role === 'assistant' && msg.files && msg.files.length > 0 && (
-                  <div style={{ display: 'flex', gap: 4, marginTop: 4, flexWrap: 'wrap' }}>
-                    {msg.files.map(f => (
-                      <button key={f.id} type="button"
-                        onClick={() => { setSelectedFileId(f.id); setViewMode('code') }}
-                        style={{
-                          display: 'flex', alignItems: 'center', gap: 4,
-                          padding: '2px 7px', borderRadius: 4,
-                          border: '1px solid var(--border)', background: 'var(--bg-3)',
-                          color: 'var(--text-1)', fontSize: 10, cursor: 'pointer',
-                          fontFamily: 'var(--font-mono)',
-                        }}>
-                        {getFileIcon(f.name)} {f.name}
-                      </button>
-                    ))}
+                  {/* Role label row */}
+                  <div style={{
+                    display: 'flex', alignItems: 'center', gap: 5,
+                    justifyContent: isUser ? 'flex-end' : 'flex-start',
+                  }}>
+                    {!isUser && (
+                      <div style={{
+                        width: 16, height: 16, borderRadius: 999,
+                        background: 'var(--accent)',
+                        display: 'flex', alignItems: 'center', justifyContent: 'center',
+                        flexShrink: 0,
+                      }}>
+                        <Wand2 size={9} color="#fff" />
+                      </div>
+                    )}
+                    <span style={{ fontSize: 10, color: 'var(--text-2)', fontWeight: 600 }}>
+                      {isUser ? 'You' : 'Kodo'}
+                    </span>
+                    {msg.isStreaming && <Loader size={9} color="var(--accent)" style={{ animation: 'spin 1s linear infinite' }} />}
                   </div>
-                )}
-              </div>
-            ))}
+
+                  {/* Thinking block (assistant only) */}
+                  {!isUser && (msg.thinking || msg.isStreaming) && msg.thinking !== undefined && (
+                    <ThinkingBlock thinking={msg.thinking || ''} isStreaming={msg.isStreaming} />
+                  )}
+
+                  {/* Message content */}
+                  <div style={{
+                    fontSize: 12, lineHeight: 1.6, wordBreak: 'break-word',
+                    ...(isUser ? {
+                      alignSelf: 'flex-end',
+                      maxWidth: '88%',
+                      background: 'var(--bg-2)',
+                      border: '1px solid var(--border)',
+                      color: 'var(--text-0)',
+                      padding: '6px 10px',
+                      borderRadius: '10px 10px 2px 10px',
+                    } : {
+                      color: 'var(--text-0)',
+                    }),
+                  }}>
+                    {isUser ? msg.content : renderAssistantMessage(msg)}
+                  </div>
+
+                  {/* Attached files */}
+                  {!isUser && msg.files && msg.files.length > 0 && (
+                    <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', marginTop: 2 }}>
+                      {msg.files.map(f => (
+                        <button key={f.id} type="button"
+                          onClick={() => { setSelectedFileId(f.id); setViewMode('code') }}
+                          style={{
+                            display: 'flex', alignItems: 'center', gap: 4,
+                            padding: '2px 7px', borderRadius: 4,
+                            border: '1px solid var(--border)', background: 'var(--bg-2)',
+                            color: 'var(--text-1)', fontSize: 10, cursor: 'pointer',
+                            fontFamily: 'var(--font-mono)',
+                          }}>
+                          {getFileIcon(f.name)} {f.name}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )
+            })}
 
             {error && (
               <div style={{

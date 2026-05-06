@@ -27,6 +27,10 @@ PROVIDERS = {
     "openrouter",
     "github-models",
     "codex",
+    "claude-cli",
+    "codex-cli",
+    "gemini-cli",
+    "copilot-cli",
 }
 NONE_LIKE_VALUES = {"none", "null", "undefined", ""}
 

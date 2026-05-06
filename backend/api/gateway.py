@@ -22,6 +22,13 @@ _SUPPORTED_PROVIDER_KEYS = {
     "nvidia": ("NVIDIA_API_KEY",),
 }
 
+_CLI_PROVIDERS = {
+    "claude-cli",
+    "codex-cli",
+    "gemini-cli",
+    "copilot-cli",
+}
+
 
 def _first_non_empty_env(*keys: str) -> str:
     for key in keys:
@@ -32,7 +39,13 @@ def _first_non_empty_env(*keys: str) -> str:
 
 
 def _provider_configured(provider: str) -> bool:
-    keys = _SUPPORTED_PROVIDER_KEYS.get(provider, ())
+    normalized = provider.strip().lower().replace("_", "-")
+    if normalized in _CLI_PROVIDERS:
+        from agent.cli_runner import cli_available
+
+        return cli_available(normalized)
+
+    keys = _SUPPORTED_PROVIDER_KEYS.get(normalized, ())
     return bool(_first_non_empty_env(*keys))
 
 
@@ -60,6 +73,8 @@ def _default_model_for_provider(provider: str) -> str:
         return "default"
     if name == "nvidia":
         return "meta/llama-3.1-8b-instruct"
+    if name in _CLI_PROVIDERS:
+        return "default"
     return ""
 
 
@@ -74,6 +89,7 @@ async def gateway_status_endpoint(request: Request):
 
     # Resolve actual active provider — respect PRIMARY_PROVIDER before falling back
     ALL_PROVIDERS = [
+        "claude-cli", "codex-cli", "gemini-cli", "copilot-cli",
         "nvidia", "ollama", "anthropic", "openai", "gemini", "deepseek",
         "groq", "openrouter", "github-models", "codex", "atomic-chat",
     ]
@@ -111,5 +127,9 @@ async def gateway_status_endpoint(request: Request):
             "ollama": _provider_configured("ollama"),
             "atomic_chat": _provider_configured("atomic-chat"),
             "nvidia": _provider_configured("nvidia"),
+            "claude_cli": _provider_configured("claude-cli"),
+            "codex_cli": _provider_configured("codex-cli"),
+            "gemini_cli": _provider_configured("gemini-cli"),
+            "copilot_cli": _provider_configured("copilot-cli"),
         },
     }

@@ -548,6 +548,10 @@ KODO supports all major AI providers. Set the relevant API key in `.env`.
 | **AtomicChat** | *(no key)* | local |
 | **Codex** | `CODEX_API_KEY` | `code-davinci-002` |
 
+Local headless CLI providers are also supported: `claude-cli`, `codex-cli`, `gemini-cli`, and `copilot-cli`.
+If discovery on PATH fails, set one of:
+`KODO_CLAUDE_CLI_PATH`, `KODO_CODEX_CLI_PATH`, `KODO_GEMINI_CLI_PATH`, `KODO_COPILOT_CLI_PATH`.
+
 Switch provider mid-session with `/provider set <name>` or via the Provider panel in the UI.
 
 ---
