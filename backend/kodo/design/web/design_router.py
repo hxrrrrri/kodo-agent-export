@@ -12,14 +12,17 @@ from kodo.design.export import build_zip_bytes, export_clean_html, scan_code_hea
 from kodo.design.generator import KODO_DESIGN_GENERATION_SYSTEM, build_stream_events_from_html
 from kodo.design.history import design_history
 from kodo.design.intent_classifier import classify_design_request
-from kodo.design.question_engine import build_question_flow
+from kodo.design.question_engine import build_question_flow, detect_project_type
 from kodo.design.region_editor import RegionEditError, patch_region_html
 from kodo.design.tweaks_engine import apply_tweaks
 from kodo.design.types import (
     BranchRequest,
+    CanvasTool,
     CheckpointRequest,
+    DesignIntent,
     DesignVersionCreateRequest,
     ExportRequest,
+    GenerationStrategy,
     IntentAnalysisRequest,
     IntentAnalysisResponse,
     RegionEditRequest,
@@ -59,20 +62,42 @@ PROJECT_MAP = {
 
 @router.post("/intelligence/analyze", response_model=IntentAnalysisResponse)
 async def analyze_design_intent(body: IntentAnalysisRequest) -> IntentAnalysisResponse:
-    classification = await classify_design_request(body.prompt, body.has_current_html or bool(body.current_html))
-    questions = build_question_flow(body.prompt, classification.project_type) if classification.requires_questions else []
-    return IntentAnalysisResponse(
-        intent=classification.intent,
-        project_type=classification.project_type,
-        confidence=classification.confidence,
-        strategy=classification.strategy,
-        requires_questions=classification.requires_questions,
-        auto_tools=classification.auto_tools,
-        questions=questions,
-        system_prompt=KODO_DESIGN_GENERATION_SYSTEM,
-        superiority_map=SUPERIORITY_MAP,
-        project_map=PROJECT_MAP,
-    )
+    has_current_html = body.has_current_html or bool(body.current_html)
+    try:
+        classification = await classify_design_request(body.prompt, has_current_html)
+        questions = build_question_flow(body.prompt, classification.project_type) if classification.requires_questions else []
+        return IntentAnalysisResponse(
+            intent=classification.intent,
+            project_type=classification.project_type,
+            confidence=classification.confidence,
+            strategy=classification.strategy,
+            requires_questions=classification.requires_questions,
+            auto_tools=classification.auto_tools,
+            questions=questions,
+            system_prompt=KODO_DESIGN_GENERATION_SYSTEM,
+            superiority_map=SUPERIORITY_MAP,
+            project_map=PROJECT_MAP,
+        )
+    except (TypeError, ValueError, KeyError):
+        fallback_intent = DesignIntent.TWEAK_EXISTING if has_current_html else DesignIntent.CREATE_NEW
+        fallback_project_type = detect_project_type(body.prompt)
+        fallback_requires_questions = fallback_intent == DesignIntent.CREATE_NEW
+        try:
+            fallback_questions = build_question_flow(body.prompt, fallback_project_type) if fallback_requires_questions else []
+        except (TypeError, ValueError, KeyError):
+            fallback_questions = []
+        return IntentAnalysisResponse(
+            intent=fallback_intent,
+            project_type=fallback_project_type,
+            confidence=0.45,
+            strategy=GenerationStrategy.SURGICAL_PATCH if has_current_html else GenerationStrategy.FULL_GENERATION,
+            requires_questions=fallback_requires_questions,
+            auto_tools=[CanvasTool.CHAT],
+            questions=fallback_questions,
+            system_prompt=KODO_DESIGN_GENERATION_SYSTEM,
+            superiority_map=SUPERIORITY_MAP,
+            project_map=PROJECT_MAP,
+        )
 
 
 @router.get("/intelligence/project-map")

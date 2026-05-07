@@ -303,6 +303,16 @@ interface UserDesignPreset extends DesignSystemPreset {
 }
 
 const DESIGN_SYSTEM_PRESETS = BUNDLED_DESIGN_SYSTEM_PRESETS as DesignSystemPreset[]
+const DISABLED_DESIGN_SYSTEM_PRESET: DesignSystemPreset = {
+  id: 'none',
+  label: 'Disabled',
+  category: 'Reference',
+  colors: ['#050507', '#14141a', '#f6f6f7', '#8f94a3', '#ffffff'],
+  displayFont: 'inherit',
+  bodyFont: 'inherit',
+  summary: 'No Kodo design-system preset or house style. The model follows only the user prompt, uploaded references, and project context.',
+  prompt: 'Do not apply a bundled design system. Match the user brief and uploaded references directly.',
+}
 
 const USER_DS_KEY = 'kodo.user.design.systems.v1'
 
@@ -1418,6 +1428,9 @@ function buildPreviewHtml(files: DesignFile[]): string {
     if (!/<\/body>/i.test(html)) {
       html = html.replace(/<\/html>/i, `</body></html>`) || html + '</body>'
     }
+    if (!/<link[^>]+rel=["'][^"']*icon[^"']*["'][^>]*>/i.test(html)) {
+      html = html.replace(/<\/head>/i, '<link rel="icon" href="data:,">\n</head>')
+    }
 
     html = html.replace(/<\/head>/i, `${cssInject}\n</head>`)
     html = html.replace(/<\/body>/i, `${jsInject}\n</body>`)
@@ -1425,13 +1438,13 @@ function buildPreviewHtml(files: DesignFile[]): string {
   }
 
   if (files.length === 1 && files[0].language === 'svg') {
-    return `<!DOCTYPE html><html><body style="margin:0;display:flex;align-items:center;justify-content:center;min-height:100vh;background:#fff">${files[0].content}</body></html>`
+    return `<!DOCTYPE html><html><head><link rel="icon" href="data:,"></head><body style="margin:0;display:flex;align-items:center;justify-content:center;min-height:100vh;background:#fff">${files[0].content}</body></html>`
   }
 
   // Wrap loose CSS/JS in an HTML shell
   const css = cssFiles.map(f => f.content).join('\n')
   const js = jsFiles.map(f => f.content).join('\n')
-  return `<!DOCTYPE html><html><head><style>${css}</style></head><body>${js ? `<script>${js}<\/script>` : ''}</body></html>`
+  return `<!DOCTYPE html><html><head><link rel="icon" href="data:,"><style>${css}</style></head><body>${js ? `<script>${js}<\/script>` : ''}</body></html>`
 }
 
 const DEFAULT_TWEAK_STATE: DesignTweakState = {
@@ -1814,7 +1827,7 @@ function loadDesignSystem(): DesignSystemConfig {
     const presets = allDesignSystemPresets()
     return {
       ...parsed,
-      presetId: presets.some((preset) => preset.id === parsed.presetId) ? parsed.presetId : DEFAULT_DESIGN_SYSTEM.presetId,
+      presetId: parsed.presetId === 'none' || presets.some((preset) => preset.id === parsed.presetId) ? parsed.presetId : DEFAULT_DESIGN_SYSTEM.presetId,
       fidelity: parsed.fidelity === 'wireframe' || parsed.fidelity === 'production' ? parsed.fidelity : 'high-fidelity',
       direction: Object.keys(DESIGN_DIRECTIONS).includes(parsed.direction) ? parsed.direction : 'auto',
       surface: Object.keys(DESIGN_SURFACES).includes(parsed.surface) ? parsed.surface : 'auto',
@@ -2572,14 +2585,14 @@ function DesignSystemPreviewModal({
               srcDoc={preset.livePreviewHtml}
               title={`${preset.label} live preview`}
               style={{ flex: 1, border: 'none', width: '100%' }}
-              sandbox="allow-same-origin"
+              sandbox="allow-scripts"
             />
           ) : (
             <iframe
               src={`/design-previews/${String(liveSlug).replace(/\./g, '-')}.html`}
               title={`${preset.label} live preview`}
               style={{ flex: 1, border: 'none', width: '100%' }}
-              sandbox="allow-same-origin"
+              sandbox="allow-scripts"
             />
           )
         )}
@@ -2591,7 +2604,7 @@ function DesignSystemPreviewModal({
             srcDoc={showcaseHTML}
             title={`${preset.label} showcase`}
             style={{ flex: 1, border: 'none', width: '100%' }}
-            sandbox="allow-same-origin"
+            sandbox="allow-scripts"
           />
         )}
 
@@ -3792,7 +3805,6 @@ export function DesignStudio({ onClose }: Props) {
           body: JSON.stringify({
             prompt: trimmed,
             has_current_html: Boolean(currentHtmlForAnalysis.trim()),
-            current_html: currentHtmlForAnalysis.slice(0, 50000),
           }),
         })
         if (analysisRes.ok) {
@@ -3875,7 +3887,7 @@ Any dimension ≤ 3 → fix it first, then output. Do not mention the scores.`
 - A response with no fenced code block is INVALID. Output the code directly — no preamble.
 - Designs must be visually distinctive, pixel-perfect, accessible, fully responsive, with real specific copy.`
 
-    const prefix = isFirst
+    let prefix = isFirst
       ? `You are Kodo Design, the world's most capable AI design system — surpassing Claude Design, v0, and Bolt in visual quality, specificity, and code craftsmanship.
 
 ${ANTI_SLOP}
@@ -3905,7 +3917,32 @@ REMINDER — ${DESIGN_OUTPUT_RULES}
 `
 
     const noDesignSystem = !designSystem.presetId || designSystem.presetId === 'none'
-    const contextSections: string[] = [buildKodoDesignModePrompt(designMode)]
+    if (noDesignSystem) {
+      prefix = isFirst
+        ? `You are a reference-first frontend designer and engineer. Recreate the user's requested visual direction, especially uploaded screenshots, as closely as HTML/CSS/JS allows.
+
+${DESIGN_OUTPUT_RULES}
+- Output the complete code directly in a single fenced code block.
+- Do not output a plan, checklist, rationale, or explanation before the code.
+- If a reference image is attached, prioritize visual replication over Kodo house style, preset style, generic SaaS structure, or dashboard defaults.
+
+`
+        : `REMINDER - ${DESIGN_OUTPUT_RULES}
+- Do not output a plan or explanation. Output only the updated code block.
+
+`
+    }
+    const modePrompt = noDesignSystem
+      ? [
+          `Reference-first ${DESIGN_MODES[designMode].label} mode.`,
+          `Expected deliverable: ${DESIGN_MODES[designMode].deliverable}.`,
+          'Uploaded screenshots, images, and explicit user instructions are the visual authority.',
+          'Do not apply Kodo preset aesthetics, library palettes, house layouts, or default SaaS/dashboard patterns.',
+          'When a reference image is provided, replicate its composition, density, spacing, color mood, typography, border treatment, and UI hierarchy as closely as HTML/CSS allows.',
+          DESIGN_MODES[designMode].prompt,
+        ].join('\n')
+      : buildKodoDesignModePrompt(designMode)
+    const contextSections: string[] = [modePrompt]
     if (projectContext.trim()) {
       contextSections.push(`Project context:\n${truncateText(projectContext.trim(), 1200)}`)
     }
@@ -4026,6 +4063,7 @@ REMINDER — ${DESIGN_OUTPUT_RULES}
         mode: 'execute',
         artifact_mode: false,
         disable_tools: true,
+        disable_design_system: noDesignSystem,
         max_tokens: DESIGN_GENERATION_MAX_TOKENS,
       }
       if (isSurgical) {
@@ -4514,7 +4552,11 @@ REMINDER — ${DESIGN_OUTPUT_RULES}
   const canEdit = shareAccess === 'edit'
   const canComment = shareAccess !== 'view'
   const activePreset = useMemo(
-    () => designPanelPresets.find((preset) => preset.id === designSystem.presetId) || DESIGN_SYSTEM_PRESETS[0],
+    () => (
+      designSystem.presetId === 'none'
+        ? DISABLED_DESIGN_SYSTEM_PRESET
+        : designPanelPresets.find((preset) => preset.id === designSystem.presetId) || DESIGN_SYSTEM_PRESETS[0]
+    ),
     [designPanelPresets, designSystem.presetId],
   )
   const updateDesignSystem = useCallback((patch: Partial<DesignSystemConfig>) => {
@@ -5580,7 +5622,7 @@ REMINDER — ${DESIGN_OUTPUT_RULES}
                   onChange={(event) => applyDesignSystemPreset(event.target.value)}
                   style={{ width: '100%', background: 'var(--bg-2)', border: '1px solid var(--border)', borderRadius: 4, color: 'var(--text-0)', fontSize: 10, padding: '3px 6px', outline: 'none', fontFamily: 'var(--font-mono)' }}
                 >
-                  <option value="none">None — auto direction (any color)</option>
+                  <option value="none">Disabled - prompt/reference only</option>
                   {designPanelUserSystems.length > 0 && (
                     <optgroup label="My Design Systems">
                       {designPanelUserSystems.map((preset) => (
@@ -6063,7 +6105,7 @@ REMINDER — ${DESIGN_OUTPUT_RULES}
                     <iframe
                       key={`${refreshKey}-${device}-${viewMode}`}
                       srcDoc={previewHtml || ''}
-                      sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-modals"
+                      sandbox="allow-scripts allow-forms allow-popups allow-modals"
                       style={{
                         width: DEVICE_WIDTHS[device],
                         height: DEVICE_HEIGHTS[device],
@@ -6132,7 +6174,7 @@ REMINDER — ${DESIGN_OUTPUT_RULES}
                   <iframe
                     key={`${refreshKey}-${device}-${viewMode}`}
                     srcDoc={previewHtml || ''}
-                    sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-modals"
+                    sandbox="allow-scripts allow-forms allow-popups allow-modals"
                     style={{
                       width: DEVICE_WIDTHS[device],
                       height: DEVICE_HEIGHTS[device],

@@ -9,11 +9,21 @@ from agent.session_runner import SessionRunner
 
 
 class FakeAgentLoop:
-    def __init__(self, session_id: str, project_dir=None, mode=None, model_override=None, artifact_mode=False, disable_tools=False):
+    def __init__(
+        self,
+        session_id: str,
+        project_dir=None,
+        mode=None,
+        model_override=None,
+        artifact_mode=False,
+        disable_tools=False,
+        disable_design_system=False,
+    ):
         self.provider = 'openai'
         self.model = model_override or 'gpt-4o'
         self.artifact_mode = artifact_mode
         self.disable_tools = disable_tools
+        self.disable_design_system = disable_design_system
 
     async def run(self, user_message, history, approval_callback=None):
         yield {
@@ -38,11 +48,21 @@ class FakeAgentLoop:
 
 
 class CancelledAgentLoop:
-    def __init__(self, session_id: str, project_dir=None, mode=None, model_override=None, artifact_mode=False, disable_tools=False):
+    def __init__(
+        self,
+        session_id: str,
+        project_dir=None,
+        mode=None,
+        model_override=None,
+        artifact_mode=False,
+        disable_tools=False,
+        disable_design_system=False,
+    ):
         self.provider = 'openai'
         self.model = 'gpt-4o'
         self.artifact_mode = artifact_mode
         self.disable_tools = disable_tools
+        self.disable_design_system = disable_design_system
 
     async def run(self, user_message, history, approval_callback=None):
         raise asyncio.CancelledError()
@@ -50,11 +70,21 @@ class CancelledAgentLoop:
 
 
 class EmptyDoneAgentLoop:
-    def __init__(self, session_id: str, project_dir=None, mode=None, model_override=None, artifact_mode=False, disable_tools=False):
+    def __init__(
+        self,
+        session_id: str,
+        project_dir=None,
+        mode=None,
+        model_override=None,
+        artifact_mode=False,
+        disable_tools=False,
+        disable_design_system=False,
+    ):
         self.provider = 'openai'
         self.model = model_override or 'gpt-empty'
         self.artifact_mode = artifact_mode
         self.disable_tools = disable_tools
+        self.disable_design_system = disable_design_system
 
     async def run(self, user_message, history, approval_callback=None):
         yield {'type': 'done', 'usage': {'input_tokens': 10, 'output_tokens': 0, 'model': self.model}}
@@ -156,6 +186,35 @@ async def test_session_runner_passes_disable_tools_to_agent(monkeypatch):
         pass
 
     assert captured.get('disable_tools') is True
+
+
+@pytest.mark.asyncio
+async def test_session_runner_passes_disable_design_system_to_agent(monkeypatch):
+    captured: dict[str, object] = {}
+
+    class CapturingAgentLoop(FakeAgentLoop):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            captured['disable_design_system'] = self.disable_design_system
+
+    monkeypatch.setattr(session_runner_mod, 'AgentLoop', CapturingAgentLoop)
+
+    async def fake_save_session(session_id, messages, metadata=None):
+        return None
+
+    monkeypatch.setattr(session_runner_mod.memory_manager, 'save_session', fake_save_session)
+
+    runner = SessionRunner()
+    async for _event in runner.stream(
+        session_id='s1d',
+        messages=[{'role': 'user', 'content': 'hi'}],
+        project_dir=None,
+        mode='execute',
+        disable_design_system=True,
+    ):
+        pass
+
+    assert captured.get('disable_design_system') is True
 
 
 @pytest.mark.asyncio

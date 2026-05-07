@@ -42,9 +42,15 @@ _STALE_API_MODEL_DEFAULTS = {
 }
 
 _GEMINI_MODEL_FALLBACKS = (
-    "gemini-2.5-flash",
     "gemini-2.5-pro",
+    "gemini-2.5-flash",
+    "gemini-2.5-pro-preview-05-06",
+    "gemini-2.5-flash-preview-04-17",
     "gemini-2.0-flash",
+    "gemini-2.0-flash-lite",
+    "gemini-2.0-flash-001",
+    "gemini-1.5-pro",
+    "gemini-1.5-flash",
 )
 CLI_PROVIDER_MODEL_FALLBACKS: dict[str, tuple[str, ...]] = {
     "claude-cli": (
@@ -558,7 +564,13 @@ async def _spawn_shell_pipe_and_stream_lines(
 ) -> AsyncGenerator[dict[str, Any], None]:
     fd, prompt_path = tempfile.mkstemp(prefix="kodo-codex-prompt-", suffix=".txt")
     try:
-        with os.fdopen(fd, "w", encoding="utf-8", errors="replace") as handle:
+        try:
+            handle = os.fdopen(fd, "w", encoding="utf-8", errors="replace")
+        except Exception:
+            # fdopen failed before taking ownership of fd — close manually.
+            os.close(fd)
+            raise
+        with handle:
             handle.write(prompt)
             handle.write("\n")
         command = f"type {subprocess.list2cmdline([prompt_path])} | {subprocess.list2cmdline(args)}"
@@ -666,6 +678,16 @@ async def _spawn_blocking_capture_and_stream_lines(
         yield {"_stderr": stderr_text}
 
 
+def _cli_timeout() -> int:
+    try:
+        value = int(os.getenv("KODO_CLI_TIMEOUT", "").strip())
+        if value > 0:
+            return value
+    except (ValueError, AttributeError):
+        pass
+    return 900
+
+
 def _run_blocking_capture(
     args: list[str],
     prompt: str,
@@ -675,18 +697,26 @@ def _run_blocking_capture(
 ) -> dict[str, Any]:
     shell = _requires_shell_invocation(args[0])
     command: str | list[str] = subprocess.list2cmdline(args) if shell else args
-    completed = subprocess.run(
-        command,
-        input=(prompt + "\n") if write_prompt_to_stdin else None,
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-        cwd=cwd,
-        env=_merged_env(env),
-        shell=shell,
-        timeout=300,
-    )
+    try:
+        completed = subprocess.run(
+            command,
+            input=(prompt + "\n") if write_prompt_to_stdin else None,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            cwd=cwd,
+            env=_merged_env(env),
+            shell=shell,
+            timeout=_cli_timeout(),
+        )
+    except subprocess.TimeoutExpired:
+        timeout = _cli_timeout()
+        return {
+            "return_code": 1,
+            "stdout": "",
+            "stderr": f"CLI timed out after {timeout}s. For complex tasks set KODO_CLI_TIMEOUT (e.g. 900) in your environment.",
+        }
     return {
         "return_code": completed.returncode,
         "stdout": completed.stdout or "",
@@ -701,18 +731,26 @@ def _run_console_capture(
     env: dict[str, str | None] | None,
 ) -> dict[str, Any]:
     creationflags = getattr(subprocess, "CREATE_NEW_CONSOLE", 0) if sys.platform == "win32" else 0
-    completed = subprocess.run(
-        args,
-        input=prompt + "\n",
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-        cwd=cwd,
-        env=_merged_env(env),
-        creationflags=creationflags,
-        timeout=300,
-    )
+    try:
+        completed = subprocess.run(
+            args,
+            input=prompt + "\n",
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            cwd=cwd,
+            env=_merged_env(env),
+            creationflags=creationflags,
+            timeout=_cli_timeout(),
+        )
+    except subprocess.TimeoutExpired:
+        timeout = _cli_timeout()
+        return {
+            "return_code": 1,
+            "stdout": "",
+            "stderr": f"CLI timed out after {timeout}s. For complex tasks set KODO_CLI_TIMEOUT (e.g. 900) in your environment.",
+        }
     return {
         "return_code": completed.returncode,
         "stdout": completed.stdout or "",
@@ -798,6 +836,7 @@ async def run_claude_cli(
     prompt: str,
     model: str | None = None,
     cwd: str | None = None,
+    image_paths: list[str] | None = None,
 ) -> AsyncGenerator[dict[str, Any], None]:
     exe = cli_path("claude-cli") or "claude"
     normalized_model = _normalize_provider_model("claude-cli", model)
@@ -808,15 +847,20 @@ async def run_claude_cli(
 
     attempts: list[dict[str, Any]] = []
     for model_name in model_sequence:
-        attempts.extend(_build_claude_attempts(exe, model_name))
+        attempts.extend(_build_claude_attempts(exe, model_name, image_paths=image_paths))
 
     async for event in _run_cli_attempts(prompt, cwd, attempts, _parse_claude_event):
         yield event
 
 
-def _build_claude_attempts(exe: str, model: str | None) -> list[dict[str, Any]]:
-    base_args = [exe, "-p", "--output-format", "stream-json", "--verbose"]
-    plain_args = [exe, "-p"]
+def _build_claude_attempts(exe: str, model: str | None, image_paths: list[str] | None = None) -> list[dict[str, Any]]:
+    # Image flags: claude supports --image <path> before -p
+    image_flags: list[str] = []
+    for img in (image_paths or []):
+        image_flags.extend(["--image", img])
+
+    base_args = [exe, *image_flags, "-p", "--output-format", "stream-json", "--verbose"]
+    plain_args = [exe, *image_flags, "-p"]
     if _flag_supported(exe, "--include-partial-messages"):
         base_args.append("--include-partial-messages")
     if model:
@@ -826,13 +870,27 @@ def _build_claude_attempts(exe: str, model: str | None) -> list[dict[str, Any]]:
     if _flag_supported(exe, "--permission-mode"):
         args_with_perm.extend(["--permission-mode", "bypassPermissions"])
 
-    return [
+    attempts = [
         {"args": args_with_perm, "stdin": True, "prompt_arg": False, "blocking_capture": True},
         {"args": base_args, "stdin": True, "prompt_arg": False, "blocking_capture": True},
         {"args": plain_args, "stdin": True, "prompt_arg": False, "blocking_capture": True},
         {"args": base_args, "stdin": False, "prompt_arg": True, "blocking_capture": True},
         {"args": plain_args, "stdin": False, "prompt_arg": True, "blocking_capture": True},
     ]
+
+    # Fallback attempts without image flags (if images provided but flags fail)
+    if image_flags:
+        no_img_base = [exe, "-p", "--output-format", "stream-json", "--verbose"]
+        no_img_plain = [exe, "-p"]
+        if model:
+            no_img_base.extend(["--model", model])
+            no_img_plain.extend(["--model", model])
+        attempts.extend([
+            {"args": no_img_base, "stdin": True, "prompt_arg": False, "blocking_capture": True},
+            {"args": no_img_plain, "stdin": True, "prompt_arg": False, "blocking_capture": True},
+        ])
+
+    return attempts
 
 
 def _parse_claude_event(ev: dict[str, Any], state: dict[str, Any]) -> list[dict[str, Any]]:
@@ -939,10 +997,11 @@ async def run_codex_cli(
     prompt: str,
     model: str | None = None,
     cwd: str | None = None,
+    image_paths: list[str] | None = None,
 ) -> AsyncGenerator[dict[str, Any], None]:
     exe = cli_path("codex-cli") or "codex"
     normalized_model = normalize_cli_model("codex-cli", model)
-    attempts = _codex_attempts(exe, normalized_model, cwd)
+    attempts = _codex_attempts(exe, normalized_model, cwd, image_paths=image_paths)
     last_events: list[dict[str, Any]] = []
 
     for index, attempt in enumerate(attempts):
@@ -989,11 +1048,17 @@ def _codex_final_events(events: list[dict[str, Any]], exe: str) -> list[dict[str
     return events
 
 
-def _codex_attempts(exe: str, model: str, cwd: str | None) -> list[dict[str, Any]]:
+def _codex_attempts(
+    exe: str,
+    model: str,
+    cwd: str | None,
+    *,
+    image_paths: list[str] | None = None,
+) -> list[dict[str, Any]]:
     disable_plugins = os.getenv("KODO_CODEX_DISABLE_PLUGINS", "").strip() == "1"
     output_path = _codex_output_path()
     attempts = [{
-        "args": _codex_args(exe, model, cwd, output_path=output_path, disable_plugins=disable_plugins),
+        "args": _codex_args(exe, model, cwd, output_path=output_path, disable_plugins=disable_plugins, image_paths=image_paths),
         "output_path": output_path,
     }]
 
@@ -1004,39 +1069,53 @@ def _codex_attempts(exe: str, model: str, cwd: str | None) -> list[dict[str, Any
         if candidate != exe:
             output_path = _codex_output_path()
             attempts.append({
-                "args": _codex_args(candidate, CLI_DEFAULT_MODEL, cwd, output_path=output_path, disable_plugins=disable_plugins),
+                "args": _codex_args(candidate, CLI_DEFAULT_MODEL, cwd, output_path=output_path, disable_plugins=disable_plugins, image_paths=image_paths),
                 "output_path": output_path,
             })
             break
 
     if model != CLI_DEFAULT_MODEL:
         output_path = _codex_output_path()
-        default_args = _codex_args(attempts[-1]["args"][0], CLI_DEFAULT_MODEL, cwd, output_path=output_path, disable_plugins=disable_plugins)
+        default_args = _codex_args(
+            attempts[-1]["args"][0],
+            CLI_DEFAULT_MODEL,
+            cwd,
+            output_path=output_path,
+            disable_plugins=disable_plugins,
+            image_paths=image_paths,
+        )
         if default_args != attempts[-1]["args"]:
             attempts.append({"args": default_args, "output_path": output_path})
 
     if not disable_plugins:
         recovery_exe = attempts[-1]["args"][0]
         output_path = _codex_output_path()
-        recovery_args = _codex_args(recovery_exe, CLI_DEFAULT_MODEL, cwd, output_path=output_path, disable_plugins=True)
+        recovery_args = _codex_args(
+            recovery_exe,
+            CLI_DEFAULT_MODEL,
+            cwd,
+            output_path=output_path,
+            disable_plugins=True,
+            image_paths=image_paths,
+        )
         if recovery_args != attempts[-1]["args"]:
             attempts.append({"args": recovery_args, "output_path": output_path})
 
     if sys.platform == "win32":
-        shell_args = _codex_args(exe, CLI_DEFAULT_MODEL, cwd, output_path=_codex_output_path(), disable_plugins=disable_plugins)
+        shell_args = _codex_args(exe, CLI_DEFAULT_MODEL, cwd, output_path=_codex_output_path(), disable_plugins=disable_plugins, image_paths=image_paths)
         attempts.append({
             "args": shell_args,
             "output_path": _codex_arg_value(shell_args, "--output-last-message"),
             "shell_pipe": True,
         })
         if not disable_plugins:
-            shell_args = _codex_args(exe, CLI_DEFAULT_MODEL, cwd, output_path=_codex_output_path(), disable_plugins=True)
+            shell_args = _codex_args(exe, CLI_DEFAULT_MODEL, cwd, output_path=_codex_output_path(), disable_plugins=True, image_paths=image_paths)
             attempts.append({
                 "args": shell_args,
                 "output_path": _codex_arg_value(shell_args, "--output-last-message"),
                 "shell_pipe": True,
             })
-        console_args = _codex_args(exe, CLI_DEFAULT_MODEL, cwd, output_path=_codex_output_path(), disable_plugins=disable_plugins)
+        console_args = _codex_args(exe, CLI_DEFAULT_MODEL, cwd, output_path=_codex_output_path(), disable_plugins=disable_plugins, image_paths=image_paths)
         attempts.append({
             "args": console_args,
             "output_path": _codex_arg_value(console_args, "--output-last-message"),
@@ -1067,6 +1146,7 @@ def _codex_args(
     *,
     output_path: str,
     disable_plugins: bool,
+    image_paths: list[str] | None = None,
 ) -> list[str]:
     args = [
         exe,
@@ -1085,6 +1165,8 @@ def _codex_args(
         args.extend(["-C", cwd])
     if model and model != CLI_DEFAULT_MODEL:
         args.extend(["--model", model])
+    for image_path in image_paths or []:
+        args.extend(["--image", image_path])
     return args
 
 
@@ -1331,6 +1413,7 @@ async def run_gemini_cli(
     prompt: str,
     model: str | None = None,
     cwd: str | None = None,
+    image_paths: list[str] | None = None,
 ) -> AsyncGenerator[dict[str, Any], None]:
     exe = cli_path("gemini-cli") or "gemini"
     normalized_model = _normalize_provider_model("gemini-cli", model)
@@ -1344,29 +1427,50 @@ async def run_gemini_cli(
 
     attempts: list[dict[str, Any]] = []
     for model_name in model_sequence:
-        attempts.extend(_build_gemini_attempts(exe, model_name))
+        attempts.extend(_build_gemini_attempts(exe, model_name, image_paths=image_paths))
 
     async for event in _run_cli_attempts(prompt, cwd, attempts, lambda ev, _state: _parse_gemini_event(ev)):
         yield event
 
 
-def _build_gemini_attempts(exe: str, model: str | None) -> list[dict[str, Any]]:
-    args_stream = [exe, "--output-format", "stream-json", "--skip-trust", "--yolo"]
-    args_json = [exe, "--output-format", "json", "--skip-trust", "--yolo"]
-    args_plain = [exe]
+def _build_gemini_attempts(exe: str, model: str | None, image_paths: list[str] | None = None) -> list[dict[str, Any]]:
+    # Gemini CLI supports --image <path> for vision input
+    image_flags: list[str] = []
+    for img in (image_paths or []):
+        image_flags.extend(["--image", img])
+
+    args_stream = [exe, *image_flags, "--output-format", "stream-json", "--skip-trust", "--yolo"]
+    args_json = [exe, *image_flags, "--output-format", "json", "--skip-trust", "--yolo"]
+    args_plain = [exe, *image_flags]
 
     if model:
         args_stream.extend(["--model", model])
         args_json.extend(["--model", model])
         args_plain.extend(["--model", model])
 
-    return [
+    attempts = [
         {"args": [*args_stream, "-p"], "stdin": False, "prompt_arg": True, "blocking_capture": True},
         {"args": [*args_json, "-p"], "stdin": False, "prompt_arg": True, "blocking_capture": True},
         {"args": [*args_plain, "-p"], "stdin": False, "prompt_arg": True, "blocking_capture": True},
         {"args": args_stream, "stdin": True, "prompt_arg": False, "blocking_capture": True},
         {"args": args_json, "stdin": True, "prompt_arg": False, "blocking_capture": True},
     ]
+
+    # Fallback attempts without image flags (if --image not supported)
+    if image_flags:
+        fb_stream = [exe, "--output-format", "stream-json", "--skip-trust", "--yolo"]
+        fb_json = [exe, "--output-format", "json", "--skip-trust", "--yolo"]
+        fb_plain = [exe]
+        if model:
+            fb_stream.extend(["--model", model])
+            fb_json.extend(["--model", model])
+            fb_plain.extend(["--model", model])
+        attempts.extend([
+            {"args": [*fb_stream, "-p"], "stdin": False, "prompt_arg": True, "blocking_capture": True},
+            {"args": [*fb_json, "-p"], "stdin": False, "prompt_arg": True, "blocking_capture": True},
+        ])
+
+    return attempts
 
 
 def _parse_gemini_event(ev: dict[str, Any]) -> list[dict[str, Any]]:
@@ -1551,15 +1655,16 @@ async def run_cli_provider(
     prompt: str,
     model: str | None = None,
     cwd: str | None = None,
+    image_paths: list[str] | None = None,
 ) -> AsyncGenerator[dict[str, Any], None]:
     if provider_id == "claude-cli":
-        async for ev in run_claude_cli(prompt, model=model, cwd=cwd):
+        async for ev in run_claude_cli(prompt, model=model, cwd=cwd, image_paths=image_paths):
             yield ev
     elif provider_id == "codex-cli":
-        async for ev in run_codex_cli(prompt, model=model, cwd=cwd):
+        async for ev in run_codex_cli(prompt, model=model, cwd=cwd, image_paths=image_paths):
             yield ev
     elif provider_id == "gemini-cli":
-        async for ev in run_gemini_cli(prompt, model=model, cwd=cwd):
+        async for ev in run_gemini_cli(prompt, model=model, cwd=cwd, image_paths=image_paths):
             yield ev
     elif provider_id == "copilot-cli":
         async for ev in run_copilot_cli(prompt, model=model, cwd=cwd):

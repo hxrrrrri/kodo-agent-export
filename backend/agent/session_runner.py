@@ -19,6 +19,19 @@ from privacy import feature_enabled
 logger = logging.getLogger(__name__)
 
 
+# Module-level set keeps fire-and-forget tasks alive until they complete.
+# Without this, asyncio.create_task() return values can be garbage-collected
+# mid-flight, cancelling the task or swallowing its exceptions.
+_BACKGROUND_TASKS: set[asyncio.Task] = set()
+
+
+def _spawn_background(coro) -> asyncio.Task:
+    task = asyncio.create_task(coro)
+    _BACKGROUND_TASKS.add(task)
+    task.add_done_callback(_BACKGROUND_TASKS.discard)
+    return task
+
+
 @dataclass
 class SessionResult:
     session_id: str
@@ -298,6 +311,7 @@ class SessionRunner:
         model_override: str | None = None,
         artifact_mode: bool = False,
         disable_tools: bool = False,
+        disable_design_system: bool = False,
         max_tokens: int | None = None,
     ) -> AsyncGenerator[dict[str, Any], None]:
         assistant_parts: list[str] = []
@@ -324,6 +338,7 @@ class SessionRunner:
                 "model_override": model_override,
                 "artifact_mode": bool(artifact_mode),
                 "disable_tools": bool(disable_tools),
+                "disable_design_system": bool(disable_design_system),
             }
             if max_tokens is not None:
                 agent_kwargs["max_tokens"] = max_tokens
@@ -473,7 +488,7 @@ class SessionRunner:
             and len(updated_history) >= 4
             and _title_is_raw_default(current_title, default_title)
         ):
-            asyncio.create_task(_apply_auto_title(session_id, updated_history, current_title))
+            _spawn_background(_apply_auto_title(session_id, updated_history, current_title))
 
         self._last_result = SessionResult(
             session_id=session_id,
@@ -497,6 +512,7 @@ class SessionRunner:
         model_override: str | None = None,
         artifact_mode: bool = False,
         disable_tools: bool = False,
+        disable_design_system: bool = False,
         max_tokens: int | None = None,
     ) -> SessionResult:
         stream_kwargs: dict[str, Any] = {
@@ -508,6 +524,7 @@ class SessionRunner:
             "model_override": model_override,
             "artifact_mode": bool(artifact_mode),
             "disable_tools": bool(disable_tools),
+            "disable_design_system": bool(disable_design_system),
         }
         if max_tokens is not None:
             stream_kwargs["max_tokens"] = max_tokens

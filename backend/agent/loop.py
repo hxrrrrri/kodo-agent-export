@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
 import os
 import re
+import tempfile
 import time
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, AsyncGenerator
 
 from anthropic import AsyncAnthropic
@@ -14,7 +17,14 @@ from openai import AsyncOpenAI
 from agent.cli_runner import CLI_PROVIDER_IDS, normalize_cli_model, run_cli_provider
 from agent.modes import get_mode, normalize_mode
 from agent.permissions import get_permission_checker
-from agent.prompt_builder import build_system_prompt
+from agent.prompt_builder import (
+    build_cli_skill_injection,
+    build_cli_tool_catalog,
+    build_design_skill_injection,
+    build_kodo_design_block,
+    build_system_prompt,
+    is_design_window_request,
+)
 from artifacts.protocol_prompt import build_artifact_system_block
 from caveman import get_default_mode as get_default_caveman_mode
 from caveman import normalize_mode as normalize_caveman_mode
@@ -696,6 +706,19 @@ def _apply_anthropic_cache_controls(messages: list[dict[str, Any]]) -> list[dict
     return marked
 
 
+def _media_type_to_ext(media_type: str) -> str:
+    mapping = {
+        "image/png": ".png",
+        "image/jpeg": ".jpg",
+        "image/jpg": ".jpg",
+        "image/gif": ".gif",
+        "image/webp": ".webp",
+        "image/bmp": ".bmp",
+        "image/tiff": ".tiff",
+    }
+    return mapping.get(str(media_type or "").lower().split(";")[0].strip(), ".png")
+
+
 class AgentLoop:
     def __init__(
         self,
@@ -705,6 +728,7 @@ class AgentLoop:
         model_override: str | None = None,
         artifact_mode: bool = False,
         disable_tools: bool = False,
+        disable_design_system: bool = False,
         max_tokens: int | None = None,
     ):
         self.session_id = session_id
@@ -713,6 +737,7 @@ class AgentLoop:
         self.model_override = _normalize_model_name(model_override) or None
         self.artifact_mode = bool(artifact_mode)
         self.disable_tools = bool(disable_tools)
+        self.disable_design_system = bool(disable_design_system)
         self.max_tokens = max(512, min(int(max_tokens or MAX_TOKENS), 65536))
 
         self.router_mode = os.getenv("ROUTER_MODE", "fixed").strip().lower()
@@ -790,7 +815,7 @@ class AgentLoop:
         # Last fallback: try environment resolution one more time.
         self._apply_runtime_config(_resolve_provider_config(self.model_override))
 
-    async def _build_system_prompt(self) -> str:
+    async def _build_system_prompt(self, user_text: str = "") -> str:
         caveman_mode: str | None = None
         # Skip caveman injection for tool-free sessions (e.g. Design Studio) so
         # the model never responds in caveman style instead of generating HTML.
@@ -802,12 +827,38 @@ class AgentLoop:
                 configured_default = get_default_caveman_mode()
                 if configured_default != "off":
                     caveman_mode = configured_default
-        return await build_system_prompt(
+        base = await build_system_prompt(
             project_dir=self.project_dir,
             mode=self.mode,
             caveman_mode=caveman_mode,
             artifact_mode=self.artifact_mode,
+            provider=self.provider or None,
         )
+
+        # When the request is a design window build, append the Kodo Design
+        # supremacy prompt + design skill content so API providers get the same
+        # superior design guidance that CLIs and the Design Studio receive.
+        design_mode = (
+            self.artifact_mode
+            and not self.disable_design_system
+            and bool(user_text)
+            and is_design_window_request(user_text)
+        )
+        if design_mode:
+            kodo_design = build_kodo_design_block()
+            design_skills = build_design_skill_injection(user_text, self.project_dir)
+            extras: list[str] = []
+            if kodo_design.strip():
+                extras.append(
+                    "## KODO DESIGN SYSTEM (active for this request)\n\n"
+                    "Follow this design playbook EXACTLY for the visual build:\n\n" + kodo_design
+                )
+            if design_skills.strip():
+                extras.append(design_skills)
+            if extras:
+                base = base + "\n\n" + "\n\n".join(extras)
+
+        return base
 
     def _max_tokens_for_provider(self, provider: str | None = None) -> int:
         resolved_provider = (provider or self.provider or "").strip().lower()
@@ -875,15 +926,75 @@ class AgentLoop:
         """Run a local CLI agent (claude, codex, gemini, gh copilot).
 
         Serializes the full conversation history into one prompt so CLIs that
-        accept stdin text receive the full context.
+        accept stdin text receive the full context. Uses the full Kodo system
+        prompt so CLIs have access to skills, memory, and project context.
         """
         user_text = self._message_text(user_message)
-        system = self._build_cli_system_prompt(user_text)
+
+        # Full Kodo system prompt — same context as API providers get.
+        # artifact_mode is enabled if explicitly set OR the request looks like one.
+        design_request = is_design_window_request(user_text)
+        effective_artifact_mode = self.artifact_mode or (
+            not self.disable_design_system and self._looks_like_artifact_request(user_text)
+        )
+        system = await build_system_prompt(
+            project_dir=self.project_dir,
+            mode=self.mode,
+            artifact_mode=effective_artifact_mode,
+            provider=self.provider or None,
+        )
+
+        # CLI-specific addendum: override/clarify behaviour for text-only CLI output
+        cli_addendum = self._build_cli_addendum(user_text, effective_artifact_mode)
+        if cli_addendum.strip():
+            system = system + "\n\n" + cli_addendum
+
+        # Extract images from the current user message and save to temp files
+        image_paths = self._extract_image_temp_files(user_message)
+
+        # Detect design-window context: an artifact request that targets a website,
+        # UI, dashboard, or other visual surface. When detected, swap in the Kodo
+        # Design supremacy prompt and force-include design-quality skills.
+        design_mode = (
+            effective_artifact_mode
+            and not self.disable_design_system
+            and design_request
+        )
+
+        # Build skill + tool context for this specific request.
+        # In design mode, use the design-tailored skill injection that auto-includes
+        # craft-color/craft-typography/craft-anti-ai-slop and surface-specific skills.
+        if design_mode:
+            skill_context = build_design_skill_injection(user_text, self.project_dir)
+        elif self.disable_design_system and design_request:
+            skill_context = ""
+        else:
+            skill_context = build_cli_skill_injection(user_text, self.project_dir, max_skills=6)
+        tool_catalog = build_cli_tool_catalog()
+
+        # Compose the full instructions block
+        instruction_parts: list[str] = []
+        if system.strip():
+            instruction_parts.append(system)
+        if design_mode:
+            kodo_design = build_kodo_design_block()
+            if kodo_design.strip():
+                instruction_parts.append(
+                    "## KODO DESIGN SYSTEM (active for this request)\n\n"
+                    "Follow this design playbook EXACTLY. It supersedes the generic artifact protocol "
+                    "for any visual/UI/website build:\n\n" + kodo_design
+                )
+        if tool_catalog.strip():
+            instruction_parts.append(tool_catalog)
+        if skill_context.strip():
+            instruction_parts.append(skill_context)
+
+        full_instructions = "\n\n".join(p for p in instruction_parts if p.strip())
 
         # Flatten history + user message into a single text prompt
         parts: list[str] = []
-        if system.strip():
-            parts.append(f"<kodo_instructions>\n{system}\n</kodo_instructions>")
+        if full_instructions.strip():
+            parts.append(f"<kodo_instructions>\n{full_instructions}\n</kodo_instructions>")
 
         for msg in history:
             role = str(msg.get("role", "")).lower()
@@ -896,26 +1007,41 @@ class AgentLoop:
         # Current user message
         if user_text:
             parts.append(f"Latest user request:\n{user_text}")
+        if image_paths:
+            count = len(image_paths)
+            parts.append(
+                f"[{count} image{'s' if count > 1 else ''} attached for the CLI provider. "
+                "Analyse and respond to the image content as part of the user request.]"
+            )
 
         combined_prompt = "\n\n".join(parts)
         usage_payload: dict[str, Any] | None = None
         output_tokens = 0
         saw_error = False
 
-        async for event in run_cli_provider(
-            self.provider,
-            combined_prompt,
-            model=self.model or None,
-            cwd=self.project_dir,
-        ):
-            if event.get("type") == "usage" and isinstance(event.get("usage"), dict):
-                usage_payload = dict(event["usage"])
-                continue
-            if event.get("type") == "text":
-                output_tokens += max(1, len(str(event.get("content", ""))) // 4)
-            if event.get("type") == "error":
-                saw_error = True
-            yield event
+        try:
+            async for event in run_cli_provider(
+                self.provider,
+                combined_prompt,
+                model=self.model or None,
+                cwd=self.project_dir,
+                image_paths=image_paths or None,
+            ):
+                if event.get("type") == "usage" and isinstance(event.get("usage"), dict):
+                    usage_payload = dict(event["usage"])
+                    continue
+                if event.get("type") == "text":
+                    output_tokens += max(1, len(str(event.get("content", ""))) // 4)
+                if event.get("type") == "error":
+                    saw_error = True
+                yield event
+        finally:
+            # Clean up temp image files regardless of success/error
+            for img_path in image_paths:
+                try:
+                    Path(img_path).unlink(missing_ok=True)
+                except Exception:
+                    pass
 
         if saw_error:
             return
@@ -930,23 +1056,52 @@ class AgentLoop:
         usage_payload["model"] = self.model or "default"
         yield {"type": "done", "usage": usage_payload}
 
-    def _build_cli_system_prompt(self, user_text: str) -> str:
-        is_artifact_request = self.artifact_mode or self._looks_like_artifact_request(user_text)
-        sections = [
-            "You are running inside Kodo chat as a local CLI provider.",
-            "Answer the latest user request directly. Do not ignore it and do not return a generic greeting unless the latest request is only a greeting.",
+    @staticmethod
+    def _extract_image_temp_files(content: str | list[dict[str, Any]] | Any) -> list[str]:
+        """Save any base64 image blocks from content to temp files and return their paths."""
+        if not isinstance(content, list):
+            return []
+
+        saved: list[str] = []
+        for block in content:
+            if not isinstance(block, dict):
+                continue
+            if str(block.get("type", "")).lower() != "image":
+                continue
+            source = block.get("source", {})
+            if not isinstance(source, dict):
+                continue
+            source_type = str(source.get("type", "")).lower()
+            if source_type != "base64":
+                continue
+            data = source.get("data", "")
+            if not isinstance(data, str) or not data.strip():
+                continue
+            media_type = str(source.get("media_type") or source.get("mime_type") or "image/png")
+            ext = _media_type_to_ext(media_type)
+            try:
+                raw_bytes = base64.b64decode(data.strip())
+                fd, tmp_path = tempfile.mkstemp(prefix="kodo-img-", suffix=ext)
+                with os.fdopen(fd, "wb") as fh:
+                    fh.write(raw_bytes)
+                saved.append(tmp_path)
+            except Exception:
+                pass
+        return saved
+
+    def _build_cli_addendum(self, user_text: str, is_artifact_request: bool) -> str:
+        """CLI-specific instructions appended after the full system prompt."""
+        sections: list[str] = [
+            "IMPORTANT (CLI context): Answer the latest user request directly. "
+            "Do not ignore it and do not return a generic greeting unless the latest request is only a greeting. "
             "Use prior conversation only as context; the latest user request is authoritative.",
-            get_mode(self.mode).prompt,
         ]
         if is_artifact_request and feature_enabled("ARTIFACTS_V2", default="1"):
-            sections.extend([
-                build_artifact_system_block(True),
-                (
-                    "For this request, emit the finished Kodo artifact fence directly in your response. "
-                    "Do not inspect files first, do not write the artifact to disk, do not describe a plan, "
-                    "and do not answer with a greeting. The chat UI renders artifact fences live."
-                ),
-            ])
+            sections.append(
+                "For this request, emit the finished Kodo artifact fence directly in your response. "
+                "Do not inspect files first, do not write the artifact to disk, do not describe a plan, "
+                "and do not answer with a greeting. The chat UI renders artifact fences live."
+            )
             if str(getattr(self, "provider", "") or "").strip().lower() in CLI_PROVIDER_IDS:
                 sections.append(
                     "Local CLI artifact output rules: for visual or animation builds prefer "
@@ -955,7 +1110,7 @@ class AgentLoop:
                     "explicitly asks for React/JSX. Do not add Markdown narration around the fence. "
                     "Always close the fence with a bare ``` on its own line."
                 )
-        return "\n\n".join(section for section in sections if section.strip())
+        return "\n\n".join(s for s in sections if s.strip())
 
     @staticmethod
     def _looks_like_artifact_request(text: str) -> bool:
@@ -1148,7 +1303,11 @@ class AgentLoop:
         return f"Unknown runtime error (provider={provider}, model={model})."
 
     async def _create_openai_stream(self, messages: list[dict[str, Any]]):
-        assert self.client is not None
+        if self.client is None:
+            raise RuntimeError(
+                f"OpenAI-compatible client not initialised for provider={self.provider!r}. "
+                "Check API key / base URL configuration."
+            )
 
         kwargs: dict[str, Any] = {
             "model": self.model,
@@ -1181,7 +1340,7 @@ class AgentLoop:
                 yield event
             return
 
-        system = await self._build_system_prompt()
+        system = await self._build_system_prompt(self._message_text(user_message))
         messages: list[dict[str, Any]] = [{"role": "system", "content": system}]
         messages.extend(_build_openai_messages(history))
         messages.append({"role": "user", "content": _to_openai_content(user_message)})
@@ -1415,7 +1574,7 @@ class AgentLoop:
         user_message: str | list[dict[str, Any]],
         history: list[dict[str, Any]],
     ) -> AsyncGenerator[dict[str, Any], None]:
-        system = await self._build_system_prompt()
+        system = await self._build_system_prompt(self._message_text(user_message))
         messages = _build_anthropic_messages(history)
         messages.append({"role": "user", "content": _to_anthropic_content(user_message)})
 
@@ -1573,7 +1732,7 @@ class AgentLoop:
         history: list[dict[str, Any]],
         model: str,
     ) -> AsyncGenerator[dict[str, Any], None]:
-        system = await self._build_system_prompt()
+        system = await self._build_system_prompt(self._message_text(user_message))
         messages: list[dict[str, Any]] = _truncate_history(history)
         messages.append({"role": "user", "content": user_message})
 

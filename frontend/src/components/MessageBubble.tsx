@@ -447,7 +447,7 @@ function PreviewPanel({ previews }: { previews: PreviewItem[] }) {
           display: 'block',
           background: 'transparent',
         }}
-        sandbox="allow-scripts allow-same-origin allow-forms allow-popups"
+        sandbox="allow-scripts allow-forms allow-popups"
         title={`Preview: ${preview.url}`}
       />
     </div>
@@ -699,7 +699,7 @@ export function MessageBubble({
         style={{
           display: 'flex',
           justifyContent: 'flex-end',
-          marginBottom: 20,
+          marginBottom: 24,
         }}
       >
         <div className="user-message-actions" role="group" aria-label="User message actions">
@@ -734,16 +734,17 @@ export function MessageBubble({
           </button>
         </div>
         <div className="user-message-body" style={{
-          maxWidth: '75%',
+          maxWidth: '78%',
           background: 'var(--bg-3)',
           border: '1px solid var(--border-bright)',
-          borderRadius: 'var(--radius)',
-          padding: '10px 14px',
+          borderRadius: '18px 18px 4px 18px',
+          padding: '11px 16px',
           fontSize: 15,
           color: 'var(--text-0)',
-          lineHeight: 1.65,
+          lineHeight: 1.7,
           whiteSpace: 'pre-wrap',
           wordBreak: 'break-word',
+          boxShadow: '0 2px 12px rgba(0,0,0,0.13)',
         }}>
           {imageSrc && (
             <div style={{ marginBottom: message.content ? 8 : 0 }}>
@@ -767,24 +768,25 @@ export function MessageBubble({
   }
 
   return (
-    <div className="fade-in message-enter" style={{ marginBottom: 24 }}>
+    <div className="fade-in message-enter" style={{ marginBottom: 28 }}>
       {/* Agent label */}
       <div style={{
-        fontSize: 10,
+        fontSize: 11,
         color: 'var(--accent)',
-        letterSpacing: '0.15em',
+        letterSpacing: '0.12em',
         fontWeight: 700,
         fontFamily: 'var(--font-kodo-brand)',
-        marginBottom: 8,
+        marginBottom: 10,
         display: 'flex',
         alignItems: 'center',
-        gap: 6,
+        gap: 7,
       }}>
         <span style={{
-          width: 6, height: 6,
+          width: 7, height: 7,
           borderRadius: '50%',
           background: 'var(--accent)',
           display: 'inline-block',
+          boxShadow: message.isStreaming ? '0 0 6px var(--accent)' : 'none',
           animation: message.isStreaming ? 'pulse-accent 1.5s ease-in-out infinite' : 'none',
         }} />
         KODO

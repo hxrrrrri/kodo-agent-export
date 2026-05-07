@@ -270,6 +270,7 @@ class ChatRequest(BaseModel):
     image_attachment: dict[str, str] | None = Field(default=None)
     artifact_mode: bool = Field(default=False)
     disable_tools: bool = Field(default=False)
+    disable_design_system: bool = Field(default=False)
     max_tokens: int | None = Field(default=None, ge=512, le=65536)
     session_id: str | None = Field(default=None, max_length=128)
     project_dir: str | None = Field(default=None, max_length=1024)
@@ -1071,6 +1072,7 @@ async def send_message(req: ChatRequest, request: Request):
                 "model_override": stored_model_override or None,
                 "artifact_mode": bool(req.artifact_mode),
                 "disable_tools": bool(req.disable_tools),
+                "disable_design_system": bool(req.disable_design_system),
             }
             if req.max_tokens is not None:
                 runner_kwargs["max_tokens"] = req.max_tokens

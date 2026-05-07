@@ -460,6 +460,9 @@ export function ChatWindow({ editorOpen, onToggleEditor }: ChatWindowProps) {
   const composerRef = useRef<HTMLDivElement>(null)
   const bottomRef = useRef<HTMLDivElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
+  const undoStackRef = useRef<string[]>([''])
+  const undoIndexRef = useRef<number>(0)
+  const lastUndoPushRef = useRef<number>(0)
   const paletteRef = useRef<HTMLDivElement>(null)
   const paletteInputRef = useRef<HTMLInputElement>(null)
   const imageInputRef = useRef<HTMLInputElement>(null)
@@ -1980,6 +1983,44 @@ export function ChatWindow({ editorOpen, onToggleEditor }: ChatWindowProps) {
       }
     }
 
+    // Undo: Ctrl+Z / Cmd+Z
+    if ((e.ctrlKey || e.metaKey) && e.key === 'z' && !e.shiftKey) {
+      e.preventDefault()
+      const newIndex = Math.max(0, undoIndexRef.current - 1)
+      if (newIndex !== undoIndexRef.current) {
+        undoIndexRef.current = newIndex
+        const restored = undoStackRef.current[newIndex] ?? ''
+        setInput(restored)
+        requestAnimationFrame(() => {
+          if (textareaRef.current) {
+            textareaRef.current.selectionStart = textareaRef.current.selectionEnd = restored.length
+            textareaRef.current.style.height = 'auto'
+            textareaRef.current.style.height = Math.min(textareaRef.current.scrollHeight, 200) + 'px'
+          }
+        })
+      }
+      return
+    }
+
+    // Redo: Ctrl+Y / Cmd+Y / Ctrl+Shift+Z / Cmd+Shift+Z
+    if ((e.ctrlKey || e.metaKey) && (e.key === 'y' || (e.key === 'z' && e.shiftKey))) {
+      e.preventDefault()
+      const newIndex = Math.min(undoStackRef.current.length - 1, undoIndexRef.current + 1)
+      if (newIndex !== undoIndexRef.current) {
+        undoIndexRef.current = newIndex
+        const restored = undoStackRef.current[newIndex] ?? ''
+        setInput(restored)
+        requestAnimationFrame(() => {
+          if (textareaRef.current) {
+            textareaRef.current.selectionStart = textareaRef.current.selectionEnd = restored.length
+            textareaRef.current.style.height = 'auto'
+            textareaRef.current.style.height = Math.min(textareaRef.current.scrollHeight, 200) + 'px'
+          }
+        })
+      }
+      return
+    }
+
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault()
       if (observerMode) return
@@ -2020,9 +2061,32 @@ export function ChatWindow({ editorOpen, onToggleEditor }: ChatWindowProps) {
   }
 
   const handleTextareaChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
-    setInput(e.target.value)
+    const newVal = e.target.value
+    const now = Date.now()
+    const addedChar = newVal.length === input.length + 1 ? newVal[newVal.length - 1] : null
+    const isWordBoundary = addedChar === ' ' || addedChar === '\n'
+    const isNewBurst = now - lastUndoPushRef.current > 500
+
+    if (isWordBoundary || isNewBurst) {
+      const stack = undoStackRef.current.slice(0, undoIndexRef.current + 1)
+      stack.push(newVal)
+      if (stack.length > 200) stack.splice(0, stack.length - 200)
+      undoStackRef.current = stack
+      undoIndexRef.current = stack.length - 1
+      lastUndoPushRef.current = now
+    } else {
+      undoStackRef.current[undoIndexRef.current] = newVal
+    }
+
+    if (!newVal) {
+      undoStackRef.current = ['']
+      undoIndexRef.current = 0
+      lastUndoPushRef.current = 0
+    }
+
+    setInput(newVal)
     e.target.style.height = 'auto'
-    e.target.style.height = Math.min(e.target.scrollHeight, 140) + 'px'
+    e.target.style.height = Math.min(e.target.scrollHeight, 200) + 'px'
   }
 
   const processPickedFiles = useCallback(async (files: File[]) => {
@@ -3887,20 +3951,20 @@ export function ChatWindow({ editorOpen, onToggleEditor }: ChatWindowProps) {
             alignItems: 'center',
             background: 'var(--bg-2)',
             border: `1px solid ${conferenceMode ? 'var(--accent)' : 'var(--border)'}`,
-            borderRadius: 14,
-            padding: '10px 8px 10px 14px',
-            transition: 'border-color 0.15s, box-shadow 0.15s',
+            borderRadius: 18,
+            padding: '10px 10px 10px 14px',
+            transition: 'border-color 0.2s, box-shadow 0.2s',
             cursor: 'text',
-            minHeight: 52,
-            boxShadow: '0 4px 20px rgba(0,0,0,0.18)',
+            minHeight: 54,
+            boxShadow: '0 4px 24px rgba(0,0,0,0.22)',
           }}
           onFocusCapture={e => {
             ;(e.currentTarget as HTMLElement).style.borderColor = 'var(--accent)'
-            ;(e.currentTarget as HTMLElement).style.boxShadow = '0 4px 24px rgba(0,0,0,0.28), 0 0 0 1px var(--accent-glow)'
+            ;(e.currentTarget as HTMLElement).style.boxShadow = '0 6px 32px rgba(0,0,0,0.32), 0 0 0 1.5px var(--accent-glow)'
           }}
           onBlurCapture={e => {
             ;(e.currentTarget as HTMLElement).style.borderColor = conferenceMode ? 'var(--accent)' : 'var(--border)'
-            ;(e.currentTarget as HTMLElement).style.boxShadow = '0 4px 20px rgba(0,0,0,0.18)'
+            ;(e.currentTarget as HTMLElement).style.boxShadow = '0 4px 24px rgba(0,0,0,0.22)'
           }}
           onDragOver={(event) => {
             if (event.dataTransfer.types.includes('application/x-kodo-capsule')) {
@@ -4024,8 +4088,8 @@ export function ChatWindow({ editorOpen, onToggleEditor }: ChatWindowProps) {
               fontSize: 14,
               fontFamily: 'var(--font-mono)',
               resize: 'none',
-              lineHeight: 1.6,
-              maxHeight: 140,
+              lineHeight: 1.65,
+              maxHeight: 200,
               overflowY: 'auto',
               padding: 0,
               margin: 0,
@@ -4061,11 +4125,11 @@ export function ChatWindow({ editorOpen, onToggleEditor }: ChatWindowProps) {
                     ? '#0a0a0b'
                     : 'var(--text-2)',
               width: 36, height: 36,
-              borderRadius: 'var(--radius)',
+              borderRadius: 10,
               cursor: (observerMode || attachmentUploading || (!isLoading && !input.trim() && totalAttachmentCount === 0)) ? 'not-allowed' : 'pointer',
               display: 'flex', alignItems: 'center', justifyContent: 'center',
               flexShrink: 0,
-              transition: 'all 0.15s',
+              transition: 'all 0.18s',
               opacity: observerMode ? 0.65 : 1,
             }}
           >

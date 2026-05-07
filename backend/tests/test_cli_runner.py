@@ -117,6 +117,19 @@ def test_requires_shell_invocation_for_windows_cmd(monkeypatch):
     assert not cli_runner._requires_shell_invocation(r"C:\tools\codex.exe")
 
 
+def test_codex_args_include_image_attachments():
+    args = cli_runner._codex_args(
+        "codex",
+        "default",
+        None,
+        output_path="out.txt",
+        disable_plugins=False,
+        image_paths=["ref-a.png", "ref-b.jpg"],
+    )
+
+    assert args[-4:] == ["--image", "ref-a.png", "--image", "ref-b.jpg"]
+
+
 def test_build_gemini_attempts_starts_with_headless_prompt_mode():
     attempts = cli_runner._build_gemini_attempts("gemini", "gemini-2.5-flash")
 

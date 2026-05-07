@@ -853,7 +853,7 @@ export default function VisualWebEditorArtifact({ html: initialHtml = '', onSour
             <iframe
               ref={iframeRef}
               srcDoc={srcdoc}
-              sandbox="allow-scripts allow-same-origin allow-forms allow-modals"
+              sandbox="allow-scripts allow-forms allow-modals"
               style={{ width: '100%', height: '100%', border: 'none', display: 'block', background: '#fff' }}
               title="Visual Editor Canvas"
             />
