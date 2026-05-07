@@ -36,6 +36,7 @@ type StreamEventHandlers = {
 
 type SendMessageOptions = {
   silent?: boolean
+  maxTokens?: number
 }
 
 const FALLBACK_MODE_KEYS = ['execute', 'plan', 'debug', 'review', 'coordinator', 'bughunter', 'ultraplan']
@@ -1233,6 +1234,9 @@ export function useChat() {
           }
           if (imageAttachment && (imageAttachment.data || imageAttachment.url)) {
             basePayload.image_attachment = imageAttachment
+          }
+          if (typeof options?.maxTokens === 'number' && Number.isFinite(options.maxTokens) && options.maxTokens >= 512) {
+            basePayload.max_tokens = Math.round(options.maxTokens)
           }
           return basePayload
         })()),

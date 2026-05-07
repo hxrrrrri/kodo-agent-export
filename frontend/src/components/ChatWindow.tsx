@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, KeyboardEvent, MouseEvent as ReactMouseEvent, DragEvent as ReactDragEvent } from 'react'
-import { Send, Square, FolderOpen, Zap, ImagePlus, X, Search, Terminal as TerminalIcon, Paperclip, CircleAlert, BookOpen, Mic, Palette, Check, ChevronDown, ChevronUp, Download, GitCompare } from 'lucide-react'
+import { Send, Square, FolderOpen, Zap, ImagePlus, X, Search, Terminal as TerminalIcon, Paperclip, CircleAlert, BookOpen, Mic, Palette, Check, ChevronDown, ChevronUp, Download, GitCompare, Cpu } from 'lucide-react'
 import { CommandPalette, exportConversationAsMarkdown } from './CommandPalette'
 import { extractVariables, PromptVariablesModal } from './PromptVariables'
 import { SmartSuggestions } from './SmartSuggestions'
@@ -69,6 +69,15 @@ type CapsuleSummary = {
 type PromptTemplate = {
   name: string
   content: string
+}
+
+type UsagePresetKey = 'low' | 'medium' | 'high' | 'extra'
+
+type UsagePreset = {
+  key: UsagePresetKey
+  label: string
+  maxTokens: number
+  helper: string
 }
 
 type SuggestionItem = CommandDefinition & {
@@ -345,6 +354,44 @@ const TAB_COMPLETIONS: Array<[string, string]> = [
   ['optimize', 'Optimize the following code for '],
 ]
 
+const DEFAULT_USAGE_PRESETS: UsagePreset[] = [
+  { key: 'low', label: 'Low', maxTokens: 2048, helper: 'Fast + low token use' },
+  { key: 'medium', label: 'Medium', maxTokens: 4096, helper: 'Balanced default' },
+  { key: 'high', label: 'High', maxTokens: 8192, helper: 'Deeper responses' },
+  { key: 'extra', label: 'Extra', maxTokens: 16384, helper: 'Maximum depth' },
+]
+
+const USAGE_PRESETS_BY_PROVIDER: Record<string, UsagePreset[]> = {
+  'claude-cli': DEFAULT_USAGE_PRESETS,
+  'codex-cli': DEFAULT_USAGE_PRESETS,
+  'gemini-cli': DEFAULT_USAGE_PRESETS,
+  'copilot-cli': DEFAULT_USAGE_PRESETS,
+  anthropic: DEFAULT_USAGE_PRESETS,
+  openai: DEFAULT_USAGE_PRESETS,
+  gemini: DEFAULT_USAGE_PRESETS,
+  codex: DEFAULT_USAGE_PRESETS,
+  deepseek: DEFAULT_USAGE_PRESETS,
+  groq: [
+    { key: 'low', label: 'Low', maxTokens: 2048, helper: 'Fastest' },
+    { key: 'medium', label: 'Medium', maxTokens: 4096, helper: 'Balanced' },
+    { key: 'high', label: 'High', maxTokens: 8192, helper: 'Longer output' },
+  ],
+  openrouter: DEFAULT_USAGE_PRESETS,
+  'github-models': DEFAULT_USAGE_PRESETS,
+  ollama: [
+    { key: 'low', label: 'Low', maxTokens: 1024, helper: 'Lower local load' },
+    { key: 'medium', label: 'Medium', maxTokens: 2048, helper: 'Balanced local run' },
+    { key: 'high', label: 'High', maxTokens: 4096, helper: 'Higher context' },
+    { key: 'extra', label: 'Extra', maxTokens: 8192, helper: 'Max local depth' },
+  ],
+  'atomic-chat': [
+    { key: 'low', label: 'Low', maxTokens: 1024, helper: 'Light usage' },
+    { key: 'medium', label: 'Medium', maxTokens: 2048, helper: 'Balanced' },
+    { key: 'high', label: 'High', maxTokens: 4096, helper: 'Deep output' },
+  ],
+  nvidia: DEFAULT_USAGE_PRESETS,
+}
+
 function getTabSuggestion(current: string): string | null {
   const lower = current.toLowerCase()
   for (const [prefix, full] of TAB_COMPLETIONS) {
@@ -453,6 +500,12 @@ export function ChatWindow({ editorOpen, onToggleEditor }: ChatWindowProps) {
   const [terminalRunning, setTerminalRunning] = useState(false)
   const [showNotebook, setShowNotebook] = useState(false)
   const [themeMenuOpen, setThemeMenuOpen] = useState(false)
+  const [modelPickerOpen, setModelPickerOpen] = useState(false)
+  const [modelPickerProvider, setModelPickerProvider] = useState('')
+  const [modelPickerModel, setModelPickerModel] = useState('')
+  const [modelPickerUsage, setModelPickerUsage] = useState<UsagePresetKey>('medium')
+  const [modelPickerSaving, setModelPickerSaving] = useState(false)
+  const [modelPickerError, setModelPickerError] = useState('')
   const [dragOverlayVisible, setDragOverlayVisible] = useState(false)
   const [terminalCwd, setTerminalCwd] = useState('')
   const terminalCwdRef = useRef('')
@@ -467,6 +520,7 @@ export function ChatWindow({ editorOpen, onToggleEditor }: ChatWindowProps) {
   const paletteInputRef = useRef<HTMLInputElement>(null)
   const imageInputRef = useRef<HTMLInputElement>(null)
   const themeMenuRef = useRef<HTMLDivElement>(null)
+  const modelPickerRef = useRef<HTMLDivElement>(null)
   const capsulePanelRef = useRef<HTMLDivElement>(null)
   const dragDepthRef = useRef(0)
   const shouldAutoScrollRef = useRef(true)
@@ -542,6 +596,60 @@ export function ChatWindow({ editorOpen, onToggleEditor }: ChatWindowProps) {
     }
     void loadProviders()
   }, [])
+
+  const modelPickerProviders = useMemo(
+    () => conferenceProviders.map((provider) => provider.name).filter(Boolean),
+    [conferenceProviders],
+  )
+
+  const modelPickerAvailableModels = useMemo(() => {
+    if (!modelPickerProvider) return []
+    const fromCatalog = conferenceModels[modelPickerProvider] || []
+    const fallback = conferenceProviders.find((provider) => provider.name === modelPickerProvider)?.big_model || ''
+    const merged = [...fromCatalog]
+    if (fallback) {
+      merged.push(fallback)
+    }
+    return Array.from(new Set(merged.filter(Boolean)))
+  }, [conferenceModels, conferenceProviders, modelPickerProvider])
+
+  const modelPickerUsagePresets = useMemo(() => {
+    return USAGE_PRESETS_BY_PROVIDER[modelPickerProvider] || DEFAULT_USAGE_PRESETS
+  }, [modelPickerProvider])
+
+  const selectedUsagePreset = useMemo(() => {
+    return modelPickerUsagePresets.find((preset) => preset.key === modelPickerUsage)
+      || modelPickerUsagePresets[1]
+      || modelPickerUsagePresets[0]
+  }, [modelPickerUsage, modelPickerUsagePresets])
+
+  const modelButtonSummary = useMemo(() => {
+    const model = modelPickerModel || 'Auto'
+    const compactModel = model.length > 24 ? `${model.slice(0, 24)}...` : model
+    return `${compactModel} · ${selectedUsagePreset?.label || 'Medium'}`
+  }, [modelPickerModel, selectedUsagePreset])
+
+  useEffect(() => {
+    if (modelPickerProviders.length === 0) return
+    setModelPickerProvider((previous) => previous || modelPickerProviders[0])
+  }, [modelPickerProviders])
+
+  useEffect(() => {
+    if (!modelPickerProvider) return
+    if (modelPickerAvailableModels.length === 0) return
+    setModelPickerModel((previous) => (
+      modelPickerAvailableModels.includes(previous)
+        ? previous
+        : modelPickerAvailableModels[0]
+    ))
+  }, [modelPickerAvailableModels, modelPickerProvider])
+
+  useEffect(() => {
+    if (modelPickerUsagePresets.some((preset) => preset.key === modelPickerUsage)) {
+      return
+    }
+    setModelPickerUsage(modelPickerUsagePresets[0]?.key || 'medium')
+  }, [modelPickerUsage, modelPickerUsagePresets])
 
   // Draft auto-save: persist unsent input to localStorage
   useEffect(() => {
@@ -749,6 +857,8 @@ export function ChatWindow({ editorOpen, onToggleEditor }: ChatWindowProps) {
     setTerminalRunning(false)
     setActiveTool(null)
     setThemeMenuOpen(false)
+    setModelPickerOpen(false)
+    setModelPickerError('')
     setAfkRecap(null)
     dragDepthRef.current = 0
     setDragOverlayVisible(false)
@@ -811,6 +921,21 @@ export function ChatWindow({ editorOpen, onToggleEditor }: ChatWindowProps) {
     window.addEventListener('mousedown', onDocumentMouseDown)
     return () => window.removeEventListener('mousedown', onDocumentMouseDown)
   }, [themeMenuOpen])
+
+  useEffect(() => {
+    if (!modelPickerOpen) return
+
+    const onDocumentMouseDown = (event: MouseEvent) => {
+      if (!modelPickerRef.current) return
+      if (modelPickerRef.current.contains(event.target as Node)) return
+      const target = event.target as HTMLElement
+      if (target.closest('#model-picker-button')) return
+      setModelPickerOpen(false)
+    }
+
+    window.addEventListener('mousedown', onDocumentMouseDown)
+    return () => window.removeEventListener('mousedown', onDocumentMouseDown)
+  }, [modelPickerOpen])
 
   useEffect(() => {
     if (!isEditingPrompt) return
@@ -1065,8 +1190,8 @@ export function ChatWindow({ editorOpen, onToggleEditor }: ChatWindowProps) {
     if (observerMode || isLoading || attachmentUploading) return
     const text = String(content || '').trim()
     if (!text) return
-    sendMessage(text, undefined, [], getSendStreamHandlers())
-  }, [attachmentUploading, getSendStreamHandlers, isLoading, observerMode, sendMessage])
+    sendMessage(text, undefined, [], getSendStreamHandlers(), { maxTokens: selectedUsagePreset?.maxTokens })
+  }, [attachmentUploading, getSendStreamHandlers, isLoading, observerMode, selectedUsagePreset?.maxTokens, sendMessage])
 
   const CONFERENCE_COLORS: Record<string, string> = {
     openai: '#10a37f', gemini: '#4285f4', groq: '#f55036',
@@ -1443,13 +1568,13 @@ export function ChatWindow({ editorOpen, onToggleEditor }: ChatWindowProps) {
       shouldAutoScrollRef.current = true
       bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
 
-      sendMessage(finalMsg, imagePayload, attachmentBlocks, getSendStreamHandlers())
+      sendMessage(finalMsg, imagePayload, attachmentBlocks, getSendStreamHandlers(), { maxTokens: selectedUsagePreset?.maxTokens })
     } catch (error) {
       setAttachmentError(String(error))
     } finally {
       setAttachmentUploading(false)
     }
-  }, [attachmentUploading, conferenceMode, conferenceSlots, depthMode, getSendStreamHandlers, input, isLoading, observerMode, pendingFiles, pendingImage, projectDir, runConference, sendMessage, stopGeneration, uploadZipAttachment])
+  }, [attachmentUploading, conferenceMode, conferenceSlots, depthMode, getSendStreamHandlers, input, isLoading, observerMode, pendingFiles, pendingImage, projectDir, runConference, selectedUsagePreset?.maxTokens, sendMessage, stopGeneration, uploadZipAttachment])
 
   const runTerminalCommand = useCallback(async (command: string): Promise<{ cwd?: string }> => {
     const trimmed = command.trim()
@@ -2178,6 +2303,42 @@ export function ChatWindow({ editorOpen, onToggleEditor }: ChatWindowProps) {
     setTheme(nextTheme)
     setThemeMenuOpen(false)
   }
+
+  const applyModelPickerSelection = useCallback(async () => {
+    const provider = modelPickerProvider.trim()
+    const model = modelPickerModel.trim()
+    if (!provider) {
+      setModelPickerError('Choose a provider first.')
+      return
+    }
+    if (!model) {
+      setModelPickerError('Choose a model first.')
+      return
+    }
+
+    setModelPickerSaving(true)
+    setModelPickerError('')
+    try {
+      const response = await fetch('/api/providers/switch', {
+        method: 'POST',
+        headers: buildApiHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify({
+          provider,
+          model,
+          session_id: sessionId || null,
+          persist: true,
+        }),
+      })
+      if (!response.ok) {
+        throw new Error(await parseApiError(response))
+      }
+      setModelPickerOpen(false)
+    } catch (error) {
+      setModelPickerError(String(error))
+    } finally {
+      setModelPickerSaving(false)
+    }
+  }, [modelPickerModel, modelPickerProvider, sessionId])
 
   const hasFilePayload = (event: React.DragEvent<HTMLElement>) => {
     return Array.from(event.dataTransfer?.types || []).includes('Files')
@@ -3530,7 +3691,7 @@ export function ChatWindow({ editorOpen, onToggleEditor }: ChatWindowProps) {
                     onError: () => {
                       setActiveTool(null)
                     },
-                  })}
+                  }, { maxTokens: selectedUsagePreset?.maxTokens })}
                   disabled={observerMode}
                   style={{
                     background: 'var(--bg-2)',
@@ -4060,6 +4221,187 @@ export function ChatWindow({ editorOpen, onToggleEditor }: ChatWindowProps) {
             <DepthSelector value={depthMode} onChange={setDepthMode} />
           )}
 
+          {!observerMode && (
+            <div ref={modelPickerRef} style={{ position: 'relative', flexShrink: 0 }}>
+              <button
+                id="model-picker-button"
+                type="button"
+                onClick={() => setModelPickerOpen((value) => !value)}
+                title="Select provider, model, and usage profile"
+                style={{
+                  border: `1px solid ${modelPickerOpen ? 'var(--accent)' : 'var(--border)'}`,
+                  background: modelPickerOpen ? 'var(--accent-dim)' : 'var(--bg-3)',
+                  color: modelPickerOpen ? 'var(--text-0)' : 'var(--text-1)',
+                  borderRadius: 10,
+                  height: 32,
+                  padding: '0 10px',
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: 6,
+                  fontSize: 10,
+                  fontFamily: 'var(--font-mono)',
+                  cursor: 'pointer',
+                  maxWidth: 220,
+                }}
+              >
+                <Cpu size={12} />
+                <span className="truncate" style={{ maxWidth: 170 }}>
+                  {modelButtonSummary}
+                </span>
+              </button>
+
+              {modelPickerOpen && (
+                <div
+                  style={{
+                    position: 'absolute',
+                    bottom: 'calc(100% + 8px)',
+                    left: 0,
+                    width: 360,
+                    maxWidth: 'min(80vw, 360px)',
+                    border: '1px solid var(--border-bright)',
+                    borderRadius: 10,
+                    background: 'var(--bg-1)',
+                    boxShadow: '0 16px 34px rgba(0, 0, 0, 0.36)',
+                    zIndex: 45,
+                    padding: 10,
+                    display: 'grid',
+                    gap: 8,
+                  }}
+                >
+                  <div style={{ fontSize: 11, color: 'var(--text-0)', fontFamily: 'var(--font-mono)' }}>
+                    Model + Usage
+                  </div>
+
+                  <label style={{ display: 'grid', gap: 4, fontSize: 10, color: 'var(--text-2)' }}>
+                    Provider
+                    <select
+                      value={modelPickerProvider}
+                      onChange={(event) => setModelPickerProvider(event.target.value)}
+                      style={{
+                        width: '100%',
+                        background: 'var(--bg-2)',
+                        border: '1px solid var(--border)',
+                        borderRadius: 8,
+                        color: 'var(--text-0)',
+                        padding: '6px 8px',
+                        fontSize: 11,
+                        fontFamily: 'var(--font-mono)',
+                      }}
+                    >
+                      {modelPickerProviders.length === 0 && (
+                        <option value="">No providers available</option>
+                      )}
+                      {modelPickerProviders.map((provider) => (
+                        <option key={provider} value={provider}>
+                          {provider}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+
+                  <label style={{ display: 'grid', gap: 4, fontSize: 10, color: 'var(--text-2)' }}>
+                    Model
+                    <select
+                      value={modelPickerModel}
+                      onChange={(event) => setModelPickerModel(event.target.value)}
+                      style={{
+                        width: '100%',
+                        background: 'var(--bg-2)',
+                        border: '1px solid var(--border)',
+                        borderRadius: 8,
+                        color: 'var(--text-0)',
+                        padding: '6px 8px',
+                        fontSize: 11,
+                        fontFamily: 'var(--font-mono)',
+                      }}
+                    >
+                      {modelPickerAvailableModels.length === 0 && (
+                        <option value="">No models available</option>
+                      )}
+                      {modelPickerAvailableModels.map((model) => (
+                        <option key={model} value={model}>
+                          {model}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+
+                  <div style={{ display: 'grid', gap: 5 }}>
+                    <div style={{ fontSize: 10, color: 'var(--text-2)' }}>Usage profile</div>
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, minmax(0, 1fr))', gap: 5 }}>
+                      {modelPickerUsagePresets.map((preset) => {
+                        const active = modelPickerUsage === preset.key
+                        return (
+                          <button
+                            key={preset.key}
+                            type="button"
+                            onClick={() => setModelPickerUsage(preset.key)}
+                            style={{
+                              border: `1px solid ${active ? 'var(--accent)' : 'var(--border)'}`,
+                              background: active ? 'var(--accent-dim)' : 'var(--bg-2)',
+                              borderRadius: 8,
+                              color: active ? 'var(--text-0)' : 'var(--text-1)',
+                              padding: '6px 4px',
+                              cursor: 'pointer',
+                              fontSize: 10,
+                              fontFamily: 'var(--font-mono)',
+                            }}
+                          >
+                            {preset.label}
+                          </button>
+                        )
+                      })}
+                    </div>
+                    <div style={{ fontSize: 10, color: 'var(--text-2)' }}>
+                      {selectedUsagePreset?.helper} · max tokens {selectedUsagePreset?.maxTokens.toLocaleString()}
+                    </div>
+                  </div>
+
+                  {modelPickerError && (
+                    <div style={{ fontSize: 10, color: 'var(--red)' }}>{modelPickerError}</div>
+                  )}
+
+                  <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 6 }}>
+                    <button
+                      type="button"
+                      onClick={() => setModelPickerOpen(false)}
+                      style={{
+                        border: '1px solid var(--border)',
+                        background: 'var(--bg-2)',
+                        borderRadius: 8,
+                        color: 'var(--text-1)',
+                        padding: '6px 8px',
+                        cursor: 'pointer',
+                        fontSize: 10,
+                        fontFamily: 'var(--font-mono)',
+                      }}
+                    >
+                      Close
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => { void applyModelPickerSelection() }}
+                      disabled={modelPickerSaving || !modelPickerProvider || !modelPickerModel}
+                      style={{
+                        border: '1px solid var(--accent)',
+                        background: 'var(--accent-dim)',
+                        borderRadius: 8,
+                        color: 'var(--text-0)',
+                        padding: '6px 8px',
+                        cursor: modelPickerSaving ? 'not-allowed' : 'pointer',
+                        opacity: modelPickerSaving ? 0.7 : 1,
+                        fontSize: 10,
+                        fontFamily: 'var(--font-mono)',
+                      }}
+                    >
+                      {modelPickerSaving ? 'Applying...' : 'Apply'}
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
           {/* ─── Buddy companion ─── */}
           <BuddyWidget
             isLoading={isLoading}
@@ -4355,7 +4697,7 @@ export function ChatWindow({ editorOpen, onToggleEditor }: ChatWindowProps) {
             setTimeout(() => {
               void (async () => {
                 if (!observerMode && !isLoading) {
-                  sendMessage(resolved, undefined, [], getSendStreamHandlers())
+                  sendMessage(resolved, undefined, [], getSendStreamHandlers(), { maxTokens: selectedUsagePreset?.maxTokens })
                   setInput('')
                 }
               })()

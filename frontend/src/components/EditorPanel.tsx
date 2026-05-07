@@ -7,7 +7,8 @@ import { markdown } from '@codemirror/lang-markdown'
 import { json } from '@codemirror/lang-json'
 import { html } from '@codemirror/lang-html'
 import { css } from '@codemirror/lang-css'
-import { Download, Save, Upload } from 'lucide-react'
+import { EditorView } from '@codemirror/view'
+import { Copy, Download, Save, Upload } from 'lucide-react'
 
 type FileHandleLike = {
   name?: string
@@ -180,6 +181,23 @@ export function EditorPanel({ widthPercent }: EditorPanelProps) {
           <button type="button" onClick={() => void saveCurrentFile()} style={iconButtonStyle} title="Save file">
             <Save size={12} />
           </button>
+          <button
+            type="button"
+            onClick={() => {
+              void (async () => {
+                try {
+                  await navigator.clipboard.writeText(code)
+                  setStatus('Copied editor contents')
+                } catch (error) {
+                  setStatus(`Copy failed: ${String(error)}`)
+                }
+              })()
+            }}
+            style={iconButtonStyle}
+            title="Copy editor contents"
+          >
+            <Copy size={12} />
+          </button>
           <button type="button" onClick={() => {
             const blob = new Blob([code], { type: 'text/plain;charset=utf-8' })
             const url = URL.createObjectURL(blob)
@@ -254,15 +272,16 @@ export function EditorPanel({ widthPercent }: EditorPanelProps) {
 
 function resolveLanguageExtensions(fileName: string) {
   const lower = fileName.toLowerCase()
+  const shared = [EditorView.lineWrapping]
   if (lower.endsWith('.ts') || lower.endsWith('.tsx') || lower.endsWith('.js') || lower.endsWith('.jsx')) {
-    return [javascript({ jsx: true, typescript: lower.endsWith('.ts') || lower.endsWith('.tsx') })]
+    return [...shared, javascript({ jsx: true, typescript: lower.endsWith('.ts') || lower.endsWith('.tsx') })]
   }
-  if (lower.endsWith('.py')) return [python()]
-  if (lower.endsWith('.md')) return [markdown()]
-  if (lower.endsWith('.json')) return [json()]
-  if (lower.endsWith('.html')) return [html()]
-  if (lower.endsWith('.css')) return [css()]
-  return []
+  if (lower.endsWith('.py')) return [...shared, python()]
+  if (lower.endsWith('.md')) return [...shared, markdown()]
+  if (lower.endsWith('.json')) return [...shared, json()]
+  if (lower.endsWith('.html')) return [...shared, html()]
+  if (lower.endsWith('.css')) return [...shared, css()]
+  return shared
 }
 
 const iconButtonStyle: CSSProperties = {

@@ -105,6 +105,19 @@ const SIDEBAR_PANEL_WIDTH_STORAGE_KEY = 'kodo_sidebar_panel_width'
 const SIDEBAR_PANEL_DEFAULT_WIDTH = 238
 const SIDEBAR_PANEL_MIN_WIDTH = 220
 const SIDEBAR_PANEL_MAX_WIDTH = 560
+const SIDEBAR_POPUP_VIEWS: SidebarView[] = [
+  'providers',
+  'agents',
+  'usage',
+  'prompts',
+  'compressor',
+  'skills',
+  'crg',
+  'review',
+  'scheduler',
+  'settings',
+]
+const SIDEBAR_POPUP_VIEW_SET = new Set<SidebarView>(SIDEBAR_POPUP_VIEWS)
 
 function readStoredSidebarPanelWidth(): number {
   if (typeof window === 'undefined') return SIDEBAR_PANEL_DEFAULT_WIDTH
@@ -360,6 +373,8 @@ export function Sidebar({ collapsed, onToggleCollapse, antivibeOpen = false, her
   const toggleSessionStar = useChatStore((s) => s.toggleSessionStar)
 
   const [activeView, setActiveView] = useState<SidebarView>('sessions')
+  const [popupView, setPopupView] = useState<SidebarView | null>(null)
+  const [lastInlineView, setLastInlineView] = useState<SidebarView>('sessions')
   const [showStarredOnly, setShowStarredOnly] = useState(false)
   const [themeStudioOpen, setThemeStudioOpen] = useState(false)
 
@@ -415,6 +430,8 @@ export function Sidebar({ collapsed, onToggleCollapse, antivibeOpen = false, her
   const searchInputRef = useRef<HTMLInputElement>(null)
   const bootstrappedRef = useRef(false)
   const sidebarResizeStartRef = useRef<{ x: number; width: number } | null>(null)
+  const isPopupView = SIDEBAR_POPUP_VIEW_SET.has(activeView)
+  const popupActive = popupView !== null && popupView === activeView && isPopupView
 
   useEffect(() => {
     if (bootstrappedRef.current) return
@@ -943,6 +960,23 @@ export function Sidebar({ collapsed, onToggleCollapse, antivibeOpen = false, her
     }
   }, [activeView])
 
+  useEffect(() => {
+    if (!SIDEBAR_POPUP_VIEW_SET.has(activeView)) {
+      setLastInlineView(activeView)
+    }
+  }, [activeView])
+
+  useEffect(() => {
+    if (!popupActive) return
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        closePopupView()
+      }
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [popupActive])
+
   const usageSource = usageData || usageSummary
   const usageCost = usageSource?.totals?.cost_usd_total ?? usageSource?.totals?.estimated_cost_usd ?? 0
   const usageInput = usageSource?.totals?.input_tokens ?? 0
@@ -991,19 +1025,25 @@ export function Sidebar({ collapsed, onToggleCollapse, antivibeOpen = false, her
   ]
 
   const openSearch = () => {
+    setPopupView(null)
     setActiveView('sessions')
+    setLastInlineView('sessions')
     if (collapsed) onToggleCollapse()
     window.requestAnimationFrame(() => searchInputRef.current?.focus())
   }
 
   const handleNewChat = async () => {
     await newSession()
+    setPopupView(null)
     setActiveView('sessions')
+    setLastInlineView('sessions')
     if (collapsed) onToggleCollapse()
   }
 
   const routeToSelf = () => {
+    setPopupView(null)
     setActiveView('sessions')
+    setLastInlineView('sessions')
     setAgentGraphModalOpen(false)
     setReplaySessionId(null)
     if (collapsed) onToggleCollapse()
@@ -1037,7 +1077,7 @@ export function Sidebar({ collapsed, onToggleCollapse, antivibeOpen = false, her
   }
 
   const startSidebarResize = (event: ReactMouseEvent<HTMLDivElement>) => {
-    if (collapsed || event.button !== 0) return
+    if (collapsed || popupView !== null || event.button !== 0) return
     event.preventDefault()
     sidebarResizeStartRef.current = {
       x: event.clientX,
@@ -1046,16 +1086,54 @@ export function Sidebar({ collapsed, onToggleCollapse, antivibeOpen = false, her
     setSidebarResizing(true)
   }
 
+  const openSidebarView = (view: SidebarView) => {
+    if (SIDEBAR_POPUP_VIEW_SET.has(view)) {
+      setPopupView(view)
+      setActiveView(view)
+      return
+    }
+    setPopupView(null)
+    setActiveView(view)
+    setLastInlineView(view)
+    if (collapsed) onToggleCollapse()
+  }
+
+  const closePopupView = () => {
+    setPopupView(null)
+    const fallback = SIDEBAR_POPUP_VIEW_SET.has(lastInlineView) ? 'sessions' : lastInlineView
+    setActiveView(fallback)
+  }
+
+  const popupTitleMap: Record<SidebarView, string> = {
+    sessions: 'Sessions',
+    providers: 'Providers',
+    agents: 'Agents',
+    usage: 'Usage',
+    prompts: 'Prompts',
+    compressor: 'Compressor',
+    skills: 'Skill Builder',
+    'skill-library': 'Skills Library',
+    crg: 'Code Graph',
+    review: 'Code Review',
+    antivibe: 'AntiVibe',
+    hermes: 'Hermes',
+    settings: 'Settings',
+    design: 'Design Studio',
+    gallery: 'Artifact Gallery',
+    insights: 'Session Insights',
+    scheduler: 'Scheduler',
+  }
+
   const isEmberTheme = theme === 'dark'
   const expandedSidebarWidth = `calc(var(--sidebar-rail-width) + ${sidebarPanelWidth}px)`
 
   return (
     <aside
       style={{
-        width: collapsed
+        width: (collapsed || popupActive)
           ? 'var(--sidebar-rail-width)'
           : expandedSidebarWidth,
-        minWidth: collapsed
+        minWidth: (collapsed || popupActive)
           ? 'var(--sidebar-rail-width)'
           : expandedSidebarWidth,
         transition: sidebarResizing ? 'none' : 'width 220ms ease, min-width 220ms ease',
@@ -1118,64 +1196,43 @@ export function Sidebar({ collapsed, onToggleCollapse, antivibeOpen = false, her
         <RailButton
           icon={<MessageSquare size={15} />}
           label="Sessions"
-          onClick={() => {
-            setActiveView('sessions')
-            if (collapsed) onToggleCollapse()
-          }}
+          onClick={() => openSidebarView('sessions')}
           active={activeView === 'sessions'}
         />
         <RailButton
           icon={<Cpu size={15} />}
           label="Providers"
-          onClick={() => {
-            setActiveView('providers')
-            if (collapsed) onToggleCollapse()
-          }}
+          onClick={() => openSidebarView('providers')}
           active={activeView === 'providers'}
         />
         <RailButton
           icon={<AgentGlyphIcon size={15} />}
           label="Agents"
-          onClick={() => {
-            setActiveView('agents')
-            if (collapsed) onToggleCollapse()
-          }}
+          onClick={() => openSidebarView('agents')}
           active={activeView === 'agents'}
         />
         <RailButton
           icon={<Activity size={15} />}
           label="Usage"
-          onClick={() => {
-            setActiveView('usage')
-            if (collapsed) onToggleCollapse()
-          }}
+          onClick={() => openSidebarView('usage')}
           active={activeView === 'usage'}
         />
         <RailButton
           icon={<FileText size={15} />}
           label="Prompts"
-          onClick={() => {
-            setActiveView('prompts')
-            if (collapsed) onToggleCollapse()
-          }}
+          onClick={() => openSidebarView('prompts')}
           active={activeView === 'prompts'}
         />
         <RailButton
           icon={<Zap size={15} />}
           label="Prompt compressor"
-          onClick={() => {
-            setActiveView('compressor')
-            if (collapsed) onToggleCollapse()
-          }}
+          onClick={() => openSidebarView('compressor')}
           active={activeView === 'compressor'}
         />
         <RailButton
           icon={<Hammer size={15} />}
           label="Skill Builder"
-          onClick={() => {
-            setActiveView('skills')
-            if (collapsed) onToggleCollapse()
-          }}
+          onClick={() => openSidebarView('skills')}
           active={activeView === 'skills'}
         />
         <RailButton
@@ -1189,29 +1246,20 @@ export function Sidebar({ collapsed, onToggleCollapse, antivibeOpen = false, her
         <RailButton
           icon={<GraphGlyphIcon size={15} />}
           label="Code graph"
-          onClick={() => {
-            setActiveView('crg')
-            if (collapsed) onToggleCollapse()
-          }}
+          onClick={() => openSidebarView('crg')}
           active={activeView === 'crg'}
         />
 
         <RailButton
           icon={<Maximize2 size={15} />}
           label="Artifact Gallery"
-          onClick={() => {
-            setActiveView('gallery')
-            if (collapsed) onToggleCollapse()
-          }}
+          onClick={() => openSidebarView('gallery')}
           active={activeView === 'gallery'}
         />
         <RailButton
           icon={<BarChart2 size={15} />}
           label="Session Insights"
-          onClick={() => {
-            setActiveView('insights')
-            if (collapsed) onToggleCollapse()
-          }}
+          onClick={() => openSidebarView('insights')}
           active={activeView === 'insights'}
         />
 
@@ -1259,21 +1307,43 @@ export function Sidebar({ collapsed, onToggleCollapse, antivibeOpen = false, her
       {themeStudioOpen && (
         <ThemeStudio onClose={() => setThemeStudioOpen(false)} />
       )}
+      {popupActive && (
+        <div
+          role="presentation"
+          onClick={closePopupView}
+          style={{
+            position: 'fixed',
+            inset: 0,
+            zIndex: 60,
+            background: 'color-mix(in srgb, var(--bg-0) 72%, black)',
+          }}
+        />
+      )}
 
       <div
         style={{
-          width: collapsed ? 0 : `${sidebarPanelWidth}px`,
-          minWidth: collapsed ? 0 : `${sidebarPanelWidth}px`,
-          opacity: collapsed ? 0 : 1,
-          transform: collapsed ? 'translateX(-10px)' : 'translateX(0)',
-          pointerEvents: collapsed ? 'none' : 'auto',
-          transition: sidebarResizing
+          width: popupActive ? 'min(1080px, 94vw)' : (collapsed ? 0 : `${sidebarPanelWidth}px`),
+          minWidth: popupActive ? 'min(1080px, 94vw)' : (collapsed ? 0 : `${sidebarPanelWidth}px`),
+          height: popupActive ? 'min(86vh, 840px)' : undefined,
+          maxHeight: popupActive ? '86vh' : undefined,
+          opacity: popupActive ? 1 : (collapsed ? 0 : 1),
+          transform: popupActive ? 'translate(-50%, -50%)' : (collapsed ? 'translateX(-10px)' : 'translateX(0)'),
+          pointerEvents: popupActive ? 'auto' : (collapsed ? 'none' : 'auto'),
+          transition: popupActive
+            ? 'none'
+            : (sidebarResizing
             ? 'opacity 150ms ease, transform 220ms ease'
-            : 'opacity 150ms ease, transform 220ms ease, width 220ms ease',
+            : 'opacity 150ms ease, transform 220ms ease, width 220ms ease'),
           display: 'flex',
           flexDirection: 'column',
           overflow: 'hidden',
           background: 'linear-gradient(180deg, color-mix(in srgb, var(--bg-1) 94%, #000 6%), var(--bg-1))',
+          position: popupActive ? 'fixed' : 'relative',
+          inset: popupActive ? '50% auto auto 50%' : undefined,
+          zIndex: popupActive ? 61 : undefined,
+          border: popupActive ? '1px solid var(--border-bright)' : undefined,
+          borderRadius: popupActive ? 12 : undefined,
+          boxShadow: popupActive ? '0 22px 56px rgba(0, 0, 0, 0.42)' : undefined,
         }}
       >
         <div
@@ -1286,49 +1356,83 @@ export function Sidebar({ collapsed, onToggleCollapse, antivibeOpen = false, her
             padding: '0 14px',
           }}
         >
-          <button
-            type="button"
-            onClick={routeToSelf}
-            title="KODO home"
-            aria-label="KODO home"
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: 10,
-              border: 'none',
-              background: 'transparent',
-              padding: 0,
-              cursor: 'pointer',
-              color: 'inherit',
-            }}
-          >
-            <div style={{
-              width: 26,
-              height: 26,
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-            }}>
-              <KodoLogoMark size={20} />
-            </div>
+          {popupActive ? (
             <div
               style={{
-                fontFamily: 'var(--font-kodo-brand)',
-                fontSize: 20,
-                fontWeight: 800,
-                letterSpacing: '-0.06em',
-                lineHeight: 1,
-                color: 'var(--text-0)',
+                display: 'flex',
+                alignItems: 'center',
+                gap: 10,
+                minWidth: 0,
               }}
             >
-              KODO
+              <div
+                style={{
+                  width: 26,
+                  height: 26,
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                }}
+              >
+                <KodoLogoMark size={20} />
+              </div>
+              <div
+                className="truncate"
+                style={{
+                  fontSize: 15,
+                  fontWeight: 700,
+                  lineHeight: 1,
+                  color: 'var(--text-0)',
+                }}
+              >
+                {popupTitleMap[activeView]}
+              </div>
             </div>
-          </button>
+          ) : (
+            <button
+              type="button"
+              onClick={routeToSelf}
+              title="KODO home"
+              aria-label="KODO home"
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 10,
+                border: 'none',
+                background: 'transparent',
+                padding: 0,
+                cursor: 'pointer',
+                color: 'inherit',
+              }}
+            >
+              <div style={{
+                width: 26,
+                height: 26,
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+              }}>
+                <KodoLogoMark size={20} />
+              </div>
+              <div
+                style={{
+                  fontFamily: 'var(--font-kodo-brand)',
+                  fontSize: 20,
+                  fontWeight: 800,
+                  letterSpacing: '-0.06em',
+                  lineHeight: 1,
+                  color: 'var(--text-0)',
+                }}
+              >
+                KODO
+              </div>
+            </button>
+          )}
           <button
             type="button"
-            title="Collapse sidebar"
-            aria-label="Collapse sidebar"
-            onClick={onToggleCollapse}
+            title={popupActive ? 'Close panel' : 'Collapse sidebar'}
+            aria-label={popupActive ? 'Close panel' : 'Collapse sidebar'}
+            onClick={popupActive ? closePopupView : onToggleCollapse}
             style={{
               border: 'none',
               background: 'transparent',
@@ -1340,10 +1444,11 @@ export function Sidebar({ collapsed, onToggleCollapse, antivibeOpen = false, her
               padding: 0,
             }}
           >
-            <PanelLeftClose size={14} />
+            {popupActive ? <X size={16} /> : <PanelLeftClose size={14} />}
           </button>
         </div>
 
+        {!popupActive && (
         <div style={{ padding: '10px 14px 8px' }}>
           <button
             type="button"
@@ -1374,53 +1479,55 @@ export function Sidebar({ collapsed, onToggleCollapse, antivibeOpen = false, her
               event.currentTarget.style.background = 'var(--bg-2)'
               event.currentTarget.style.transform = 'translateY(0)'
             }}
-          >
+        >
             <Plus size={14} /> NEW SESSION
           </button>
         </div>
+        )}
 
+        {!popupActive && (
         <div style={{ padding: '0 14px 8px', display: 'grid', gap: 2 }}>
           <PanelNav
             icon={<MessageSquare size={15} />}
             label="Sessions"
             active={activeView === 'sessions'}
-            onClick={() => setActiveView('sessions')}
+            onClick={() => openSidebarView('sessions')}
           />
           <PanelNav
             icon={<Cpu size={15} />}
             label="Providers"
             active={activeView === 'providers'}
-            onClick={() => setActiveView('providers')}
+            onClick={() => openSidebarView('providers')}
           />
           <PanelNav
             icon={<AgentGlyphIcon size={15} />}
             label="Agents"
             active={activeView === 'agents'}
-            onClick={() => setActiveView('agents')}
+            onClick={() => openSidebarView('agents')}
           />
           <PanelNav
             icon={<Activity size={15} />}
             label="Usage"
             active={activeView === 'usage'}
-            onClick={() => setActiveView('usage')}
+            onClick={() => openSidebarView('usage')}
           />
           <PanelNav
             icon={<FileText size={15} />}
             label="Prompts"
             active={activeView === 'prompts'}
-            onClick={() => setActiveView('prompts')}
+            onClick={() => openSidebarView('prompts')}
           />
           <PanelNav
             icon={<Zap size={15} />}
             label="Compressor"
             active={activeView === 'compressor'}
-            onClick={() => setActiveView('compressor')}
+            onClick={() => openSidebarView('compressor')}
           />
           <PanelNav
             icon={<Hammer size={15} />}
             label="Skill Builder"
             active={activeView === 'skills'}
-            onClick={() => setActiveView('skills')}
+            onClick={() => openSidebarView('skills')}
           />
           <PanelNav
             icon={<BookOpen size={15} />}
@@ -1432,13 +1539,13 @@ export function Sidebar({ collapsed, onToggleCollapse, antivibeOpen = false, her
             icon={<GraphGlyphIcon size={15} />}
             label="Code Graph"
             active={activeView === 'crg'}
-            onClick={() => setActiveView('crg')}
+            onClick={() => openSidebarView('crg')}
           />
           <PanelNav
             icon={<FileText size={15} />}
             label="Code Review"
             active={activeView === 'review'}
-            onClick={() => setActiveView('review')}
+            onClick={() => openSidebarView('review')}
           />
           <PanelNav
             icon={<BookOpen size={15} />}
@@ -1456,13 +1563,13 @@ export function Sidebar({ collapsed, onToggleCollapse, antivibeOpen = false, her
             icon={<Clock size={15} />}
             label="Scheduler"
             active={activeView === 'scheduler'}
-            onClick={() => setActiveView('scheduler')}
+            onClick={() => openSidebarView('scheduler')}
           />
           <PanelNav
             icon={<Settings size={15} />}
             label="Settings"
             active={activeView === 'settings'}
-            onClick={() => setActiveView('settings')}
+            onClick={() => openSidebarView('settings')}
           />
           <PanelNav
             icon={<Wand2 size={15} />}
@@ -1471,6 +1578,7 @@ export function Sidebar({ collapsed, onToggleCollapse, antivibeOpen = false, her
             onClick={() => window.dispatchEvent(new CustomEvent('kodo:open-design-studio'))}
           />
         </div>
+        )}
 
         <div style={{ flex: 1, minHeight: 0, overflow: 'hidden' }}>
           {activeView === 'sessions' && (
@@ -2691,7 +2799,7 @@ export function Sidebar({ collapsed, onToggleCollapse, antivibeOpen = false, her
         </div>
       </div>
 
-      {!collapsed && (
+      {!collapsed && !popupActive && (
         <div
           role="separator"
           aria-orientation="vertical"
